@@ -33,9 +33,9 @@ Nothing credential-shaped comes back: no password, no `sc`. The only ambiguous
 name is `df_session3d`, which `-dump-fields` withholds on the grounds that a
 field with "session" in the name gets the benefit of the doubt.
 
-**`df_cash = 0` is not a parse failure.** Observed live alongside
-`df_bankcash = 955835838`: cash on hand really can be zero. Worth remembering
-before hunting for a bug in the parser.
+**`df_cash = 0` is not a parse failure.** Observed live alongside a nine-figure
+`df_bankcash`: cash on hand really can be zero while the bank holds everything.
+Worth remembering before hunting for a bug in the parser.
 
 ## Two time encodings, and a 38-year trap
 

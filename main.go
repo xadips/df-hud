@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -32,7 +33,9 @@ func main() {
 		printView   = flag.Bool("print-view", false, "print the derived view as JSON on every update")
 		showVersion = flag.Bool("version", false, "print the version and exit")
 		checkConfig = flag.Bool("check-config", false, "validate the config and exit")
-		dumpFields  = flag.Bool("dump-fields", false, "with -once, list the field NAMES the server returned (never values)")
+		dumpFields  = flag.Bool("dump-fields", false, "with -once, print the player record for diagnostics (credentials withheld)")
+		headless    = flag.Bool("headless", false, "run without the HUD window")
+		printHUD    = flag.Bool("print-hud", false, "print the HUD's text lines on every update")
 	)
 	flag.Parse()
 
@@ -78,7 +81,13 @@ func main() {
 		app.runOnce(ctx, *dumpFields)
 		return
 	}
-	app.run(ctx, *printView)
+	app.run(ctx, runOptions{
+		printView: *printView,
+		printHUD:  *printHUD,
+		// The HUD is the point of the program, so it is on unless the config
+		// disables it or the flag does.
+		hud: cfg.HUD.Enabled && !*headless,
+	})
 }
 
 func describeConfigSource(cfg *Config, path string) string {
@@ -234,19 +243,41 @@ func (a *app) runOnce(ctx context.Context, dumpFields bool) {
 	printViewJSON(a.store.Derive(time.Now()))
 }
 
-func (a *app) run(ctx context.Context, printJSON bool) {
+type runOptions struct {
+	printView bool
+	printHUD  bool
+	hud       bool
+}
+
+func (a *app) run(ctx context.Context, opts runOptions) {
+	// Everything runs in its own goroutine and communicates only through the
+	// store, which matters because GTK then takes the main thread and never
+	// gives it back.
 	go a.game.Run(ctx)
 	go watchHyprWindowEvents(ctx, a.game.Poke)
 	go a.poller.Run(ctx)
 	if a.watcher != nil {
 		go a.watcher.Run(ctx, a.Config, a.applyReload)
 	}
+	if opts.printView || opts.printHUD {
+		go a.printLoop(ctx, opts)
+	}
 
 	log.Printf("polling budget: about %.0f requests/hour while playing, %.0f idle",
 		a.cfg.RequestsPerHour(1), a.cfg.RequestsPerHour(0))
 
-	// One second is the derive cadence, matching the game's own timeKeeper loop:
-	// clocks and countdowns move without any network activity.
+	if opts.hud {
+		// Blocks until the window closes or the context ends. The HUD runs its
+		// own 1s derive tick, so nothing else needs to.
+		if err := runUI(ctx, a); err != nil {
+			log.Fatalf("hud: %v", err)
+		}
+		log.Print("shutting down")
+		return
+	}
+
+	// Headless: keep the 1s cadence so clocks and the debounced state save still
+	// happen, just with nothing to draw.
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -255,12 +286,34 @@ func (a *app) run(ctx context.Context, printJSON bool) {
 			log.Print("shutting down")
 			return
 		case <-ticker.C:
-			view := a.store.Derive(time.Now())
-			if printJSON {
-				printViewJSON(view)
-			}
 			if err := a.state.MaybeSave(); err != nil {
 				log.Printf("state: could not save: %v", err)
+			}
+		}
+	}
+}
+
+// printLoop is the diagnostic output, kept off the HUD's own tick so that
+// printing cannot slow down or interleave with rendering.
+func (a *app) printLoop(ctx context.Context, opts runOptions) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			view := a.store.Derive(time.Now())
+			if opts.printView {
+				printViewJSON(view)
+			}
+			if opts.printHUD {
+				lines := hudLines(view, a.Config())
+				if len(lines) == 0 {
+					fmt.Println("[hud empty]")
+					continue
+				}
+				fmt.Println(strings.Join(lines, "\n") + "\n---")
 			}
 		}
 	}

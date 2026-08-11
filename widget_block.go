@@ -2,11 +2,7 @@
 
 package main
 
-import (
-	"strings"
-
-	"github.com/diamondburned/gotk4/pkg/gtk/v4"
-)
+import "github.com/diamondburned/gotk4/pkg/gtk/v4"
 
 // Block Info, priority #1. What it can say today, and why:
 //
@@ -44,39 +40,14 @@ func newBlockWidget(cfg BlockWidgetConfig) *blockWidget {
 func (w *blockWidget) Root() gtk.Widgetter { return w.box }
 
 func (w *blockWidget) Update(v *View) {
-	if !v.HaveData || !v.HasPosition {
+	head, sub, show := blockLines(v, w.cfg)
+	if !show {
 		w.box.SetVisible(false)
 		return
 	}
 	w.box.SetVisible(true)
-
-	// Headline: the most specific name available for where you are.
-	switch {
-	case v.InOutpost && v.OutpostName != "":
-		w.head.SetText(v.OutpostName)
-	case v.InOutpost:
-		w.head.SetText("Outpost")
-	default:
-		w.head.SetText(formatPosition(v.PositionX, v.PositionY, v.PositionZ))
-	}
-
-	// Sub-line: the details worth having, omitted rather than padded when
-	// unknown. An empty label is hidden so the HUD does not carry a blank row.
-	var parts []string
-	if v.InOutpost && w.cfg.ShowCoords {
-		parts = append(parts, formatPosition(v.PositionX, v.PositionY, v.PositionZ))
-	}
-	if !v.InOutpost && v.ZoneName != "" {
-		parts = append(parts, v.ZoneName)
-	}
-	if !v.InOutpost && v.HasDanger {
-		parts = append(parts, "danger "+formatDangerLevel(v.DangerLevel))
-	}
-	if support := formatCountdown(v.BlockSupport); support != "" {
-		parts = append(parts, "support "+support)
-	}
-
-	sub := strings.Join(parts, "  ")
+	w.head.SetText(head)
 	w.sub.SetText(sub)
+	// An empty label would otherwise occupy a row and say nothing.
 	w.sub.SetVisible(sub != "")
 }

@@ -26,10 +26,9 @@ func newSessionWidget() *sessionWidget {
 func (w *sessionWidget) Root() gtk.Widgetter { return w.label }
 
 func (w *sessionWidget) Update(v *View) {
-	if !v.GameRunning {
-		w.label.SetVisible(false)
-		return
+	text, show := sessionLine(v)
+	w.label.SetVisible(show)
+	if show {
+		w.label.SetText(text)
 	}
-	w.label.SetVisible(true)
-	w.label.SetText(formatClock(v.SessionTime))
 }
