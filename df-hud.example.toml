@@ -1,0 +1,161 @@
+# df-hud configuration.
+#
+# Copy to ~/.config/df-hud/config.toml and edit. Every value below is the
+# built-in default, so an empty file (or no file at all) behaves exactly like
+# this one, and you only need to keep the lines you actually change.
+#
+# Unknown keys are a startup ERROR, not a warning: a typo would otherwise look
+# like a bug in df-hud rather than a bug in your config. Intervals below their
+# minimum are also errors rather than being quietly raised, because they decide
+# how often df-hud talks to somebody else's game server.
+#
+# Editing this file while df-hud is running reloads it. Three keys need a
+# restart and are noted where they appear.
+
+[df]
+# The game's API root. Every request body carries your credentials, so this must
+# be https.
+base_url = "https://fairview.deadfrontier.com/onlinezombiemmo"
+
+# The public, unauthenticated stats feed. df-hud reads the XP table and the
+# block/neighbourhood grids from here, which is why Block Info needs no login
+# beyond what the bridge already provides.
+allstats_url = "https://fairview.deadfrontier.com/onlinezombiemmo/dfdata/get_allstats.php?printvars=1"
+
+# Sent on every request. Defaults to "df-hud/<version> (+local overlay; contact
+# via Dead Frontier forums)". Keep it honest and identifiable: it is what lets a
+# server operator tell a local HUD apart from abuse, and contact you instead of
+# banning you. Left commented so it stays version-stamped.
+# user_agent = "df-hud/dev (+local overlay; contact via Dead Frontier forums)"
+
+# Per-request timeout. Allowed range 2s..60s.
+timeout = "10s"
+
+# Signing salt for hashed calls (challenges). Normally leave this empty: the
+# bridge userscript reports the live value from page context and a reported salt
+# always wins, so the game rotating it heals itself. Set it only if you want
+# challenges to work without the bridge script installed.
+skeygen = ""
+
+[bridge]
+# The loopback listener the bridge userscript POSTs your session to. Both keys
+# need a RESTART to change.
+#
+# This endpoint receives account-equivalent credentials, so a non-loopback
+# address is refused at startup. Request bodies are never logged.
+enabled = true
+listen = "127.0.0.1:9275"
+
+[poll]
+# How often df-hud asks the game for your player record.
+#
+# active_interval applies while you are playing and out in the city.
+# idle_interval covers everything else: in an outpost, alt-tabbed, game closed.
+# Minimums: active 5s, idle 30s, challenges 60s, catalog 1h.
+active_interval = "10s"
+idle_interval = "2m"
+challenge_interval = "5m"
+catalog_interval = "24h"
+
+# Fraction of the interval to randomise by, 0..0.5. Stops a restart loop from
+# lining requests up and keeps the traffic from looking metronomic.
+jitter = 0.10
+
+# With this on, closing the game takes df-hud's traffic to exactly zero.
+# Turning it off means it polls around the clock.
+only_when_game_running = true
+
+# Ceiling on the exponential backoff after transport failures. A rejected
+# credential is not backed off from at all: polling stops until the bridge
+# delivers a fresh session, because retrying a rejected login is precisely the
+# pattern that earns a temp ban.
+backoff_max = "5m"
+
+[paths]
+# Holds credentials.json (mode 0600), state.json and catalog.json.
+# Defaults to $XDG_DATA_HOME/df-hud, i.e. ~/.local/share/df-hud.
+# Needs a RESTART to change.
+# data_dir = "~/.local/share/df-hud"
+
+[hud]
+enabled = true
+
+# Connector name ("DP-1", "HDMI-A-1") or "auto" to follow whichever monitor the
+# game window is on.
+monitor = "auto"
+
+# MUST be "overlay" to be visible over a fullscreen game: the "top" layer sits
+# BELOW fullscreen surfaces, so a "top" HUD simply disappears when you play,
+# which looks identical to df-hud being broken. The others exist for debugging.
+layer = "overlay"
+
+# Which screen edges to stick to. Anchoring opposite edges stretches the
+# surface between them.
+anchors = ["top", "left"]
+
+# Gap from each anchored edge, in pixels. The default top margin clears a
+# 36px waybar with room to spare.
+margin_top = 60
+margin_right = 0
+margin_bottom = 0
+margin_left = 40
+
+# Leave this on. The HUD sits on top of the game, so every pointer event it
+# keeps is one the game does not get. Turn it off only to poke at the surface
+# while debugging.
+click_through = true
+
+font_family = "Courier New, monospace"
+font_size = 12
+text_color = "#e6cc4d"
+opacity = 1.0
+
+# Optional extra stylesheet, loaded after the built-in one, so you can restyle
+# without rebuilding. Must exist if set.
+# css = "~/.config/df-hud/style.css"
+
+# Widgets. Each has enabled and order; order is a sort key, not an index, so the
+# gaps are deliberate - reorder by editing one number.
+
+[widget.block]
+enabled = true
+order = 10
+# Print the raw position coordinates under the block name. Useful while
+# calibrating the area grid, noise once that is done.
+show_coords = false
+
+[widget.session]
+# Time since the game client launched. Read from the game process's own start
+# time, so it stays correct even if df-hud starts late or is restarted
+# mid-session.
+enabled = true
+order = 20
+
+[widget.xp]
+enabled = true
+order = 30
+# Averaging window, and the number of usable samples below which the rate is
+# left blank rather than extrapolated from too little data. The window must be
+# long enough to hold min_samples at active_interval, or the rate could never
+# appear at all - that combination is rejected at startup.
+window = "30s"
+min_samples = 3
+
+[widget.challenges]
+enabled = true
+order = 40
+# Pin by challenge NAME. Both the index and the end time rotate every cycle, so
+# neither one identifies a challenge across cycles. This seeds the list on first
+# boot; after that the pins you set in the console window win.
+pinned = []
+show_clan = true
+max_shown = 3
+
+[console]
+# The console is an ordinary window (not an overlay), for the things a
+# click-through HUD cannot do: the full challenge list, pin checkboxes,
+# diagnostics. Bind a key to toggle it:
+#
+#   bind = SUPER, F1, exec, curl -fsS -X POST http://127.0.0.1:9275/api/console/toggle
+width = 720
+height = 560
