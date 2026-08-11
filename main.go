@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"syscall"
 	"time"
 )
@@ -30,6 +32,7 @@ func main() {
 		printView   = flag.Bool("print-view", false, "print the derived view as JSON on every update")
 		showVersion = flag.Bool("version", false, "print the version and exit")
 		checkConfig = flag.Bool("check-config", false, "validate the config and exit")
+		dumpFields  = flag.Bool("dump-fields", false, "with -once, list the field NAMES the server returned (never values)")
 	)
 	flag.Parse()
 
@@ -62,14 +65,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	app, err := newApp(ctx, cfg, *configPath)
+	// -once is a diagnostic: it polls with the credentials already on disk, so it
+	// must not need the bridge port. Without this it cannot run at all while the
+	// daemon is up, which is exactly when you reach for it.
+	app, err := newApp(ctx, cfg, *configPath, !*once)
 	if err != nil {
 		log.Fatalf("startup: %v", err)
 	}
 	defer app.Close()
 
 	if *once {
-		app.runOnce(ctx)
+		app.runOnce(ctx, *dumpFields)
 		return
 	}
 	app.run(ctx, *printView)
@@ -102,7 +108,7 @@ type app struct {
 	watcher   *configWatcher
 }
 
-func newApp(ctx context.Context, cfg *Config, cfgPath string) (*app, error) {
+func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (*app, error) {
 	a := &app{cfg: cfg, cfgPath: cfgPath}
 
 	a.creds = newCredStore(cfg.CredentialsPath())
@@ -155,7 +161,7 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string) (*app, error) {
 		a.recordXPSample()
 	})
 
-	if cfg.Bridge.Enabled {
+	if cfg.Bridge.Enabled && withBridge {
 		bs, srv, err := startBridge(cfg.Bridge.Listen, a.creds, func() {
 			// New credentials: clear the stale stop and poll as soon as the
 			// request gap allows.
@@ -209,10 +215,13 @@ func (a *app) Close() {
 
 // runOnce is the -once mode: one poll, print what was derived, exit. The first
 // thing to reach for when asking "is the whole chain working?".
-func (a *app) runOnce(ctx context.Context) {
+func (a *app) runOnce(ctx context.Context, dumpFields bool) {
 	tick := a.poller.Once(ctx)
 	if tick.Err != nil {
 		log.Fatalf("poll failed: %v", tick.Err)
+	}
+	if dumpFields {
+		dumpRecordFields(tick.Vars)
 	}
 	a.store.ApplyTick(tick)
 	a.store.SetGame(a.game.State())
@@ -279,6 +288,32 @@ func (a *app) recordXPSample() {
 		Cumulative: snap.CumulativeXP,
 		Source:     snap.XPSource.String(),
 	}, window)
+}
+
+// withheldFieldPattern names the parts of the player record that must never be
+// printed. The rest of it - level, cash, kills, position - is the same data
+// DFProfiler publishes publicly for any account, so printing it on the player's
+// own machine costs nothing and answers most "why is this widget empty?"
+// questions. Credentials are a different matter, and df_session3d is withheld
+// because its meaning is unverified and a field with "session" in the name gets
+// the benefit of the doubt.
+var withheldFieldPattern = regexp.MustCompile(`(?i)pass|token|cookie|auth|secretkey|^sc$|session`)
+
+// dumpRecordFields prints the raw player record for diagnostics.
+func dumpRecordFields(vars map[string]string) {
+	names := make([]string, 0, len(vars))
+	for name := range vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	fmt.Printf("%d fields returned:\n", len(names))
+	for _, name := range names {
+		value := vars[name]
+		if withheldFieldPattern.MatchString(name) {
+			value = "[withheld]"
+		}
+		fmt.Printf("  %s = %s\n", name, value)
+	}
 }
 
 func printViewJSON(v *View) {

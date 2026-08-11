@@ -57,6 +57,17 @@ type Snapshot struct {
 	PendingLevels int
 	FreePoints    int
 
+	// ExpSinceStart is df_exptotal minus df_expstart, which appears to be XP
+	// earned since the current trip into the city began (observed ~2M below
+	// exptotal while out in the city at level 415).
+	//
+	// Parsed but NOT rendered by any widget yet: the reset point is unconfirmed
+	// and needs one observation across an outpost-to-city transition. A number
+	// labelled "this run" that actually means something else is worse than no
+	// number. See knowledge/player-record-and-signing.md.
+	ExpSinceStart    int64
+	HasExpSinceStart bool
+
 	PositionX, PositionY, PositionZ int
 	HasPosition                     bool
 
@@ -64,19 +75,20 @@ type Snapshot struct {
 	InOutpost   bool
 	DangerLevel int
 	HasDanger   bool
-	// BlockSupportUntil is when the current block's support expires, zero when
-	// there is none.
-	BlockSupportUntil time.Time
+	// BlockSupport is when the current block's support expires.
+	BlockSupport dfDeadline
 
 	HP, HPMax   int
 	Cash        int64
+	HasCash     bool
 	BankCash    int64
 	Nourishment int
 	HasHunger   bool
 
-	// BoostExpUntil is when an XP boost ends. The XP widget resets its window
-	// on a change here, since the rate either side is not comparable.
-	BoostExpUntil time.Time
+	// BoostExp is when an XP boost ends, which can legitimately be "never".
+	// The XP widget resets its window on a change here, since the rate either
+	// side of a boost is not comparable.
+	BoostExp dfDeadline
 
 	// Dead is the server's own flag, not an inference from HP.
 	Dead bool
@@ -84,9 +96,60 @@ type Snapshot struct {
 	ServerTime time.Time
 }
 
-// dfTimeOffset is the constant the game adds to its stored timestamps
-// (challenge.js:305). Every *until* field carries it.
+// The game uses TWO different time encodings, and mixing them up is worth 38
+// years of error, so they get separate decoders.
+//
+//  1. A compact epoch, unix minus 1.2e9, used by df_servertime and
+//     df_hungertime. Observed values are ~585,000,000 while unix time is
+//     ~1,786,000,000.
+//
+//  2. Plain unix seconds, used by the expiry fields (df_boostexpuntil and
+//     friends). This is settled by the game's own arithmetic, as reproduced in
+//     the bridge userscript (silverscripts.js:2346):
+//
+//     durationLeft = df_boostexpuntil - (df_servertime + 1200000000)
+//
+//     The right-hand side is unix, so the left-hand side must be too.
+//
+// This was caught by live data: applying the offset to an expiry field produced
+// a boost that expired in 49 years.
 const dfTimeOffset = 1_200_000_000
+
+// dfForever is the game's "does not expire" sentinel: int32 max, or one less.
+// Captured values are literally 2147483647 for a permanent boost. As a unix
+// timestamp that is 2038-01-19, the classic 32-bit end of time. the bridge userscript
+// treats anything more than 600000 seconds out as infinite for the same reason.
+const dfForever = int64(1)<<31 - 8
+
+// dfPlausibleWindow bounds what a real deadline can be. Anything beyond it is
+// treated as not-a-deadline rather than rendered.
+//
+// This exists because df_block_support_until was zero in every capture, so its
+// encoding is unverified. If it turns out to use the compact epoch, this guard
+// makes the widget omit the line instead of confidently displaying a countdown
+// that is decades wrong.
+const dfPlausibleWindow = 365 * 24 * time.Hour
+
+// dfDeadline is one of the game's expiry timestamps, with "never" as a state
+// rather than as a very large number.
+type dfDeadline struct {
+	At      time.Time
+	Forever bool
+}
+
+func (d dfDeadline) Set() bool { return d.Forever || !d.At.IsZero() }
+
+// Remaining is the countdown, zero once expired and zero for Forever - callers
+// check Forever and render an infinity mark instead of a number.
+func (d dfDeadline) Remaining(now time.Time) time.Duration {
+	if d.Forever || d.At.IsZero() {
+		return 0
+	}
+	if remaining := d.At.Sub(now); remaining > 0 {
+		return remaining
+	}
+	return 0
+}
 
 // parseSnapshot turns a get_values response into a Snapshot. It never fails:
 // a field that is missing or unparseable is simply absent from the result,
@@ -128,16 +191,22 @@ func parseSnapshot(vars map[string]string, at time.Time, catalog *Catalog) Snaps
 	s.TradeZone, _ = intVar(vars, "df_tradezone")
 	s.InOutpost = boolVar(vars, "df_inoutpost")
 	s.DangerLevel, s.HasDanger = intVar(vars, "df_dangerlevel")
-	s.BlockSupportUntil = dfTimeVar(vars, "df_block_support_until")
+	s.BlockSupport = dfDeadlineVar(vars, "df_block_support_until")
+
+	if start, ok := int64Var(vars, "df_expstart"); ok && s.XPSource == xpSourceExpTotal && s.CumulativeXP >= start {
+		s.ExpSinceStart, s.HasExpSinceStart = s.CumulativeXP-start, true
+	}
 
 	s.HP, _ = intVar(vars, "df_hpcurrent")
 	s.HPMax, _ = intVar(vars, "df_hpmax")
-	s.Cash, _ = int64Var(vars, "df_cash")
+	// Cash is genuinely zero when the bank holds it all, which is why the
+	// presence flag matters here as much as it does for the danger level.
+	s.Cash, s.HasCash = int64Var(vars, "df_cash")
 	s.BankCash, _ = int64Var(vars, "df_bankcash")
 	s.Nourishment, s.HasHunger = intVar(vars, "df_hungerhp")
-	s.BoostExpUntil = dfTimeVar(vars, "df_boostexpuntil")
+	s.BoostExp = dfDeadlineVar(vars, "df_boostexpuntil")
 	s.Dead = boolVar(vars, "df_dead")
-	s.ServerTime = dfTimeVar(vars, "df_servertime")
+	s.ServerTime = dfCompactTimeVar(vars, "df_servertime")
 
 	return s
 }
@@ -189,15 +258,37 @@ func boolVar(vars map[string]string, key string) bool {
 	return strings.TrimSpace(vars[key]) == "1"
 }
 
-// dfTimeVar decodes one of the game's timestamps, which carry a constant
-// +1200000000 offset. Zero means "not set" rather than 1970, and is returned as
-// the zero Time so callers can use IsZero.
-func dfTimeVar(vars map[string]string, key string) time.Time {
+// dfCompactTimeVar decodes the compact epoch: df_servertime and df_hungertime,
+// which are unix minus 1.2e9. Zero means unset rather than 1970.
+func dfCompactTimeVar(vars map[string]string, key string) time.Time {
 	v, ok := int64Var(vars, key)
 	if !ok || v <= 0 {
 		return time.Time{}
 	}
 	return time.Unix(v+dfTimeOffset, 0)
+}
+
+// dfDeadlineVar decodes an expiry field: plain unix seconds, with the int32
+// sentinel meaning "never expires" and anything implausible treated as unset.
+//
+// The plausibility check is the important part. It is not defensive
+// programming for its own sake: df_block_support_until was zero in every
+// capture, so its encoding is unverified, and if it turns out to be the compact
+// epoch this makes the HUD omit the line rather than display a countdown that is
+// decades wrong. A wrong number presented confidently is worse than no number.
+func dfDeadlineVar(vars map[string]string, key string) dfDeadline {
+	v, ok := int64Var(vars, key)
+	if !ok || v <= 0 {
+		return dfDeadline{}
+	}
+	if v >= dfForever {
+		return dfDeadline{Forever: true}
+	}
+	at := time.Unix(v, 0)
+	if skew := time.Since(at); skew > dfPlausibleWindow || skew < -dfPlausibleWindow {
+		return dfDeadline{}
+	}
+	return dfDeadline{At: at}
 }
 
 // Store holds everything the UI renders, and is the only shared mutable state
@@ -326,12 +417,13 @@ type View struct {
 	DangerLevel  int
 	BlockSupport time.Duration
 
-	HP, HPMax   int
-	Cash        int64
-	Nourishment int
-	HasHunger   bool
-	BoostExpIn  time.Duration
-	Dead        bool
+	HP, HPMax       int
+	Cash            int64
+	Nourishment     int
+	HasHunger       bool
+	BoostExpIn      time.Duration
+	BoostExpForever bool
+	Dead            bool
 
 	// Status is what to show when something is wrong, empty when it is not.
 	Status      string
@@ -371,11 +463,12 @@ func (s *Store) Derive(now time.Time) *View {
 		v.InOutpost = snap.InOutpost
 		v.OutpostName = outpostName(snap.PositionX, snap.PositionY)
 		v.HasDanger, v.DangerLevel = snap.HasDanger, snap.DangerLevel
-		v.BlockSupport = until(now, snap.BlockSupportUntil)
+		v.BlockSupport = snap.BlockSupport.Remaining(now)
 		v.HP, v.HPMax = snap.HP, snap.HPMax
 		v.Cash = snap.Cash
 		v.Nourishment, v.HasHunger = snap.Nourishment, snap.HasHunger
-		v.BoostExpIn = until(now, snap.BoostExpUntil)
+		v.BoostExpIn = snap.BoostExp.Remaining(now)
+		v.BoostExpForever = snap.BoostExp.Forever
 		v.Dead = snap.Dead
 	}
 
@@ -394,15 +487,4 @@ func (s *Store) Derive(now time.Time) *View {
 		v.Status = "waiting for the first poll"
 	}
 	return v
-}
-
-// until is a countdown that never goes negative and is zero for an unset time.
-func until(now, t time.Time) time.Duration {
-	if t.IsZero() {
-		return 0
-	}
-	if d := t.Sub(now); d > 0 {
-		return d
-	}
-	return 0
 }

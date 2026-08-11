@@ -183,21 +183,76 @@ func TestParseSnapshotSurvivesGarbage(t *testing.T) {
 	}
 }
 
+// The game uses two different time encodings, and applying the wrong one to an
+// expiry field is worth 38 years. This came from live data: a permanent XP boost
+// was rendering as expiring in 49 years.
 func TestParseSnapshotDecodesGameTimestamps(t *testing.T) {
-	// The game stores timestamps with a constant +1200000000 offset
-	// (challenge.js:305).
-	target := time.Now().Add(90 * time.Second).Truncate(time.Second)
-	vars := map[string]string{
-		"df_block_support_until": itoa64(target.Unix() - dfTimeOffset),
-		"df_boostexpuntil":       "0",
+	now := time.Now()
+
+	// Expiry fields are plain unix seconds - settled by the game's own
+	// arithmetic, boostexpuntil - (servertime + 1200000000).
+	target := now.Add(90 * time.Second).Truncate(time.Second)
+	snap := parseSnapshot(map[string]string{
+		"df_boostexpuntil": itoa64(target.Unix()),
+	}, now, nil)
+	if !snap.BoostExp.At.Equal(target) {
+		t.Errorf("BoostExp.At = %s, want %s", snap.BoostExp.At, target)
 	}
-	snap := parseSnapshot(vars, time.Now(), nil)
-	if !snap.BlockSupportUntil.Equal(target) {
-		t.Errorf("BlockSupportUntil = %s, want %s", snap.BlockSupportUntil, target)
+	if snap.BoostExp.Forever {
+		t.Error("a real deadline must not report Forever")
 	}
+	if got := snap.BoostExp.Remaining(now).Round(time.Second); got != 90*time.Second {
+		t.Errorf("Remaining = %s, want 90s", got)
+	}
+
+	// df_servertime uses the compact epoch, unix minus 1.2e9. The live server
+	// returned 586484051 for a unix time of 1786484051.
+	snap = parseSnapshot(map[string]string{"df_servertime": "586484051"}, now, nil)
+	if got := snap.ServerTime.Unix(); got != 1786484051 {
+		t.Errorf("ServerTime = %d, want 1786484051 (value + 1200000000)", got)
+	}
+
 	// Zero means unset, not 1970.
-	if !snap.BoostExpUntil.IsZero() {
-		t.Errorf("a zero timestamp must decode as unset, got %s", snap.BoostExpUntil)
+	snap = parseSnapshot(map[string]string{"df_boostexpuntil": "0"}, now, nil)
+	if snap.BoostExp.Set() {
+		t.Errorf("a zero timestamp must decode as unset, got %+v", snap.BoostExp)
+	}
+}
+
+// 2147483647 is what the live server actually returns for a permanent boost:
+// int32 max, the classic end of 32-bit time. It must be a state, not a
+// 13-year countdown.
+func TestParseSnapshotForeverSentinel(t *testing.T) {
+	now := time.Now()
+	for _, raw := range []string{"2147483647", "2147483646"} {
+		snap := parseSnapshot(map[string]string{"df_boostexpuntil": raw}, now, nil)
+		if !snap.BoostExp.Forever {
+			t.Errorf("df_boostexpuntil=%s must decode as Forever", raw)
+		}
+		if got := snap.BoostExp.Remaining(now); got != 0 {
+			t.Errorf("Forever should have no countdown, got %s", got)
+		}
+		if !snap.BoostExp.Set() {
+			t.Error("Forever is set, not absent")
+		}
+	}
+}
+
+// df_block_support_until was zero in every capture, so its encoding is
+// unverified. If it is actually the compact epoch, the plausibility guard makes
+// the HUD omit the line rather than confidently display a decades-wrong
+// countdown.
+func TestParseSnapshotRejectsImplausibleDeadlines(t *testing.T) {
+	now := time.Now()
+	for name, raw := range map[string]string{
+		"compact epoch mistaken for unix": "586484051",
+		"long past":                       "1000000000",
+		"far future but not the sentinel": itoa64(now.AddDate(5, 0, 0).Unix()),
+	} {
+		snap := parseSnapshot(map[string]string{"df_block_support_until": raw}, now, nil)
+		if snap.BlockSupport.Set() {
+			t.Errorf("%s (%s) should be treated as not-a-deadline, got %+v", name, raw, snap.BlockSupport)
+		}
 	}
 }
 
