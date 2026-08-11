@@ -187,11 +187,13 @@ func TestParseSnapshotSurvivesGarbage(t *testing.T) {
 // expiry field is worth 38 years. This came from live data: a permanent XP boost
 // was rendering as expiring in 49 years.
 func TestParseSnapshotDecodesGameTimestamps(t *testing.T) {
-	now := time.Now()
+	// A fixed instant with no sub-second part, so the arithmetic below is exact
+	// rather than losing up to a second to truncation.
+	now := time.Unix(1786484051, 0)
 
 	// Expiry fields are plain unix seconds - settled by the game's own
 	// arithmetic, boostexpuntil - (servertime + 1200000000).
-	target := now.Add(90 * time.Second).Truncate(time.Second)
+	target := now.Add(90 * time.Second)
 	snap := parseSnapshot(map[string]string{
 		"df_boostexpuntil": itoa64(target.Unix()),
 	}, now, nil)
@@ -201,7 +203,7 @@ func TestParseSnapshotDecodesGameTimestamps(t *testing.T) {
 	if snap.BoostExp.Forever {
 		t.Error("a real deadline must not report Forever")
 	}
-	if got := snap.BoostExp.Remaining(now).Round(time.Second); got != 90*time.Second {
+	if got := snap.BoostExp.Remaining(now); got != 90*time.Second {
 		t.Errorf("Remaining = %s, want 90s", got)
 	}
 
@@ -223,7 +225,7 @@ func TestParseSnapshotDecodesGameTimestamps(t *testing.T) {
 // int32 max, the classic end of 32-bit time. It must be a state, not a
 // 13-year countdown.
 func TestParseSnapshotForeverSentinel(t *testing.T) {
-	now := time.Now()
+	now := time.Unix(1786484051, 0)
 	for _, raw := range []string{"2147483647", "2147483646"} {
 		snap := parseSnapshot(map[string]string{"df_boostexpuntil": raw}, now, nil)
 		if !snap.BoostExp.Forever {
@@ -243,7 +245,7 @@ func TestParseSnapshotForeverSentinel(t *testing.T) {
 // the HUD omit the line rather than confidently display a decades-wrong
 // countdown.
 func TestParseSnapshotRejectsImplausibleDeadlines(t *testing.T) {
-	now := time.Now()
+	now := time.Unix(1786484051, 0)
 	for name, raw := range map[string]string{
 		"compact epoch mistaken for unix": "586484051",
 		"long past":                       "1000000000",

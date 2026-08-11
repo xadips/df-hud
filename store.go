@@ -191,7 +191,7 @@ func parseSnapshot(vars map[string]string, at time.Time, catalog *Catalog) Snaps
 	s.TradeZone, _ = intVar(vars, "df_tradezone")
 	s.InOutpost = boolVar(vars, "df_inoutpost")
 	s.DangerLevel, s.HasDanger = intVar(vars, "df_dangerlevel")
-	s.BlockSupport = dfDeadlineVar(vars, "df_block_support_until")
+	s.BlockSupport = dfDeadlineVar(vars, "df_block_support_until", at)
 
 	if start, ok := int64Var(vars, "df_expstart"); ok && s.XPSource == xpSourceExpTotal && s.CumulativeXP >= start {
 		s.ExpSinceStart, s.HasExpSinceStart = s.CumulativeXP-start, true
@@ -204,7 +204,7 @@ func parseSnapshot(vars map[string]string, at time.Time, catalog *Catalog) Snaps
 	s.Cash, s.HasCash = int64Var(vars, "df_cash")
 	s.BankCash, _ = int64Var(vars, "df_bankcash")
 	s.Nourishment, s.HasHunger = intVar(vars, "df_hungerhp")
-	s.BoostExp = dfDeadlineVar(vars, "df_boostexpuntil")
+	s.BoostExp = dfDeadlineVar(vars, "df_boostexpuntil", at)
 	s.Dead = boolVar(vars, "df_dead")
 	s.ServerTime = dfCompactTimeVar(vars, "df_servertime")
 
@@ -276,7 +276,7 @@ func dfCompactTimeVar(vars map[string]string, key string) time.Time {
 // capture, so its encoding is unverified, and if it turns out to be the compact
 // epoch this makes the HUD omit the line rather than display a countdown that is
 // decades wrong. A wrong number presented confidently is worse than no number.
-func dfDeadlineVar(vars map[string]string, key string) dfDeadline {
+func dfDeadlineVar(vars map[string]string, key string, now time.Time) dfDeadline {
 	v, ok := int64Var(vars, key)
 	if !ok || v <= 0 {
 		return dfDeadline{}
@@ -284,8 +284,11 @@ func dfDeadlineVar(vars map[string]string, key string) dfDeadline {
 	if v >= dfForever {
 		return dfDeadline{Forever: true}
 	}
+	// Measured against the observation time, not the wall clock: a replayed
+	// timeline is read back long after it was recorded, and comparing to "now"
+	// would reject every deadline in it.
 	at := time.Unix(v, 0)
-	if skew := time.Since(at); skew > dfPlausibleWindow || skew < -dfPlausibleWindow {
+	if skew := now.Sub(at); skew > dfPlausibleWindow || skew < -dfPlausibleWindow {
 		return dfDeadline{}
 	}
 	return dfDeadline{At: at}
