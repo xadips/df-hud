@@ -71,6 +71,7 @@ type Config struct {
 	DF      DFConfig      `toml:"df"`
 	Bridge  BridgeConfig  `toml:"bridge"`
 	Poll    PollConfig    `toml:"poll"`
+	Game    GameConfig    `toml:"game"`
 	Paths   PathsConfig   `toml:"paths"`
 	HUD     HUDConfig     `toml:"hud"`
 	Widget  WidgetConfig  `toml:"widget"`
@@ -100,10 +101,14 @@ type BridgeConfig struct {
 }
 
 type PollConfig struct {
-	// Active applies while the game is running and you are out in the city;
-	// Idle covers everything else (in an outpost, game closed, alt-tabbed
-	// away for an hour). Two cadences rather than one is most of why the
-	// request budget stays small.
+	// Active applies while the game process is running; Idle when it is not.
+	// With OnlyWhenGameRunning set (the default), Idle never applies at all
+	// and closing the game takes traffic to zero.
+	//
+	// See the comment on minRequestGap in poller.go for why this is not
+	// refined further by df_inoutpost: it would be one poll stale by
+	// construction, and would delay the outpost-to-city transition by a whole
+	// idle interval at exactly the moment the HUD matters.
 	ActiveInterval    duration `toml:"active_interval"`
 	IdleInterval      duration `toml:"idle_interval"`
 	ChallengeInterval duration `toml:"challenge_interval"`
@@ -122,6 +127,19 @@ type PollConfig struct {
 	// that a rejected credential is NOT a failure to back off from: it stops
 	// polling outright (see ErrStaleCredentials).
 	BackoffMax duration `toml:"backoff_max"`
+}
+
+type GameConfig struct {
+	// Process is the client executable's name, matched against argv[0]'s
+	// basename only - see procScanner.scan for why the whole command line is
+	// not searched.
+	Process string `toml:"process"`
+
+	// ScanInterval is how often /proc is scanned. This is a local read costing
+	// a millisecond, not a network request, so it has no politeness floor -
+	// only a sanity one. Hyprland window events trigger an immediate rescan on
+	// top of this, so the interval is a backstop rather than the main path.
+	ScanInterval duration `toml:"scan_interval"`
 }
 
 type PathsConfig struct {
@@ -262,6 +280,10 @@ func defaultConfig() *Config {
 			Jitter:              0.10,
 			OnlyWhenGameRunning: true,
 			BackoffMax:          duration{5 * time.Minute},
+		},
+		Game: GameConfig{
+			Process:      defaultGameProcess,
+			ScanInterval: duration{2 * time.Second},
 		},
 		Paths: PathsConfig{DataDir: defaultDataDir()},
 		HUD: HUDConfig{
@@ -414,6 +436,19 @@ func (c *Config) validate() error {
 		errs = append(errs, fmt.Errorf("poll.backoff_max (%s) must be at least poll.active_interval (%s)",
 			c.Poll.BackoffMax, c.Poll.ActiveInterval))
 	}
+
+	// --- game ---
+	c.Game.Process = strings.TrimSpace(c.Game.Process)
+	if c.Game.Process == "" {
+		errs = append(errs, errors.New("game.process is empty: df-hud would never detect the game"))
+	}
+	if strings.ContainsAny(c.Game.Process, `/\`) {
+		// Only the basename is compared, so a path here would never match and
+		// the failure would be silent.
+		errs = append(errs, fmt.Errorf("game.process %q must be a bare executable name, not a path",
+			c.Game.Process))
+	}
+	errs = appendRange(errs, "game.scan_interval", c.Game.ScanInterval.Duration, 250*time.Millisecond, 5*time.Minute)
 
 	// --- paths ---
 	c.Paths.DataDir = expandHome(strings.TrimSpace(c.Paths.DataDir))

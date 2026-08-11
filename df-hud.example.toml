@@ -49,9 +49,18 @@ listen = "127.0.0.1:9275"
 [poll]
 # How often df-hud asks the game for your player record.
 #
-# active_interval applies while you are playing and out in the city.
-# idle_interval covers everything else: in an outpost, alt-tabbed, game closed.
-# Minimums: active 5s, idle 30s, challenges 60s, catalog 1h.
+# active_interval applies while the game is running, idle_interval when it is
+# not - so with only_when_game_running below (the default), idle_interval never
+# applies at all and closing the game means zero requests.
+#
+# Deliberately NOT refined by whether you are in an outpost: that status is only
+# known from the previous poll, so it would always be one poll stale, and it
+# would delay noticing the outpost-to-city transition by a whole idle interval -
+# right when the HUD matters most.
+#
+# Minimums: active 5s, idle 30s, challenges 60s, catalog 1h. Regardless of these,
+# two requests are never sent less than 5s apart, so nothing that wakes df-hud
+# (credentials arriving, the game launching) can turn into a burst.
 active_interval = "10s"
 idle_interval = "2m"
 challenge_interval = "5m"
@@ -70,6 +79,23 @@ only_when_game_running = true
 # delivers a fresh session, because retrying a rejected login is precisely the
 # pattern that earns a temp ban.
 backoff_max = "5m"
+
+[game]
+# The client executable, matched against the first command-line argument's
+# basename. It must be a bare name, not a path. The default is the Steam/Proton
+# install's exe name.
+#
+# Detection is done from /proc rather than from the compositor, because the
+# session clock needs the moment the game LAUNCHED - which is why it stays
+# correct even if you start df-hud an hour into a session, or restart it
+# mid-run.
+process = "DeadFrontier.exe"
+
+# How often /proc is scanned. This is a local read, not a network request, so
+# there is no politeness floor - only sanity limits of 250ms..5m. Under Hyprland
+# a window opening or closing also triggers an immediate rescan, so this is a
+# backstop rather than the main path.
+scan_interval = "2s"
 
 [paths]
 # Holds credentials.json (mode 0600), state.json and catalog.json.
