@@ -78,7 +78,6 @@ type credsFile struct {
 	Password      string    `json:"password"`
 	SC            string    `json:"sc"`
 	SKeyGen       string    `json:"skeygen,omitempty"`
-	Cookie        string    `json:"cookie,omitempty"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
@@ -91,7 +90,6 @@ type credStore struct {
 	path      string
 	creds     Credentials
 	skeyGen   string // signing salt reported by the bridge; wins over config
-	cookie    string
 	updatedAt time.Time
 }
 
@@ -119,14 +117,14 @@ func (s *credStore) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.creds = Credentials{UserID: f.UserID, Password: f.Password, SC: f.SC}
-	s.skeyGen, s.cookie, s.updatedAt = f.SKeyGen, f.Cookie, f.UpdatedAt
+	s.skeyGen, s.updatedAt = f.SKeyGen, f.UpdatedAt
 	return nil
 }
 
 // Set replaces the stored credentials and persists them. Returns whether
 // anything actually changed, so the caller can avoid logging a no-op on every
 // bridge POST (the userscript re-posts on every page load).
-func (s *credStore) Set(c Credentials, skeyGen, cookie string) (changed bool, err error) {
+func (s *credStore) Set(c Credentials, skeyGen string) (changed bool, err error) {
 	if !c.Valid() {
 		return false, errors.New("refusing to store an incomplete credential triple")
 	}
@@ -136,9 +134,6 @@ func (s *credStore) Set(c Credentials, skeyGen, cookie string) (changed bool, er
 	if skeyGen != "" {
 		s.skeyGen = skeyGen
 	}
-	if cookie != "" {
-		s.cookie = cookie
-	}
 	s.updatedAt = time.Now()
 	snapshot := credsFile{
 		SchemaVersion: credsSchemaVersion,
@@ -146,7 +141,6 @@ func (s *credStore) Set(c Credentials, skeyGen, cookie string) (changed bool, er
 		Password:      c.Password,
 		SC:            c.SC,
 		SKeyGen:       s.skeyGen,
-		Cookie:        s.cookie,
 		UpdatedAt:     s.updatedAt,
 	}
 	s.mu.Unlock()
@@ -230,10 +224,19 @@ func (s *credStore) UpdatedAt() time.Time {
 	return s.updatedAt
 }
 
+// GoString redacts, covering %#v. This is NOT redundant with String(): fmt
+// cannot reach Credentials.GoString through credStore's fields because they are
+// unexported (reflect's CanInterface is false for those, so fmt skips the
+// Stringer/GoStringer methods and dumps raw field values). Without this,
+// %#v on the store printed the password, sc and salt in the clear - caught by
+// TestBridgeNeverLogsSecrets. Any future struct that holds credentials in an
+// unexported field needs the same treatment.
+func (s *credStore) GoString() string { return s.String() }
+
 // String redacts, so logging the store itself is safe.
 func (s *credStore) String() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return fmt.Sprintf("credStore{path:%s creds:%s salt:%s cookie:%s updated:%s}",
-		s.path, s.creds, redact(s.skeyGen), redact(s.cookie), s.updatedAt.Format(time.RFC3339))
+	return fmt.Sprintf("credStore{path:%s creds:%s salt:%s updated:%s}",
+		s.path, s.creds, redact(s.skeyGen), s.updatedAt.Format(time.RFC3339))
 }

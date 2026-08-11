@@ -41,6 +41,10 @@ label {
 
 const namespace = "df-hud"
 
+// version is reported by /healthz and -version. Set by the build, not by hand,
+// once there is a release process; a dev default keeps it honest until then.
+const version = "0.1.0-dev"
+
 func main() {
 	log.SetFlags(0)
 
