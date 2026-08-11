@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -248,10 +249,17 @@ func TestClientRejectsHTMLResponse(t *testing.T) {
 }
 
 // TestNoForbiddenEndpointsInSource walks the package AST and fails if a write
-// endpoint appears in any string literal outside the two places that legitimately
+// endpoint appears as a string literal outside the two places that legitimately
 // name them (the forbiddenEndpoints list itself, and this test). Belt and braces
 // on top of the runtime allowlist, because calling one of these is not
 // recoverable: modify_values writes arbitrary player state.
+//
+// The comparison is on the WHOLE literal, or on its last path segment so that
+// "hotrods/hunger" is still caught. It deliberately is not a substring test:
+// substring matching flagged df_hungerhp, an ordinary field in the player
+// record, which would have pushed someone to weaken this guard to silence a
+// false positive. An endpoint is always passed as a complete string, so exact
+// matching loses nothing.
 func TestNoForbiddenEndpointsInSource(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
@@ -270,8 +278,18 @@ func TestNoForbiddenEndpointsInSource(t *testing.T) {
 				if !ok || lit.Kind != token.STRING {
 					return true
 				}
+				value, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					return true
+				}
+				// The endpoint an operation names is the last path segment,
+				// e.g. "hotrods/load_challenge".
+				segment := value
+				if i := strings.LastIndex(segment, "/"); i >= 0 {
+					segment = segment[i+1:]
+				}
 				for _, bad := range []string{"hunger", "itemspawn", "modify_values"} {
-					if strings.Contains(lit.Value, bad) {
+					if value == bad || segment == bad {
 						t.Errorf("%s:%d: forbidden endpoint %q appears in source",
 							path, fset.Position(lit.Pos()).Line, bad)
 					}

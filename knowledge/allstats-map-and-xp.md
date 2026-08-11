@@ -27,10 +27,47 @@ construction — the XP that disappears from `df_exp` reappears in the prefix su
 `TestCumulativeXPIsContinuousAcrossLevelUp` pins that gaining one XP across a
 level boundary moves the cumulative total by exactly 1.
 
-`df_exptotal` is referenced **nowhere** in the saved web client, so do not count
-on it existing in `get_values`; the reconstruction above is the reliable tier.
-
 Level 415 is the cap, hardcoded in `checkIfLevelUp` (`curLevel < 415`).
+
+### `df_exptotal` exists, and it is the better source
+
+Corrected finding. The saved web client's *code* never references `df_exptotal`,
+but the captured page `userVars` all carry it, with real values. So the player
+record already contains a server-side cumulative XP counter, and **XP/hr does not
+need the table at all** — the table is the fallback for a record that lacks the
+field, plus the source of "XP to next level".
+
+Its relationship to the table is a **fixed offset**, not an exact match. From
+five independent captures:
+
+```
+df_exptotal - df_exp = 16,576,044,375 + 393,591   (identical in all five)
+sum(exp_lvl 2..415)  = 16,576,044,375
+offset               =        393,591
+```
+
+That the difference is *constant across captures* is the load-bearing part, and
+it is a real result rather than a coincidence of sampling: the captures were
+taken while playing, so `df_exp` climbs between them by 19M, 0.7M, 8M and 346M
+respectively — yet the difference does not move by a single point. Both counters
+advance by exactly the same amount, so either one gives an identical rate. Only
+the absolute totals differ. The likely cause is historical — DF has
+rebalanced the XP curve over the years, so an account's accumulated total does
+not have to match today's thresholds — but it is unverified and nothing depends
+on it.
+
+(An earlier version of this note attributed the same 393,591 gap seen in
+DFProfiler's `total_exp` to scrape timing between two of their fields. That was
+wrong: DFProfiler simply reports `df_exptotal`, and the gap is this systematic
+offset.)
+
+So the two tiers are:
+
+1. `df_exptotal` when present — authoritative, needs no catalog.
+2. `sum(exp_lvl 2..level) + df_exp` otherwise — provably continuous, see below.
+
+The active tier is logged on the first poll, so which one is in use is never a
+guess.
 
 ### When the reset actually happens, and why it is not a mid-run problem
 
@@ -53,8 +90,23 @@ the prefix sum gains from the levels, `df_exp` loses. Pinned by
 replays the website's per-level carry-over to level 235, and asserts the
 cumulative total does not move.
 
-At level 415, the cap, there are no level-ups at all and a raw `df_exp` delta is
-correct on its own.
+### At the cap, `df_exp` is an unbounded accumulator
+
+You keep earning XP after level 415, and since `checkIfLevelUp` refuses to run at
+the cap (`curLevel < 415`), it all piles into `df_exp` permanently. The captured
+account reads `df_exp` in the **billions** against an `exp_lvl415` of 176M, which
+is 40x the largest threshold in the table.
+
+Consequences, all handled in `parseSnapshot`:
+
+- There is no `exp_lvl416`, so `ExpNeeded` reports nothing at the cap and no
+  widget renders progress toward a level that cannot exist. (The website's own
+  sidebar prints the threshold as "I have no life" there.)
+- `PendingLevels` is 0 at the cap by the same route.
+- A raw `df_exp` delta is a perfectly correct rate at the cap, since nothing
+  ever resets it.
+- Any code that assumes `df_exp < exp_lvl[level+1]` is wrong twice over: once
+  because of banked overshoot mid-run, and once because of this.
 
 **Future widget idea this exposes:** "levels pending" — with a banked `df_exp`
 and the threshold table, df-hud can say how many levels you will gain when you
