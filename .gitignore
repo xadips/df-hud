@@ -1,0 +1,15 @@
+# Secrets and local state. The bridge payload is account-equivalent
+# (userID + password hash + sc), so nothing derived from it may ever be
+# committed.
+config.toml
+credentials.json
+state.json
+catalog.json
+positions.ndjson
+*.corrupt-*
+
+# Captures: HARs of the game embed live session credentials.
+*.har
+
+# Build output
+/df-hud
