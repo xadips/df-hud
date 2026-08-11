@@ -150,8 +150,13 @@ type PathsConfig struct {
 type HUDConfig struct {
 	Enabled bool `toml:"enabled"`
 
-	// Monitor is a connector name ("DP-1") or "auto" to follow the monitor
-	// the game window is on.
+	// Monitor is a connector name ("DP-1") or "auto".
+	//
+	// "auto" means the compositor decides, which in practice puts the HUD on
+	// the focused monitor. Following the GAME's monitor would be better and is
+	// what this key will eventually mean, but it needs the game window's output
+	// from Hyprland's command socket plus a way to move a live layer surface.
+	// Documented as what it does, not as what it should do.
 	Monitor string `toml:"monitor"`
 
 	// Layer must be "overlay" for the HUD to be visible over a fullscreen

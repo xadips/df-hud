@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
@@ -138,6 +139,7 @@ func (h *hud) build(gtkApp *gtk.Application) {
 	SetMargin(handle, EdgeLeft, cfg.HUD.MarginLeft)
 	SetExclusiveZone(handle, -1)          // never reserve space, never be pushed around
 	SetKeyboardMode(handle, KeyboardNone) // the game keeps every keypress
+	h.chooseMonitor(handle, cfg.HUD.Monitor)
 
 	h.box = gtk.NewBox(gtk.OrientationVertical, 2)
 	h.status = newHUDLabel()
@@ -179,6 +181,46 @@ func (h *hud) build(gtkApp *gtk.Application) {
 	})
 
 	log.Printf("hud: layer surface up (check: hyprctl layers | grep -A3 %s)", namespace)
+}
+
+// chooseMonitor pins the surface to a named output.
+//
+// "auto" leaves the choice to the compositor, which puts the surface on the
+// currently focused monitor. Following the GAME's monitor would be better, but
+// that needs the game window's output from Hyprland's command socket plus a way
+// to move an existing layer surface, so it is not done yet - and saying so beats
+// having a config key that quietly does nothing. A wrong name is a warning
+// rather than a failure, because losing the whole HUD over a renamed connector
+// after a cable swap would be a poor trade.
+func (h *hud) chooseMonitor(handle uintptr, want string) {
+	if want == "" || want == "auto" {
+		return
+	}
+	display := gdk.DisplayGetDefault()
+	if display == nil {
+		return
+	}
+	monitors := display.Monitors()
+	var names []string
+	for i := uint(0); i < monitors.NItems(); i++ {
+		object := monitors.Item(i)
+		if object == nil {
+			continue
+		}
+		monitor, ok := object.Cast().(*gdk.Monitor)
+		if !ok {
+			continue
+		}
+		connector := monitor.Connector()
+		names = append(names, connector)
+		if connector == want {
+			SetMonitor(handle, monitor.Native())
+			log.Printf("hud: pinned to monitor %s", connector)
+			return
+		}
+	}
+	log.Printf("hud: no monitor named %q (found: %s); letting the compositor choose",
+		want, strings.Join(names, ", "))
 }
 
 // applyClickThrough installs an empty input region so every pointer event lands

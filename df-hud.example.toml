@@ -106,8 +106,13 @@ scan_interval = "2s"
 [hud]
 enabled = true
 
-# Connector name ("DP-1", "HDMI-A-1") or "auto" to follow whichever monitor the
-# game window is on.
+# Connector name ("DP-1", "HDMI-A-1"), or "auto" to let the compositor decide -
+# which in practice means the monitor that has focus when df-hud starts.
+#
+# Following the monitor the GAME is on is not implemented yet, so "auto" does not
+# do that. Name the connector explicitly if you always play on one screen. An
+# unknown name is a warning, not a failure: losing the HUD entirely because a
+# connector got renamed after a cable swap would be a poor trade.
 monitor = "auto"
 
 # MUST be "overlay" to be visible over a fullscreen game: the "top" layer sits
