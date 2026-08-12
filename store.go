@@ -90,6 +90,10 @@ type Snapshot struct {
 	// side of a boost is not comparable.
 	BoostExp dfDeadline
 
+	// GoldMember doubles challenge XP rewards (challenge.js:279-283), so it is
+	// needed to render a reward honestly rather than at half value.
+	GoldMember bool
+
 	// Dead is the server's own flag, not an inference from HP.
 	Dead bool
 
@@ -205,6 +209,7 @@ func parseSnapshot(vars map[string]string, at time.Time, catalog *Catalog) Snaps
 	s.BankCash, _ = int64Var(vars, "df_bankcash")
 	s.Nourishment, s.HasHunger = intVar(vars, "df_hungerhp")
 	s.BoostExp = dfDeadlineVar(vars, "df_boostexpuntil", at)
+	s.GoldMember = boolVar(vars, "df_goldmember")
 	s.Dead = boolVar(vars, "df_dead")
 	s.ServerTime = dfCompactTimeVar(vars, "df_servertime")
 

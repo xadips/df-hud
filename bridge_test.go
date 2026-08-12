@@ -88,20 +88,43 @@ func TestBridgePersistsAt0600(t *testing.T) {
 	}
 }
 
-// The cookie is accepted for wire compatibility with the SilverOverlays payload
-// but must never be written to disk: it is an account secret we have no use for.
-func TestBridgeDiscardsCookie(t *testing.T) {
-	const cookie = "DeadFrontierFairview=SHOULD-NOT-BE-PERSISTED; lastLoginUser=nobody"
+// The cookie IS stored, reversing an earlier decision. It was discarded on the
+// reasoning that userID+password+sc authenticates everything, so a cookie added a
+// secret without adding capability - which turned out to be wrong for endpoints
+// under hotrods/, where load_challenge redirects to the site's front page
+// without one.
+//
+// What must hold is the discipline around it: private on disk, and redacted in
+// every stringification (TestBridgeNeverLogsSecrets covers the logging side).
+func TestBridgeStoresTheCookiePrivately(t *testing.T) {
+	const cookie = "DeadFrontierFairview=session-value; lastLoginUser=someone"
 	_, srv, store := testBridge(t)
-	http.Post(srv.URL+"/api/userData", "application/json",
+	resp, err := http.Post(srv.URL+"/api/userData", "application/json",
 		bytes.NewReader(payloadJSON(validUserVars(), fakeSalt, cookie)))
-
-	data, err := os.ReadFile(store.path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "SHOULD-NOT-BE-PERSISTED") {
-		t.Error("the session cookie was persisted; it must be discarded")
+	defer resp.Body.Close()
+
+	cr, _, ok := store.Get()
+	if !ok {
+		t.Fatal("credentials not stored")
+	}
+	if cr.Cookie != cookie {
+		t.Errorf("Cookie = %q, want it stored for hashed calls", cr.Cookie)
+	}
+
+	st, err := os.Stat(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := st.Mode().Perm(); perm != 0o600 {
+		t.Errorf("credentials file mode = %o, want 600 now that it holds a session cookie", perm)
+	}
+	// A payload with no cookie must still be accepted: get_values needs none, so
+	// rejecting it would break the common case for the sake of the rare one.
+	if _, err := store.Set(Credentials{UserID: "1", Password: "2", SC: "3"}, ""); err != nil {
+		t.Errorf("a triple without a cookie must remain valid: %v", err)
 	}
 }
 

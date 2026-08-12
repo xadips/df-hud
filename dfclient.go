@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -160,12 +161,41 @@ func looksLikeHTML(body string) bool {
 		strings.Contains(head, "<title>") || strings.Contains(head, "cloudflare")
 }
 
+// describeHTML names the page we were handed. The <title> is the single most
+// diagnostic element - "Login" and "404 Not Found" and a Cloudflare challenge
+// are three completely different problems that all look the same as "got HTML".
+func describeHTML(body string) string {
+	lower := strings.ToLower(body)
+	if i := strings.Index(lower, "<title>"); i >= 0 {
+		rest := body[i+len("<title>"):]
+		if j := strings.Index(strings.ToLower(rest), "</title>"); j >= 0 {
+			return " titled " + strconv.Quote(excerpt(rest[:j], 80))
+		}
+	}
+	return ": " + excerpt(body, 160)
+}
+
+// excerpt trims a body to something loggable: collapsed whitespace, bounded
+// length, so a multi-kilobyte error page becomes one readable line.
+func excerpt(body string, max int) string {
+	flat := strings.Join(strings.Fields(body), " ")
+	if len(flat) > max {
+		return flat[:max] + "..."
+	}
+	return flat
+}
+
 // Client talks to the game server. One per process; the caller owns pacing.
 type Client struct {
 	HTTP      *http.Client
 	BaseURL   string // e.g. https://fairview.deadfrontier.com/onlinezombiemmo
 	UserAgent string
 	MaxBody   int64
+
+	// Cookie is the browser session, needed by endpoints under hotrods/ that
+	// check the site session rather than only the credential triple. Empty is
+	// fine for get_values.
+	Cookie string
 }
 
 // Call posts to one endpoint and parses the response. salt is only consulted
@@ -195,6 +225,16 @@ func (c *Client) Call(ctx context.Context, call string, p orderedParams, hashed 
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", c.UserAgent)
+	// Cookie, when we have one. get_values authenticates on the credential
+	// triple alone, but hotrods/load_challenge redirects to the site's front
+	// page without a session cookie - verified by elimination: the salt is
+	// correct (it matches md5.js), the parameters and their order match
+	// challenge.js exactly, the path is right (a bare POST there answers
+	// "Invalid action" rather than 404), and adding Referer and
+	// X-Requested-With changed nothing.
+	if c.Cookie != "" {
+		req.Header.Set("Cookie", c.Cookie)
+	}
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -217,7 +257,13 @@ func (c *Client) Call(ctx context.Context, call string, p orderedParams, hashed 
 	}
 	text := string(raw)
 	if looksLikeHTML(text) {
-		return nil, fmt.Errorf("df: %s: got an HTML page instead of data (login redirect or Cloudflare)", call)
+		// Include a short excerpt rather than guessing at the cause. The previous
+		// message said "login redirect or Cloudflare", which is a hypothesis; the
+		// excerpt is evidence, and it is the difference between diagnosing this in
+		// one run and in five. Safe to surface: this is a RESPONSE from the game
+		// server on the failure path, not our request body, so it carries no
+		// credentials - and it is truncated regardless.
+		return nil, fmt.Errorf("df: %s: got an HTML page instead of data%s", call, describeHTML(text))
 	}
 	vars, err := parseFlash(text)
 	if err != nil {

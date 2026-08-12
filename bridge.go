@@ -36,12 +36,15 @@ type bridgePayload struct {
 	UserVars map[string]any `json:"userVars"`
 	SKeyGen  string         `json:"skeygen"`
 
-	// Cookies is accepted for wire compatibility with the SilverOverlays
-	// payload shape (so an existing the bridge userscript install can bootstrap us)
-	// but is deliberately DISCARDED, never stored. The game's API is
-	// authenticated by userID+password+sc; a session cookie would only allow
-	// fetching web pages as the user, which df-hud never does. Keeping it
-	// would put another account secret on disk for no added capability.
+	// Cookies is the browser session, in the SilverOverlays payload's own field
+	// name.
+	//
+	// This was originally discarded on the reasoning that the API authenticates
+	// on userID+password+sc, so a cookie added a secret without adding
+	// capability. That was wrong for endpoints under hotrods/: load_challenge
+	// redirects to the site's front page without one. It is stored now under the
+	// same discipline as the rest, which is also presumably why the bridge userscript
+	// sends it in the first place.
 	Cookies string `json:"cookies"`
 }
 
@@ -161,6 +164,7 @@ func (b *bridgeServer) handleUserData(w http.ResponseWriter, r *http.Request) {
 		UserID:   coerce(p.UserVars["userID"]),
 		Password: coerce(p.UserVars["password"]),
 		SC:       coerce(p.UserVars["sc"]),
+		Cookie:   strings.TrimSpace(p.Cookies),
 	}
 	if !cr.Valid() {
 		// Name only the missing FIELDS, never any value.

@@ -36,6 +36,7 @@ func main() {
 		checkConfig = flag.Bool("check-config", false, "validate the config and exit")
 		checkGame   = flag.Bool("check-game", false, "report whether the game client is detected, and exit")
 		dumpFields  = flag.Bool("dump-fields", false, "with -once, print the player record for diagnostics (credentials withheld)")
+		dumpChals   = flag.Bool("dump-challenges", false, "fetch the challenge board once, print it, and exit")
 		headless    = flag.Bool("headless", false, "run without the HUD window")
 		printHUD    = flag.Bool("print-hud", false, "print the HUD's text lines on every update")
 	)
@@ -74,15 +75,20 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// -once is a diagnostic: it polls with the credentials already on disk, so it
-	// must not need the bridge port. Without this it cannot run at all while the
-	// daemon is up, which is exactly when you reach for it.
-	app, err := newApp(ctx, cfg, *configPath, !*once)
+	// The one-shot diagnostics poll with the credentials already on disk, so they
+	// must not need the bridge port - otherwise they cannot run at all while the
+	// daemon is up, which is exactly when you reach for them.
+	oneShot := *once || *dumpChals
+	app, err := newApp(ctx, cfg, *configPath, !oneShot)
 	if err != nil {
 		log.Fatalf("startup: %v", err)
 	}
 	defer app.Close()
 
+	if *dumpChals {
+		app.dumpChallenges(ctx, *dumpFields)
+		return
+	}
 	if *once {
 		app.runOnce(ctx, *dumpFields)
 		return
@@ -334,6 +340,79 @@ type runOptions struct {
 	printView bool
 	printHUD  bool
 	hud       bool
+}
+
+// dumpChallenges fetches the challenge board once and prints it. This is a
+// hashed endpoint, so it also proves the signing salt is right end to end -
+// a wrong salt comes back as a rejection rather than as data.
+func (a *app) dumpChallenges(ctx context.Context, raw bool) {
+	cr, _, ok := a.creds.Get()
+	if !ok {
+		log.Fatal("no credentials yet: load a Dead Frontier page with the bridge userscript")
+	}
+	// The cookie travels with the request for endpoints that check the site
+	// session rather than only the credential triple.
+	a.client.Cookie = cr.Cookie
+	salt := a.cfg.SigningSalt(a.creds)
+	if salt == "" {
+		log.Fatal("no signing salt: the bridge has not reported one, and df.skeygen is empty. " +
+			"Load the Outpost home page with the bridge userscript or the the bridge userscript installed.")
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, a.cfg.DF.Timeout.Duration)
+	defer cancel()
+	vars, err := a.client.LoadChallenge(reqCtx, cr, salt)
+	if err != nil {
+		log.Fatalf("load_challenge failed: %v", err)
+	}
+	if raw {
+		dumpRecordFields(vars)
+		return
+	}
+
+	// Reward XP is a per-level multiplier, doubled for gold members, so the board
+	// cannot be rendered honestly without those two facts. Poll once for them
+	// rather than printing rewards at the wrong value.
+	if _, ok := a.store.Snapshot(); !ok {
+		if tick := a.poller.Once(ctx); tick.Err == nil {
+			a.store.ApplyTick(tick)
+		} else {
+			log.Printf("could not read your level (%v); reward XP will be omitted", tick.Err)
+		}
+	}
+	level, gold := 0, false
+	if snap, ok := a.store.Snapshot(); ok {
+		level, gold = snap.Level, snap.GoldMember
+	}
+	board := parseChallenges(vars, level, gold)
+	fmt.Printf("%d challenges (level %d)\n", len(board), level)
+	for _, c := range board {
+		kind := "personal"
+		if c.Clan {
+			kind = "clan"
+		}
+		status := " "
+		if c.Complete() {
+			status = "x"
+		}
+		fmt.Printf("\n[%s] %-8s %s\n", status, kind, c.Name)
+		if remaining := c.Remaining(time.Now()); remaining > 0 {
+			fmt.Printf("        ends in %s\n", formatCountdown(remaining))
+		}
+		for _, o := range c.Objectives {
+			fmt.Printf("        %-28s %s / %s  (%.0f%%)\n",
+				o.Name, formatInt(o.Score), formatInt(o.Target), o.Fraction()*100)
+		}
+		switch {
+		case c.RewardPoints > 0:
+			fmt.Printf("        reward: %d clan points\n", c.RewardPoints)
+		case c.RewardExp > 0:
+			fmt.Printf("        reward: %s xp\n", formatInt(c.RewardExp))
+		}
+		if c.RewardSpecial != "" {
+			fmt.Printf("        reward: %s\n", c.RewardSpecial)
+		}
+	}
 }
 
 func (a *app) run(ctx context.Context, opts runOptions) {

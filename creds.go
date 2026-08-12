@@ -24,13 +24,26 @@ import (
 //     encode of any struct containing these cannot leak them. Persistence uses
 //     a separate unexported type that opts in explicitly.
 
-// Credentials is the signing triple.
+// Credentials is the signing triple, plus the browser session cookie.
+//
+// The cookie was originally accepted and discarded, on the reasoning that the
+// API authenticates on userID+password+sc so a cookie would only allow fetching
+// web pages. That reasoning was WRONG for endpoints under hotrods/:
+// load_challenge redirects to the site's front page without one, with a correct
+// signature and correct parameters. It is stored now, under exactly the same
+// discipline as the rest - 0600, redacted in every stringification - because it
+// is one more account secret and adds no new class of risk alongside a password
+// hash.
 type Credentials struct {
 	UserID   string
 	Password string
 	SC       string
+	Cookie   string
 }
 
+// Valid covers what every call needs. The cookie is NOT required here:
+// get_values works without one, so a payload lacking it is still useful and
+// must not be rejected.
 func (c Credentials) Valid() bool {
 	return c.UserID != "" && c.Password != "" && c.SC != ""
 }
@@ -40,8 +53,8 @@ func (c Credentials) String() string {
 	if !c.Valid() {
 		return "Credentials{unset}"
 	}
-	return fmt.Sprintf("Credentials{UserID:%s Password:%s SC:%s}",
-		redact(c.UserID), redact(c.Password), redact(c.SC))
+	return fmt.Sprintf("Credentials{UserID:%s Password:%s SC:%s Cookie:%s}",
+		redact(c.UserID), redact(c.Password), redact(c.SC), redact(c.Cookie))
 }
 
 // GoString redacts, covering %#v.
@@ -55,7 +68,8 @@ func (c Credentials) MarshalJSON() ([]byte, error) {
 		UserID   string `json:"userID"`
 		Password string `json:"password"`
 		SC       string `json:"sc"`
-	}{redact(c.UserID), redact(c.Password), redact(c.SC)})
+		Cookie   string `json:"cookie"`
+	}{redact(c.UserID), redact(c.Password), redact(c.SC), redact(c.Cookie)})
 }
 
 // redact keeps a short prefix so two different values are distinguishable in
@@ -77,6 +91,7 @@ type credsFile struct {
 	UserID        string    `json:"userID"`
 	Password      string    `json:"password"`
 	SC            string    `json:"sc"`
+	Cookie        string    `json:"cookie,omitempty"`
 	SKeyGen       string    `json:"skeygen,omitempty"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -116,7 +131,7 @@ func (s *credStore) Load() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.creds = Credentials{UserID: f.UserID, Password: f.Password, SC: f.SC}
+	s.creds = Credentials{UserID: f.UserID, Password: f.Password, SC: f.SC, Cookie: f.Cookie}
 	s.skeyGen, s.updatedAt = f.SKeyGen, f.UpdatedAt
 	return nil
 }
@@ -140,6 +155,7 @@ func (s *credStore) Set(c Credentials, skeyGen string) (changed bool, err error)
 		UserID:        c.UserID,
 		Password:      c.Password,
 		SC:            c.SC,
+		Cookie:        c.Cookie,
 		SKeyGen:       s.skeyGen,
 		UpdatedAt:     s.updatedAt,
 	}
