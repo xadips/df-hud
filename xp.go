@@ -108,6 +108,21 @@ func computeXPRate(samples []XPSample, minSamples int, stability xpStability) XP
 	}
 }
 
+// xpRunReset reports whether the rate window must be discarded because a new run
+// began, given the previously known run start and the current one.
+//
+// A run boundary matters to the rate for the same reason a death does: the
+// samples either side describe different activity. The window collected while the
+// launcher sat on screen contains no XP at all, so averaging across the boundary
+// under-reports the run's real rate for as long as the window is wide.
+//
+// A run ENDING is deliberately not a reset. The rate the run earned is still the
+// last true thing the widget can say, and blanking it the moment you step into an
+// outpost would throw the number away exactly when you want to read it.
+func xpRunReset(prev, next time.Time) bool {
+	return !next.IsZero() && !next.Equal(prev)
+}
+
 // xpWindowReset reports why the rate window must be discarded when moving from
 // one snapshot to the next, or "" to keep it.
 //
@@ -128,6 +143,13 @@ func xpWindowReset(prev, next Snapshot, window time.Duration) string {
 	if next.At.Before(prev.At) {
 		return "the clock went backwards"
 	}
+	// Note what is NOT here: df_inoutpost changing. A new run does need the window
+	// discarded - otherwise the flat samples from the launcher and the loading
+	// screen are averaged in and the first minutes of a run read as a fraction of
+	// the real rate - but that field turned out not to mean what its name suggests
+	// (it was already "0" at the launcher), so a change in it is not evidence of
+	// anything. The run boundary is decided by the store, from movement, and the
+	// reset is driven by xpRunReset below.
 	if prev.BoostExp != next.BoostExp {
 		return "the XP boost changed"
 	}

@@ -1,0 +1,253 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+)
+
+// When the HUD should be on screen.
+//
+// This used to be "always", which is defensible for a click-through overlay of
+// four short lines but wrong in practice: the HUD sat over the desktop all day
+// showing a clock for a game that was not running, and it sat over every other
+// workspace on the monitor because a layer surface has no concept of a workspace.
+//
+// Two rules fix that, both configurable and both able to say why they hid it:
+//
+//   - hud.only_when_game_running - no game, no HUD.
+//   - hud.follow_game_workspace - the HUD is shown only while the game's own
+//     workspace is the one being displayed. The layer-shell protocol has no
+//     per-workspace concept at all, so this is emulated: ask the compositor which
+//     workspace the game's window is on, compare it with what is active on that
+//     monitor, and map the answer onto showing or hiding the surface.
+//
+// Both FAIL OPEN. If the compositor cannot be reached, or the game's window
+// cannot be identified, the HUD is shown. A HUD that is wrongly visible is a
+// cosmetic annoyance you can see and report; a HUD that is wrongly invisible is
+// indistinguishable from df-hud being broken, and that is the failure that costs
+// an evening.
+
+// visibilityRules is the config subset that decides this, extracted so the
+// decision is a pure function.
+type visibilityRules struct {
+	OnlyWhenGameRunning bool
+	FollowGameWorkspace bool
+	// Enabled is the manual override from the tray menu. It is not a config key:
+	// it is the "hide it for a moment" switch, and it beats every other rule.
+	Enabled bool
+}
+
+// decideHUDVisible returns whether to draw the HUD, and when it should not, the
+// reason in words fit for a log line and a tray tooltip.
+func decideHUDVisible(r visibilityRules, game GameState, place windowPlacement) (bool, string) {
+	if !r.Enabled {
+		return false, "hidden from the tray menu"
+	}
+	if r.OnlyWhenGameRunning && !game.Running {
+		return false, "the game is not running"
+	}
+	// place.Known false means the question could not be answered, not that the
+	// answer is no - see the fail-open note above.
+	if r.FollowGameWorkspace && place.Known && !place.OnActiveWorkspace {
+		where := place.WorkspaceName
+		if where == "" {
+			where = fmt.Sprint(place.Workspace)
+		}
+		return false, "the game is on workspace " + where + ", which is not the one being shown"
+	}
+	return true, ""
+}
+
+// windowQuerier is the compositor lookup, an interface so the watcher can be
+// tested without Hyprland.
+type windowQuerier interface {
+	GameWindow(ctx context.Context, pid int, class string) (windowPlacement, error)
+}
+
+// hudVisibility is the published decision. Monitor travels with it because the
+// same compositor query answers both questions, and because moving the surface to
+// the game's monitor is only ever done at the moment it is shown.
+type hudVisibility struct {
+	Visible bool
+	Reason  string
+	// Monitor is the connector the game's window is on, empty when unknown.
+	Monitor string
+}
+
+// visibilityWatcher recomputes the decision on compositor events and on a slow
+// ticker, and publishes changes.
+type visibilityWatcher struct {
+	game    *GameWatcher
+	cfg     func() *Config
+	query   windowQuerier
+	timeout time.Duration
+
+	wake chan struct{}
+
+	mu       sync.RWMutex
+	enabled  bool
+	state    hudVisibility
+	place    windowPlacement
+	onChange func(hudVisibility)
+	// queryFailed stops a compositor that is not Hyprland from being asked twice
+	// a second forever, and stops the log filling with the same failure.
+	queryFailed bool
+}
+
+func newVisibilityWatcher(game *GameWatcher, cfg func() *Config, query windowQuerier) *visibilityWatcher {
+	return &visibilityWatcher{
+		game:    game,
+		cfg:     cfg,
+		query:   query,
+		timeout: 2 * time.Second,
+		wake:    make(chan struct{}, 1),
+		enabled: true,
+		// Visible until proven otherwise, so a compositor that never answers
+		// leaves a working HUD rather than a missing one.
+		state: hudVisibility{Visible: true},
+	}
+}
+
+func (w *visibilityWatcher) SetOnChange(fn func(hudVisibility)) {
+	w.mu.Lock()
+	w.onChange = fn
+	w.mu.Unlock()
+}
+
+func (w *visibilityWatcher) State() hudVisibility {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.state
+}
+
+// Placement is the compositor's last word on the game's window, for -check-game
+// and the tray tooltip.
+func (w *visibilityWatcher) Placement() windowPlacement {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.place
+}
+
+// SetEnabled is the tray menu's override.
+func (w *visibilityWatcher) SetEnabled(on bool) {
+	w.mu.Lock()
+	changed := w.enabled != on
+	w.enabled = on
+	w.mu.Unlock()
+	if changed {
+		w.Poke()
+	}
+}
+
+func (w *visibilityWatcher) Enabled() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.enabled
+}
+
+// Poke requests an immediate recompute, coalescing multiple requests.
+func (w *visibilityWatcher) Poke() {
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Run recomputes until ctx ends. The ticker is a backstop: compositor events
+// drive the responsive path, because waiting up to a full tick to hide the HUD
+// after switching workspace is exactly the lag that makes an overlay feel broken.
+func (w *visibilityWatcher) Run(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	w.refresh(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			w.refresh(ctx)
+		case <-w.wake:
+			w.refresh(ctx)
+		}
+	}
+}
+
+func (w *visibilityWatcher) refresh(ctx context.Context) {
+	cfg := w.cfg()
+	game := GameState{}
+	if w.game != nil {
+		game = w.game.State()
+	}
+
+	w.mu.RLock()
+	rules := visibilityRules{
+		OnlyWhenGameRunning: cfg.HUD.OnlyWhenGameRunning,
+		FollowGameWorkspace: cfg.HUD.FollowGameWorkspace,
+		Enabled:             w.enabled,
+	}
+	failed := w.queryFailed
+	w.mu.RUnlock()
+
+	// Only worth asking the compositor while the game is running: with it closed
+	// there is no window to place, and the rules above have already decided.
+	place := windowPlacement{}
+	if game.Running && w.query != nil && !failed {
+		queryCtx, cancel := context.WithTimeout(ctx, w.timeout)
+		got, err := w.query.GameWindow(queryCtx, game.PID, cfg.Game.WindowMatch())
+		cancel()
+		switch {
+		case err != nil:
+			// One line, once. Then stop asking: on a compositor without this
+			// socket the answer will not change, and the HUD stays visible
+			// everywhere, which is the pre-existing behaviour.
+			log.Printf("hud: cannot ask the compositor where the game's window is (%v); "+
+				"the HUD will show on every workspace", err)
+			w.mu.Lock()
+			w.queryFailed = true
+			w.mu.Unlock()
+		case !got.Known:
+			// Not an error: the window may not be mapped yet during startup.
+			place = got
+		default:
+			place = got
+		}
+	}
+
+	visible, reason := decideHUDVisible(rules, game, place)
+	next := hudVisibility{Visible: visible, Reason: reason, Monitor: place.Monitor}
+
+	w.mu.Lock()
+	prev, prevPlace := w.state, w.place
+	w.state, w.place = next, place
+	fn := w.onChange
+	w.mu.Unlock()
+
+	if prevPlace.MatchedBy != place.MatchedBy && place.Known {
+		// Said once per identification change, because "how did it find the
+		// window" is the first question when the workspace rule misbehaves.
+		log.Printf("hud: the game's window is on %s workspace %s (matched by %s, class %q)",
+			place.Monitor, place.WorkspaceName, place.MatchedBy, place.Class)
+	}
+	if prev == next {
+		return
+	}
+	switch {
+	case next.Visible && !prev.Visible:
+		log.Print("hud: showing")
+	case !next.Visible && prev.Visible:
+		log.Printf("hud: hiding - %s", next.Reason)
+	case !next.Visible && prev.Reason != next.Reason:
+		// Still hidden, hidden for a different reason. Worth a line: without it,
+		// "hiding - the game is not running" is the last thing said even after the
+		// game has started and the real reason has become the workspace - which
+		// reads as the workspace rule not working at all.
+		log.Printf("hud: still hidden - %s", next.Reason)
+	}
+	if fn != nil {
+		fn(next)
+	}
+}

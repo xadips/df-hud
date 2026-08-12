@@ -32,8 +32,14 @@ func TestBlockLinesInTheCity(t *testing.T) {
 	if head != "1058, 1016" {
 		t.Errorf("head = %q, want the coordinates", head)
 	}
-	if !strings.Contains(sub, "South Eastern") || !strings.Contains(sub, "danger 3") {
-		t.Errorf("sub = %q, want the region and danger", sub)
+	if !strings.Contains(sub, "South Eastern") {
+		t.Errorf("sub = %q, want the region", sub)
+	}
+	// df_dangerlevel is in the record but not on the HUD: the game's own client
+	// never renders it, so there is no way to know whether 0 means safe or
+	// unmeasured, and an uninterpretable number on every row is just noise.
+	if strings.Contains(sub, "danger") {
+		t.Errorf("sub = %q, want no danger level until its scale is known", sub)
 	}
 }
 
@@ -104,13 +110,19 @@ func TestBlockLinesShowsBlockSupport(t *testing.T) {
 }
 
 func TestSessionLine(t *testing.T) {
-	text, show := sessionLine(&View{GameRunning: true, SessionTime: 90 * time.Minute})
+	text, show := sessionLine(&View{GameRunning: true, HasSession: true, SessionTime: 90 * time.Minute})
 	if !show || text != "1:30:00" {
 		t.Errorf("sessionLine = %q, %v", text, show)
 	}
 	// A frozen clock reads as a broken one, so the row disappears instead.
-	if _, show := sessionLine(&View{GameRunning: false, SessionTime: time.Hour}); show {
+	if _, show := sessionLine(&View{GameRunning: false, HasSession: true, SessionTime: time.Hour}); show {
 		t.Error("the session row must be hidden when the game is closed")
+	}
+	// The client being up is not a session. Between pressing Launch and pressing
+	// Start there is nothing to time, and a clock counting the loading screen is
+	// the bug this replaced.
+	if _, show := sessionLine(&View{GameRunning: true, ClientUptime: 5 * time.Minute}); show {
+		t.Error("the session row must be hidden until a run has actually started")
 	}
 }
 
@@ -118,6 +130,7 @@ func TestHudLinesRespectsOrderAndStatus(t *testing.T) {
 	cfg := defaultConfig()
 	v := viewForBlock(false)
 	v.GameRunning = true
+	v.HasSession = true
 	v.SessionTime = time.Hour
 
 	lines := hudLines(v, cfg)

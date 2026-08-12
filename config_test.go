@@ -201,11 +201,13 @@ func TestConfigReportsEveryProblemAtOnce(t *testing.T) {
 // Raising the poll interval must not reject the config over an xp window the
 // user never touched; the window widens instead, and the startup log says so.
 func TestXPEffectiveWindow(t *testing.T) {
-	cfg, err := loadConfig(writeConfig(t, "[poll]\nactive_interval = \"30s\"\nidle_interval = \"2m\"\n"))
+	cfg, err := loadConfig(writeConfig(t,
+		"[poll]\nactive_interval = \"30s\"\nidle_interval = \"2m\"\n"+
+			"[widget.xp]\nwindow = \"30s\"\n"))
 	if err != nil {
 		t.Fatalf("a slower poll must stay valid: %v", err)
 	}
-	// Configured 30s cannot hold 3 samples at a 30s cadence, so it widens.
+	// A 30s window cannot hold 3 samples at a 30s cadence, so it widens.
 	got := cfg.Widget.XP.EffectiveWindow(cfg.Poll.ActiveInterval.Duration)
 	if got != 90*time.Second {
 		t.Errorf("effective window = %s, want 1m30s (3 samples x 30s)", got)
@@ -215,10 +217,11 @@ func TestXPEffectiveWindow(t *testing.T) {
 	if got := cfg.Widget.XP.EffectiveWindow(30 * time.Second); got != 10*time.Minute {
 		t.Errorf("effective window = %s, want the configured 10m untouched", got)
 	}
-	// The default pairing needs no adjustment at all.
+	// The default pairing needs no adjustment at all: five minutes holds three
+	// samples at any interval the poll floors allow.
 	def := defaultConfig()
-	if got := def.Widget.XP.EffectiveWindow(def.Poll.ActiveInterval.Duration); got != 30*time.Second {
-		t.Errorf("default effective window = %s, want the configured 30s", got)
+	if got := def.Widget.XP.EffectiveWindow(def.Poll.ActiveInterval.Duration); got != 5*time.Minute {
+		t.Errorf("default effective window = %s, want the configured 5m", got)
 	}
 }
 
@@ -402,12 +405,20 @@ func TestRequestsPerHour(t *testing.T) {
 		t.Errorf("idle budget = %.1f/h, expected ~60 (30 + 30 + 1/24)", idle)
 	}
 
-	// Playing all hour: get_values every 10s (360/h) plus the board every 30s
-	// (120/h). This is the number the README quotes, so a change to the defaults
-	// shows up here first.
+	// Playing all hour: get_values every 10s (360/h), the challenge board every 30s
+	// (120/h) and the event map every 60s (60/h). This is the number the README
+	// quotes, so a change to the defaults shows up here first.
 	active := cfg.RequestsPerHour(1)
-	if active < 470 || active > 490 {
-		t.Errorf("active budget = %.1f/h, expected ~480 (360 + 120 + 1/24)", active)
+	if active < 530 || active > 550 {
+		t.Errorf("active budget = %.1f/h, expected ~540 (360 + 120 + 60 + 1/24)", active)
+	}
+
+	// The event map is the only third-party traffic, and it stops with the game
+	// like everything else.
+	noBoss := defaultConfig()
+	noBoss.BossMap.Enabled = false
+	if with, without := cfg.RequestsPerHour(1), noBoss.RequestsPerHour(1); with-without < 55 {
+		t.Errorf("the event map should account for ~60/h, got %.1f", with-without)
 	}
 	if active <= idle {
 		t.Error("playing must cost more requests than idling")

@@ -21,6 +21,11 @@ import (
 // Failure here is deliberately quieter than in the main poller. A missing salt or
 // an expired cookie costs the challenge widget and nothing else, so it degrades
 // to "no board" rather than taking the position and XP readouts down with it.
+// pauseRecheck is how often a paused scheduler re-asks whether it is still
+// paused. It costs nothing - no network, no locks held - and it is what makes a
+// missing wake-up a two-second delay rather than a dead widget.
+const pauseRecheck = 2 * time.Second
+
 type ChallengePoller struct {
 	client *Client
 	creds  *credStore
@@ -151,11 +156,25 @@ func (p *ChallengePoller) Run(ctx context.Context) {
 				log.Printf("challenges: paused - %s", reason)
 				loggedPause = reason
 			}
+			// Re-evaluated on a timer as well as on a poke.
+			//
+			// Waiting only for a poke means every pause condition needs someone
+			// elsewhere to remember to send one, and the one that got missed cost a
+			// whole session: "waiting for the first player record" is waiting for an
+			// event that nothing woke this loop for, so the board stayed paused
+			// while the game was played. pauseReason is a pure function over state
+			// that is already in memory, so re-checking it every two seconds costs
+			// nothing and cannot be forgotten.
+			timer := time.NewTimer(pauseRecheck)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return
 			case <-p.wake:
+				timer.Stop()
 				next = time.Now()
+				continue
+			case <-timer.C:
 				continue
 			}
 		}

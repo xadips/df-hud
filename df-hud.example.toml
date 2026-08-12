@@ -91,11 +91,20 @@ backoff_max = "5m"
 # basename. It must be a bare name, not a path. The default is the Steam/Proton
 # install's exe name.
 #
-# Detection is done from /proc rather than from the compositor, because the
-# session clock needs the moment the game LAUNCHED - which is why it stays
-# correct even if you start df-hud an hour into a session, or restart it
-# mid-run.
+# Detection is done from /proc rather than from the compositor: it decides
+# whether df-hud polls at all, so it has to work on any compositor and it must
+# not depend on a window existing (a Proton game spends a while with none).
 process = "DeadFrontier.exe"
+
+# The game WINDOW's class, which is a different question: it decides where the
+# HUD is drawn (hud.follow_game_workspace, and monitor = "auto"), never whether
+# df-hud polls.
+#
+# Empty means "look for a window whose process id matches, and failing that one
+# whose class looks like game.process". Set it only if `df-hud -check-game` says
+# the window could not be matched - it prints every window's class, so the fix is
+# copying one of them in here.
+window_class = ""
 
 # How often /proc is scanned. This is a local read, not a network request, so
 # there is no politeness floor - only sanity limits of 250ms..5m. Under Hyprland
@@ -112,12 +121,35 @@ scan_interval = "2s"
 [hud]
 enabled = true
 
-# Connector name ("DP-1", "HDMI-A-1"), or "auto" to let the compositor decide -
-# which in practice means the monitor that has focus when df-hud starts.
+# Hide the HUD entirely while the game is not running. Without this the overlay
+# sits over your desktop all day showing a clock for a game nobody is playing.
 #
-# Following the monitor the GAME is on is not implemented yet, so "auto" does not
-# do that. Name the connector explicitly if you always play on one screen. An
-# unknown name is a warning, not a failure: losing the HUD entirely because a
+# Named to match poll.only_when_game_running and deliberately separate from it:
+# that one governs requests to somebody else's server, this one governs pixels on
+# your own screen.
+only_when_game_running = true
+
+# Show the HUD only while the game's own workspace is the one on screen.
+#
+# The layer-shell protocol has no concept of a workspace - a layer surface belongs
+# to a MONITOR and is drawn on every workspace of it - so this is emulated: df-hud
+# asks the compositor which workspace the game's window is on and hides the
+# surface while you are looking at a different one.
+#
+# It fails open. If the compositor cannot be reached, or the game's window cannot
+# be identified (see game.window_class), the HUD is shown rather than hidden: a
+# HUD that is wrongly visible is an annoyance you can see, while one that is
+# wrongly invisible is indistinguishable from df-hud being broken.
+follow_game_workspace = true
+
+# Connector name ("DP-1", "HDMI-A-1"), or "auto".
+#
+# "auto" follows the GAME: the surface is pinned to whichever monitor the game's
+# window is on, re-checked every time the HUD is shown. If the window cannot be
+# identified, the compositor chooses, which in practice means the focused
+# monitor. Name a connector explicitly to override that.
+#
+# An unknown name is a warning, not a failure: losing the HUD entirely because a
 # connector got renamed after a cable swap would be a poor trade.
 monitor = "auto"
 
@@ -151,6 +183,31 @@ opacity = 1.0
 # without rebuilding. Must exist if set.
 # css = "~/.config/df-hud/style.css"
 
+[bossmap]
+# What is standing on your block: bosses, bandit packs, missions, QRF events and
+# outpost attacks. Shown as an extra line under the block name.
+#
+# This is the only thing df-hud fetches from a site that is not the game's own.
+# The game's API knows where YOU are and the public stats feed knows the map's
+# geometry, but neither knows what has spawned on it; dfprofiler publishes that.
+#
+# The interval floor is 30s, which is what dfprofiler's own boss map page polls at
+# per open tab - df-hud must never cost the operator more than their own page
+# does. Nothing is fetched at all while the game is not running.
+enabled = true
+url = "https://www.dfprofiler.com/bossmap/json/"
+interval = "1m"
+
+[tray]
+# The icon in the system tray (waybar's "tray" module, or any other
+# StatusNotifierItem host), with a menu for hiding the overlay, reloading this
+# file and quitting.
+#
+# Worth leaving on: with only_when_game_running above, df-hud has no presence on
+# screen at all while you are not playing, and this is then the only way to tell
+# it is running or to stop it.
+enabled = true
+
 # Widgets. Each has enabled and order; order is a sort key, not an index, so the
 # gaps are deliberate - reorder by editing one number.
 
@@ -162,9 +219,17 @@ order = 10
 show_coords = false
 
 [widget.session]
-# Time since the game client launched. Read from the game process's own start
-# time, so it stays correct even if df-hud starts late or is restarted
-# mid-session.
+# Time in the inner city on this run: it starts when the server first reports you
+# out of an outpost, and the row disappears when you go back to one.
+#
+# Deliberately NOT the game client's uptime. Launching Dead Frontier means a
+# launcher, then Launch, then a loading screen, then Start - so process uptime can
+# be minutes ahead of any playing, and a clock counting that is timing a loading
+# screen. The trade is that the start is accurate to one poll interval, and always
+# late rather than early.
+#
+# The run survives a df-hud restart mid-session (it is persisted with the game's
+# process identity), so restarting the HUD does not reset your clock.
 enabled = true
 order = 20
 
@@ -173,9 +238,18 @@ enabled = true
 order = 30
 # Averaging window, and the number of usable samples below which the rate is
 # left blank rather than extrapolated from too little data. The window must be
-# long enough to hold min_samples at active_interval, or the rate could never
-# appear at all - that combination is rejected at startup.
-window = "30s"
+# long enough to hold min_samples at active_interval; if it is not, it widens
+# rather than being rejected, and the startup log says so.
+#
+# Five minutes, not thirty seconds, because XP arrives in lumps: a window short
+# enough to contain no kill reads as a rate of zero, and a number that flips
+# between 20M/hr and nothing is actively misleading about how the run is going.
+# Shorten it if you want the rate to react faster and can live with it twitching.
+#
+# The window is reset, not averaged across, whenever the samples either side stop
+# being comparable: a new run, a death, an XP boost starting or ending, a clock
+# jump, or a long gap.
+window = "5m"
 min_samples = 3
 
 [widget.challenges]

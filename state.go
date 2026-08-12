@@ -72,6 +72,29 @@ type State struct {
 	// calibrated. Nil is the normal state today: see
 	// knowledge/allstats-map-and-xp.md.
 	Grid *GridTransform `json:"grid,omitempty"`
+
+	// Run is the trip into the city the session clock is counting, nil when
+	// there is none.
+	Run *RunState `json:"run,omitempty"`
+}
+
+// RunState is a run in progress, persisted so that restarting df-hud mid-run
+// does not reset the clock to zero. It is tied to the game process it was
+// observed in, because a run cannot outlive the client that was playing it.
+type RunState struct {
+	StartedAt     time.Time `json:"started_at"`
+	GamePID       int       `json:"game_pid"`
+	GameStartedAt time.Time `json:"game_started_at"`
+}
+
+// Matches reports whether this run belongs to the given game process. The start
+// time is compared as well as the PID, because PIDs are recycled and a recycled
+// one would resume a stranger's clock.
+func (r *RunState) Matches(g GameState) bool {
+	if r == nil || !g.Running || r.StartedAt.IsZero() {
+		return false
+	}
+	return r.GamePID == g.PID && r.GameStartedAt.Equal(g.StartedAt)
 }
 
 // GridTransform maps a player position onto the catalog's 1-based block grid.
@@ -188,6 +211,10 @@ func (st State) clone() State {
 	if st.Grid != nil {
 		grid := *st.Grid
 		out.Grid = &grid
+	}
+	if st.Run != nil {
+		run := *st.Run
+		out.Run = &run
 	}
 	return out
 }

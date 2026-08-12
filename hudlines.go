@@ -46,9 +46,11 @@ func blockLines(v *View, cfg BlockWidgetConfig) (head, sub string, show bool) {
 		if v.ZoneName != "" {
 			parts = append(parts, v.ZoneName)
 		}
-		if v.HasDanger {
-			parts = append(parts, "danger "+formatDangerLevel(v.DangerLevel))
-		}
+		// df_dangerlevel is deliberately NOT shown. It is in the record, but the
+		// game's own client never renders it, so its scale is unknown - there is no
+		// way to tell whether 0 is safe or unmeasured, and "danger 0" on every row
+		// is a number nobody can act on. It stays in the View for whenever its
+		// meaning is established. See knowledge/player-record-and-signing.md.
 	}
 	if support := formatCountdown(v.BlockSupport); support != "" {
 		parts = append(parts, "support "+support)
@@ -56,18 +58,54 @@ func blockLines(v *View, cfg BlockWidgetConfig) (head, sub string, show bool) {
 	return head, strings.Join(parts, "  "), true
 }
 
-// xpLine is the XP rate. It renders the reason when there is no rate yet, rather
-// than an empty row: "collecting samples" tells you to wait, whereas a blank
-// tells you nothing and looks like a bug.
-func xpLine(v *View) (text, cssClass string, show bool) {
+// threatLine is what is standing on your block, from the city event feed.
+//
+// This is the row the HUD exists for as much as any other: a block with six
+// bandits on it is a different proposition from an empty one, and the game's own
+// client does not tell you until you are looking at them. urgent picks the colour
+// - an outpost attack is map-wide and gets the loud one.
+//
+// Nothing is rendered when the feed has no events for your block. That is the
+// normal case for most of the map, and "nothing here" on every block would train
+// you to stop reading the line.
+func threatLine(v *View) (text string, urgent bool, show bool) {
 	if !v.HaveData {
-		return "", "", false
+		return "", false, false
 	}
-	if !v.XPAvailable {
-		if v.XPWhy == "" {
-			return "", "", false
+	var parts []string
+	if v.OutpostAttack {
+		parts = append(parts, "OUTPOST ATTACK")
+	}
+	for _, e := range v.BlockEvents {
+		label := e.Label()
+		if len(e.Objectives) > 0 {
+			label += " (" + strings.Join(e.Objectives, ", ") + ")"
 		}
-		return "xp " + v.XPWhy, "", true
+		parts = append(parts, label)
+	}
+	// Last cycle's, which the store fills only in Onslaught. Prefixed rather than
+	// mixed in: a boss that may or may not still be standing there is a different
+	// claim from one that is.
+	for _, e := range v.BlockEventsPast {
+		parts = append(parts, "last: "+e.Label())
+	}
+	if len(parts) == 0 {
+		return "", false, false
+	}
+	return strings.Join(parts, "  "), v.OutpostAttack, true
+}
+
+// xpLine is the XP rate, and nothing else.
+//
+// When there is no rate the row disappears rather than explaining itself.
+// "collecting samples" was on screen for the first thirty seconds of every run
+// and after every window reset, which is a progress report on df-hud's internals
+// on a HUD whose whole job is to be glanceable. The reason still exists in
+// View.XPWhy, where -print-view and the tray tooltip can show it to whoever is
+// actually debugging.
+func xpLine(v *View) (text, cssClass string, show bool) {
+	if !v.HaveData || !v.XPAvailable {
+		return "", "", false
 	}
 	return "xp " + formatRate(v.XPPerHour), v.XPStability.CSSClass(), true
 }
@@ -170,10 +208,14 @@ func challengeFraction(c Challenge) float64 {
 	return 1
 }
 
-// sessionLine is the game-client clock. show is false when the game is not
-// running, since a frozen clock reads as a broken one.
+// sessionLine is the run clock: time in the inner city.
+//
+// show is false whenever there is no run - the game closed, or you are standing
+// in an outpost. A clock that keeps counting while you shop reads as a broken
+// clock, and one that counts the launcher's loading screen is worse: it is
+// confidently wrong about the only thing it claims to measure.
 func sessionLine(v *View) (string, bool) {
-	if !v.GameRunning {
+	if !v.GameRunning || !v.HasSession {
 		return "", false
 	}
 	return formatClock(v.SessionTime), true
@@ -200,6 +242,13 @@ func hudLines(v *View, cfg *Config) []string {
 				text = append(text, sub)
 			}
 			rows = append(rows, row{cfg.Widget.Block.Order, text})
+		}
+	}
+	if cfg.Widget.Block.Enabled {
+		if text, _, ok := threatLine(v); ok {
+			// Shares the block widget's order: it is information about the block
+			// you are on, and it belongs next to the block's name.
+			rows = append(rows, row{cfg.Widget.Block.Order, []string{text}})
 		}
 	}
 	if cfg.Widget.Session.Enabled {

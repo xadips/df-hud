@@ -315,6 +315,13 @@ type Store struct {
 	credsAt     time.Time
 	loggedXPSrc bool
 
+	// runStart is when the current trip into the inner city began, zero when
+	// there is no run. runSeed is a persisted run restored at startup, consumed
+	// once the game it belongs to is confirmed to be the one running.
+	runStart time.Time
+	runSeed  *RunState
+
+	bossMap     *BossMap
 	board       []Challenge
 	pinned      []Challenge
 	haveBoard   bool
@@ -374,6 +381,7 @@ func (s *Store) ApplyTick(tick Tick) bool {
 		s.prevSnap, s.havePrev = s.snapshot, true
 	}
 	s.snapshot, s.haveSnap = snap, true
+	s.updateRunLocked(snap)
 	s.missedTicks = 0
 	s.shownPenalty, s.pendingPenalty = s.pendingPenalty, 0
 	s.lastErr = ""
@@ -391,6 +399,88 @@ func (s *Store) ApplyTick(tick Tick) bool {
 		}
 	}
 	return true
+}
+
+// updateRunLocked maintains the run clock: how long you have been playing.
+//
+// It is not the game client's uptime. Launching Dead Frontier means a launcher, a
+// Launch button, a loading screen and then a Start button, so process uptime can
+// be minutes ahead of any playing, and a clock counting that is timing a loading
+// screen.
+//
+// The signal is MOVEMENT: the run starts at the first poll where the position has
+// changed. That is the one piece of evidence that cannot be faked by a game
+// sitting at its launcher - nothing on the server moves your character while you
+// are looking at a Launch button - and it matches what a player means by starting
+// a run, which is the moment they start moving.
+//
+// Two rejected alternatives, both tried:
+//
+//   - the process start time. Measurably wrong: reported live as starting the
+//     clock when the launcher appeared.
+//   - df_inoutpost alone. Also wrong, and more interestingly so: it was already
+//     "0" at the launcher, before Start was pressed. So it does not mean "your
+//     character is docked at an outpost" in the way the name suggests. It is kept
+//     below as an END condition only, where being wrong costs a clock that stops
+//     early rather than one that lies about how long you have played.
+//
+// The cost of using movement is that the clock starts on the first step rather
+// than at the Start press, and that df-hud must be watching when it happens (a
+// mid-run start is covered by the persisted run instead). Both are cheap next to
+// a clock that is confidently wrong.
+func (s *Store) updateRunLocked(snap Snapshot) {
+	moved := s.havePrev && s.prevSnap.HasPosition && snap.HasPosition &&
+		(s.prevSnap.PositionX != snap.PositionX ||
+			s.prevSnap.PositionY != snap.PositionY ||
+			s.prevSnap.PositionZ != snap.PositionZ)
+
+	switch {
+	case snap.InOutpost:
+		if !s.runStart.IsZero() {
+			log.Printf("session: run ended after %s (the record says outpost)",
+				snap.At.Sub(s.runStart).Round(time.Second))
+		}
+		s.runStart = time.Time{}
+	case s.runStart.IsZero() && moved:
+		// Timed from the observation that proves it, not from the one before it:
+		// never claim to have been playing for longer than there is evidence for.
+		s.runStart = snap.At
+		log.Printf("session: run started (moved to %d, %d)", snap.PositionX, snap.PositionY)
+	}
+
+	// Evidence for the two unconfirmed fields, gathered while the game is being
+	// played rather than guessed at from a single snapshot. Both would give an
+	// exact run boundary if their meaning were settled; neither is acted on until
+	// it is. See knowledge/player-record-and-signing.md.
+	if s.havePrev && s.prevSnap.HasExpSinceStart && snap.HasExpSinceStart {
+		prevStart := s.prevSnap.CumulativeXP - s.prevSnap.ExpSinceStart
+		nextStart := snap.CumulativeXP - snap.ExpSinceStart
+		if prevStart != nextStart {
+			log.Printf("session: df_expstart moved by %d while in_outpost=%v",
+				nextStart-prevStart, snap.InOutpost)
+		}
+	}
+	if s.havePrev && s.prevSnap.InOutpost != snap.InOutpost {
+		log.Printf("session: df_inoutpost changed to %v at position %d, %d",
+			snap.InOutpost, snap.PositionX, snap.PositionY)
+	}
+}
+
+// SetRunSeed offers a persisted run to restore, so restarting df-hud mid-run
+// keeps the clock instead of resetting it to zero. It is applied only once the
+// game watcher confirms the same process is still running.
+func (s *Store) SetRunSeed(run *RunState) {
+	s.mu.Lock()
+	s.runSeed = run
+	s.mu.Unlock()
+}
+
+// Run reports the current run's start and the game process it belongs to, for
+// persisting. A zero time means no run is in progress.
+func (s *Store) Run() (time.Time, GameState) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.runStart, s.game
 }
 
 // Stability is how much to trust the current rate. It counts both misses
@@ -448,9 +538,42 @@ func (s *Store) Challenges() ([]Challenge, bool) {
 	return s.board, s.haveBoard
 }
 
+// SetGame records the game process, and keeps the run clock honest about it: a
+// closed or relaunched game cannot be the same run.
+// SetBossMap replaces the city event map.
+func (s *Store) SetBossMap(m *BossMap) {
+	s.mu.Lock()
+	s.bossMap = m
+	s.mu.Unlock()
+}
+
+// BossMap is the whole event map, for the console window and diagnostics.
+func (s *Store) BossMap() *BossMap {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.bossMap
+}
+
 func (s *Store) SetGame(g GameState) {
 	s.mu.Lock()
+	prev := s.game
 	s.game = g
+	switch {
+	case !g.Running:
+		s.runStart = time.Time{}
+	case prev.Running && !g.SameSession(prev):
+		s.runStart = time.Time{}
+	case s.runSeed != nil:
+		// A run persisted by a previous df-hud process, restored only if it
+		// belongs to the game that is running now. Comparing the start time as
+		// well as the PID matters because PIDs are recycled.
+		if s.runSeed.Matches(g) {
+			s.runStart = s.runSeed.StartedAt
+			log.Printf("session: resuming the run started %s ago",
+				time.Since(s.runSeed.StartedAt).Round(time.Second))
+		}
+		s.runSeed = nil
+	}
 	s.mu.Unlock()
 }
 
@@ -496,9 +619,16 @@ type View struct {
 	HaveData bool
 	DataAge  time.Duration
 
-	// Session is the game-client clock.
+	// SessionTime is time in the inner city on this run, valid only when
+	// HasSession is set - zero is a real value one second after you arrive, so
+	// it cannot double as "no run".
 	GameRunning bool
+	HasSession  bool
 	SessionTime time.Duration
+	// ClientUptime is how long the game process has been up, which is no longer
+	// what the HUD shows. Kept for the tray tooltip, where "the client is up but
+	// you are not in the city" is the whole explanation for an empty HUD.
+	ClientUptime time.Duration
 
 	Level         int
 	ExpInLevel    int64
@@ -518,6 +648,19 @@ type View struct {
 	HasDanger    bool
 	DangerLevel  int
 	BlockSupport time.Duration
+
+	// BlockEvents is what is standing on your block right now: bosses, bandits,
+	// a mission, a QRF. Empty is the normal case - most blocks hold nothing.
+	BlockEvents []CityEvent
+	// BlockEventsPast is the previous cycle's events, filled only in Onslaught
+	// where the cycles overlap.
+	BlockEventsPast []CityEvent
+	// OutpostAttack is map-wide rather than about your block.
+	OutpostAttack bool
+	// BossMapAge is how stale the event feed is, so a widget can decline to
+	// claim a block is clear on the strength of an hour-old fetch.
+	BossMapAge time.Duration
+	HasBossMap bool
 
 	HP, HPMax       int
 	Cash            int64
@@ -557,10 +700,16 @@ func (s *Store) Derive(now time.Time) *View {
 	defer s.mu.RUnlock()
 
 	v := &View{
-		Now:         now,
-		GameRunning: s.game.Running,
-		SessionTime: s.game.Elapsed(now),
-		MissedTicks: s.missedTicks,
+		Now:          now,
+		GameRunning:  s.game.Running,
+		ClientUptime: s.game.Elapsed(now),
+		MissedTicks:  s.missedTicks,
+	}
+	if s.game.Running && !s.runStart.IsZero() {
+		v.HasSession = true
+		if elapsed := now.Sub(s.runStart); elapsed > 0 {
+			v.SessionTime = elapsed
+		}
 	}
 
 	if s.haveSnap {
@@ -587,6 +736,21 @@ func (s *Store) Derive(now time.Time) *View {
 		v.BoostExpIn = snap.BoostExp.Remaining(now)
 		v.BoostExpForever = snap.BoostExp.Forever
 		v.Dead = snap.Dead
+	}
+
+	if s.bossMap != nil {
+		v.HasBossMap = true
+		v.BossMapAge = s.bossMap.Age(now)
+		v.OutpostAttack = s.bossMap.OutpostAttack
+		if v.HasPosition {
+			v.BlockEvents = s.bossMap.At(v.PositionX, v.PositionY)
+			if v.PositionX == onslaughtCoord && v.PositionY == onslaughtCoord {
+				// Onslaught only. Its cycle is five minutes and the cycles overlap,
+				// so last cycle's boss is often still in front of you. Out in the
+				// city the cycle is an hour and the previous boss is gone.
+				v.BlockEventsPast = s.bossMap.AtEnded(v.PositionX, v.PositionY)
+			}
+		}
 	}
 
 	v.Pinned = s.pinned

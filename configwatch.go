@@ -29,6 +29,24 @@ import (
 // HUD down.
 const configDebounce = 250 * time.Millisecond
 
+// reloadFrom loads a config and carries the restart-only fields over from the
+// running one, reporting which of them were ignored.
+//
+// One implementation shared by the file watcher and the tray menu's "Reload
+// config", so an on-demand reload and an automatic one cannot come to mean
+// different things.
+func reloadFrom(path string, current *Config) (*Config, []string, error) {
+	next, err := loadConfig(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	frozen := next.reloadableFrom(current)
+	if len(frozen) > 0 {
+		log.Printf("config: %v need a restart to take effect; the running values are kept", frozen)
+	}
+	return next, frozen, nil
+}
+
 type configWatcher struct {
 	w    *fsnotify.Watcher
 	path string
@@ -94,14 +112,10 @@ func (cw *configWatcher) Run(ctx context.Context, current func() *Config, onRelo
 			log.Printf("config: watch error: %v", err)
 
 		case <-fire:
-			next, err := loadConfig(cw.path)
+			next, frozen, err := reloadFrom(cw.path, current())
 			if err != nil {
 				log.Printf("config: reload rejected, keeping the running config: %v", err)
 				continue
-			}
-			frozen := next.reloadableFrom(current())
-			if len(frozen) > 0 {
-				log.Printf("config: %v need a restart to take effect; the running values are kept", frozen)
 			}
 			onReload(next, frozen)
 		}

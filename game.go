@@ -317,33 +317,49 @@ func (w *GameWatcher) scanOnce() {
 	}
 }
 
-// hyprEventSocket locates Hyprland's event stream. Hyprland moved this from
-// /tmp/hypr to $XDG_RUNTIME_DIR/hypr, so both are checked - the runtime dir
-// first, since that is where current versions put it.
-func hyprEventSocket() (string, error) {
-	sig := os.Getenv("HYPRLAND_INSTANCE_SIGNATURE")
-	if sig == "" {
-		return "", errors.New("HYPRLAND_INSTANCE_SIGNATURE is unset (not running under Hyprland)")
-	}
-	candidates := []string{}
-	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
-		candidates = append(candidates, filepath.Join(runtimeDir, "hypr", sig, ".socket2.sock"))
-	}
-	candidates = append(candidates, filepath.Join("/tmp", "hypr", sig, ".socket2.sock"))
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
-	}
-	return "", fmt.Errorf("no Hyprland event socket found (looked in %s)", strings.Join(candidates, ", "))
+// hyprWindowEvents are the events that mean "a window may have appeared or
+// gone", which is when a /proc rescan is worth doing early.
+var hyprWindowEvents = map[string]bool{
+	"openwindow":  true,
+	"closewindow": true,
+	"fullscreen":  true,
 }
 
-// watchHyprWindowEvents pokes the watcher whenever a window opens or closes, so
-// the game is noticed immediately rather than on the next tick. It deliberately
-// does NOT try to identify the game by window class: /proc decides, this is
-// only a hint. Failure is logged once and then ignored - Hyprland is optional.
-func watchHyprWindowEvents(ctx context.Context, poke func()) {
-	path, err := hyprEventSocket()
+// hyprPlacementEvents are the events that can change WHERE the game's window is,
+// or whether its workspace is the one on screen. This is what makes the HUD
+// appear and disappear with the workspace at the speed of the switch rather than
+// on the next poll of a timer.
+var hyprPlacementEvents = map[string]bool{
+	"workspace":       true,
+	"workspacev2":     true,
+	"focusedmon":      true,
+	"focusedmonv2":    true,
+	"movewindow":      true,
+	"movewindowv2":    true,
+	"moveworkspace":   true,
+	"moveworkspacev2": true,
+	"activespecial":   true,
+	"monitoradded":    true,
+	"monitorremoved":  true,
+	"openwindow":      true,
+	"closewindow":     true,
+	"fullscreen":      true,
+}
+
+// watchHyprEvents streams Hyprland's event socket and hands each event NAME to
+// the callback. One connection, several subscribers: the game watcher wants
+// window lifecycle events, the visibility watcher wants workspace ones, and
+// opening two sockets to hear the same lines would be silly.
+//
+// The payload is deliberately never parsed. Every event here is a "something
+// changed, go and look" hint; the authoritative answer always comes from /proc or
+// from a fresh query. That keeps this immune to Hyprland changing an event's
+// payload format, which it has done before (hence all the v2 names above).
+//
+// Failure is logged once and then ignored: Hyprland is an optimisation here, not
+// a requirement.
+func watchHyprEvents(ctx context.Context, onEvent func(name string)) {
+	path, err := hyprSocketPath(".socket2.sock")
 	if err != nil {
 		log.Printf("game: no Hyprland event stream (%v); falling back to periodic scans", err)
 		return
@@ -351,7 +367,7 @@ func watchHyprWindowEvents(ctx context.Context, poke func()) {
 
 	backoff := time.Second
 	for ctx.Err() == nil {
-		if err := streamHyprEvents(ctx, path, poke); err != nil && ctx.Err() == nil {
+		if err := streamHyprEvents(ctx, path, onEvent); err != nil && ctx.Err() == nil {
 			log.Printf("game: Hyprland event stream ended (%v); retrying in %s", err, backoff)
 		}
 		select {
@@ -365,7 +381,7 @@ func watchHyprWindowEvents(ctx context.Context, poke func()) {
 	}
 }
 
-func streamHyprEvents(ctx context.Context, path string, poke func()) error {
+func streamHyprEvents(ctx context.Context, path string, onEvent func(name string)) error {
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "unix", path)
 	if err != nil {
@@ -379,16 +395,12 @@ func streamHyprEvents(ctx context.Context, path string, poke func()) error {
 
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
-		// Lines are EVENT>>payload. Only the window lifecycle matters, and only
-		// as a trigger, so the payload is never parsed.
+		// Lines are EVENT>>payload.
 		name, _, ok := strings.Cut(scanner.Text(), ">>")
 		if !ok {
 			continue
 		}
-		switch name {
-		case "openwindow", "closewindow", "fullscreen":
-			poke()
-		}
+		onEvent(name)
 	}
 	if err := scanner.Err(); err != nil {
 		return err

@@ -285,10 +285,16 @@ func TestStoreApplyTickAndDerive(t *testing.T) {
 	if v.DataAge != 3*time.Second {
 		t.Errorf("DataAge = %s, want 3s", v.DataAge)
 	}
-	// 42m at the tick, plus the 3s we advanced to: the clock runs off the
-	// process start time, not off when data last arrived.
-	if v.SessionTime != 42*time.Minute+3*time.Second {
-		t.Errorf("SessionTime = %s, want 42m3s from the process start time", v.SessionTime)
+	// 42m at the tick, plus the 3s we advanced to: the client's uptime runs off
+	// the process start time, not off when data last arrived.
+	if v.ClientUptime != 42*time.Minute+3*time.Second {
+		t.Errorf("ClientUptime = %s, want 42m3s from the process start time", v.ClientUptime)
+	}
+	// The fixture is a record taken in an outpost, so there is no run to time -
+	// which is the whole point of the session clock no longer being the client's
+	// uptime.
+	if v.HasSession {
+		t.Errorf("HasSession = true in an outpost, SessionTime = %s", v.SessionTime)
 	}
 	if v.Level != 415 || v.CumulativeXP != 10_000_000 {
 		t.Errorf("level/XP = %d/%d", v.Level, v.CumulativeXP)

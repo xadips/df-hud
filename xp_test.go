@@ -272,23 +272,17 @@ func TestXPLine(t *testing.T) {
 		t.Errorf("class = %q, want shaky", class)
 	}
 
-	// No rate yet: say what it is waiting for. A blank row looks like a bug.
-	v = &View{HaveData: true, XPWhy: "collecting samples"}
-	text, class, show = xpLine(v)
-	if !show || text != "xp collecting samples" {
-		t.Errorf("xpLine text = %q", text)
-	}
-	if class != "" {
-		t.Errorf("a waiting state should not be coloured, got %q", class)
+	// No rate yet: no row. The reason used to be rendered here, which put
+	// "collecting samples" on screen for the first thirty seconds of every run and
+	// after every reset - a progress report on df-hud's internals, on a HUD whose
+	// job is to be glanceable. It stays in View.XPWhy for -print-view and the tray.
+	if _, _, show := xpLine(&View{HaveData: true, XPWhy: "collecting samples"}); show {
+		t.Error("a rate that is not available yet must not take a row")
 	}
 
 	// No data at all: no row.
 	if _, _, show := xpLine(&View{}); show {
 		t.Error("without data the xp row must be hidden")
-	}
-	// Unavailable with no reason: no row rather than a bare "xp".
-	if _, _, show := xpLine(&View{HaveData: true}); show {
-		t.Error("an unexplained unavailable rate must not render")
 	}
 }
 

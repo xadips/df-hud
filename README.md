@@ -13,20 +13,63 @@ always-on-top over a fullscreen game, no global hotkeys on Wayland, and no tray.
 
 Working today:
 
-- **Block Info** — where you are, which outpost, which region, danger level,
-  block-support countdown
-- **Session clock** — time since the game client launched, read from the game
-  process's own start time, so it stays correct if df-hud starts late or is
-  restarted mid-run
-- **XP/hr** — averaged over a window, with the colour carrying whether recent
-  polls actually landed
+- **Block Info** — where you are, which outpost, which region, block-support
+  countdown, and **what is standing on your block**: bosses, bandit packs,
+  missions, QRF events and outpost attacks
+- **Run clock** — time since you started playing, which is not the same as the
+  client's uptime (see below)
+- **XP/hr** — averaged over five minutes, with the colour carrying whether recent
+  polls actually landed, and a tray menu item to start the average again after a
+  challenge reward lands a lump of XP in it
 - **Challenge tracker** — personal and clan, with progress, completion and
   deadlines. Pin by name, or let it show whatever you are closest to finishing
+- **It gets out of the way.** The overlay is hidden while the game is not
+  running, and shown only on the workspace the game is actually on
+- **A tray icon** with hide, reset and quit, so a background process with no
+  window is still something you can see and stop
 - A headless core with `-once`, `-print-view`, `-print-hud`, `-dump-fields`,
   `-dump-challenges`, `-check-config` and `-check-game` for looking at real data
   with no GUI
 
-Planned: a console window for pin toggles, and a boss map for Block Info.
+Planned: a console window for pin toggles.
+
+## When the overlay is on screen
+
+A layer surface belongs to a *monitor*, and the protocol has no concept of a
+workspace, so a naive overlay is drawn over every workspace of that monitor
+forever. Two rules fix that, and both **fail open** — if the compositor cannot be
+asked, or the game's window cannot be identified, the HUD is shown. A HUD that is
+wrongly visible is an annoyance you can see; one that is wrongly invisible is
+indistinguishable from df-hud being broken.
+
+- `hud.only_when_game_running` — no game, no overlay.
+- `hud.follow_game_workspace` — df-hud asks Hyprland which workspace the game's
+  window is on and hides the surface while you are looking at another one.
+  `monitor = "auto"` follows the game's monitor the same way.
+
+`-check-game` reports both halves: the process, and whether the compositor's view
+of its window could be matched. The second one has its own silent failure, since
+an unmatched window means the workspace rule quietly does nothing.
+
+## The run clock is not the client's uptime
+
+Launching Dead Frontier means a launcher, then a Launch button, then a loading
+screen, then a Start button. Process uptime can therefore be minutes ahead of any
+playing, and a clock counting that is timing a loading screen — which is exactly
+what the first version did, and what it was reported for.
+
+The signal is **movement**: the run starts at the first poll where the position
+changed. Nothing on the server moves your character while you are looking at a
+launcher, so it cannot fire early. Two things were tried and rejected:
+
+- the process start time, wrong as described above
+- `df_inoutpost`, which was already `0` at the launcher, before Start was
+  pressed — so it does not mean "your character is docked at an outpost" the way
+  the name suggests. It is kept as an *end* condition only, where being wrong
+  stops a clock early rather than inventing playing time.
+
+The clock is persisted with the game's process identity, so restarting df-hud
+mid-run resumes it instead of showing zero for a run that is an hour old.
 
 ## How it gets your session
 
@@ -70,10 +113,11 @@ as the rest — 0600, redacted, never logged.
 
 The game server is not ours, and bursty request patterns get accounts temp-banned.
 
-- **Two schedulers, one budget.** Nothing outside them makes a request, so the
+- **Three schedulers, one budget.** Nothing outside them makes a request, so the
   traffic budget is a single number rather than an emergent property.
-  `-check-config` prints it: about **480 requests/hour while playing, 60 idle**
-  at the defaults (the player record every 10s, the challenge board every 30s).
+  `-check-config` prints it: about **540 requests/hour while playing, 60 idle**
+  at the defaults (the player record every 10s, the challenge board every 30s,
+  the event map every 60s).
 - **Two requests are never sent less than 5s apart**, whatever wakes them.
   Credentials arriving, the game launching and compositor events can all fire at
   once; without that floor an event storm becomes a request burst. The floor is
@@ -95,6 +139,36 @@ The game server is not ours, and bursty request patterns get accounts temp-banne
   look like reads but mutate the account. There is a compile-time allowlist, plus
   a test that walks the package AST and fails if any of those names appears in a
   string literal anywhere.
+
+## The event map, and somebody else's server
+
+"What is on my block" is the one thing the game's own API will not tell you. The
+player record knows where *you* are and the public stats feed knows the map's
+geometry, but neither knows what has spawned on it. [DFProfiler](https://www.dfprofiler.com)
+publishes that, so `[bossmap]` reads it from there — and since it is not our
+server, the budget is set by what their own page already costs them:
+
+- their boss map page re-fetches the same endpoint **every 30 seconds per open
+  tab**. df-hud defaults to 60s and **refuses to be configured below 30s**, so it
+  can never cost the operator more than one of their own tabs.
+- nothing at all while the game is closed, same rule as the game server.
+- the User-Agent is df-hud's own, naming the tool, so it can be identified and
+  complained about.
+- the endpoint 404s without `X-Requested-With: XMLHttpRequest`, so that is sent.
+  That is the convention their API is written against, not a claim to be a
+  browser. A forged `Referer` *would* be such a claim, so none is sent — and it
+  turns out not to be needed.
+
+Turning `bossmap.enabled` off costs that one line of the HUD and nothing else.
+
+Two details worth knowing, both taken from their own `bossmap.js` rather than
+guessed: a mission also carries a `special_enemy_type`, so classifying on that
+first would file every mission as a plain boss spawn; and **Onslaught** events sit
+on block `3000,3000`, which is exactly where the player record puts you while you
+are in Onslaught. So they are indexed like any other block and surface only there.
+Onslaught cycles shift every five minutes and overlap in practice, so last
+cycle's boss is shown too, marked `last:` — out in the city, where cycles are
+hourly, it would send you somewhere for nothing.
 
 ## Requirements
 
@@ -122,8 +196,14 @@ usable, so no file is needed to start. See
 checked against the built-in defaults by a test so it cannot drift.
 
 Unknown keys are a **startup error** — a typo would otherwise look like a bug in
-df-hud rather than a bug in your config. Editing the file while running reloads
-it; three keys need a restart and say so.
+df-hud rather than a bug in your config.
+
+**Editing the file while running reloads it, including the HUD's own appearance:**
+font, colour, size, margins, anchors, which widgets exist and in what order all
+change without a restart, as do every interval and both visibility rules. Only
+three keys need a restart (`bridge.listen`, `bridge.enabled`, `paths.data_dir`),
+and they say so. An edit that fails validation keeps the running config rather
+than taking the HUD down mid-game.
 
 `hud.layer` must stay `"overlay"`. The `top` layer sits *below* fullscreen
 windows, so a `top` HUD vanishes exactly when you play.

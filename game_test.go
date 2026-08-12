@@ -400,14 +400,14 @@ func TestGameWatcherPokeCoalesces(t *testing.T) {
 	}
 }
 
-func TestHyprEventSocketNeedsTheSignature(t *testing.T) {
+func TestHyprSocketPathNeedsTheSignature(t *testing.T) {
 	t.Setenv("HYPRLAND_INSTANCE_SIGNATURE", "")
-	if _, err := hyprEventSocket(); err == nil {
+	if _, err := hyprSocketPath(".socket2.sock"); err == nil {
 		t.Error("without HYPRLAND_INSTANCE_SIGNATURE this must fail, not guess a path")
 	}
 	t.Setenv("HYPRLAND_INSTANCE_SIGNATURE", "nonexistent-signature")
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	if _, err := hyprEventSocket(); err == nil {
+	if _, err := hyprSocketPath(".socket2.sock"); err == nil {
 		t.Error("a signature with no socket on disk must fail")
 	}
 }

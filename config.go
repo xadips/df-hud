@@ -48,9 +48,15 @@ const (
 	// that the board is not changing fast enough to be worth asking.
 	floorChallengeInterval = 30 * time.Second
 	floorCatalogInterval   = time.Hour
-	floorRequestTimeout    = 2 * time.Second
-	ceilRequestTimeout     = 60 * time.Second
-	ceilJitter             = 0.5
+	// The boss map is somebody else's site, so the floor is set by what that site
+	// already does to itself: dfprofiler's own bossmap page re-fetches this
+	// endpoint every 30 seconds per open tab (bossmap.js). Matching that is the
+	// hard limit - df-hud must never cost the operator more than their own page
+	// does - and the default sits at twice it.
+	floorBossMapInterval = 30 * time.Second
+	floorRequestTimeout  = 2 * time.Second
+	ceilRequestTimeout   = 60 * time.Second
+	ceilJitter           = 0.5
 )
 
 // duration lets intervals be written the way humans write them ("10s", "24h").
@@ -77,6 +83,8 @@ type Config struct {
 	Game    GameConfig    `toml:"game"`
 	Paths   PathsConfig   `toml:"paths"`
 	HUD     HUDConfig     `toml:"hud"`
+	BossMap BossMapConfig `toml:"bossmap"`
+	Tray    TrayConfig    `toml:"tray"`
 	Widget  WidgetConfig  `toml:"widget"`
 	Console ConsoleConfig `toml:"console"`
 
@@ -143,11 +151,30 @@ type GameConfig struct {
 	// not searched.
 	Process string `toml:"process"`
 
+	// WindowClass identifies the game's WINDOW to the compositor, which is a
+	// separate question from identifying its process: it decides where the HUD
+	// is drawn (hud.follow_game_workspace and monitor = "auto"), never whether
+	// df-hud polls.
+	//
+	// Empty means "derive it from Process", which is right when Wine reports the
+	// executable name as the class. It exists as a key because the alternative
+	// to a one-line config fix would be a rebuild, and the value can only be
+	// discovered from a running game (df-hud -check-game prints it).
+	WindowClass string `toml:"window_class"`
+
 	// ScanInterval is how often /proc is scanned. This is a local read costing
 	// a millisecond, not a network request, so it has no politeness floor -
 	// only a sanity one. Hyprland window events trigger an immediate rescan on
 	// top of this, so the interval is a backstop rather than the main path.
 	ScanInterval duration `toml:"scan_interval"`
+}
+
+// WindowMatch is the class to look for, falling back to the process name.
+func (g GameConfig) WindowMatch() string {
+	if g.WindowClass != "" {
+		return g.WindowClass
+	}
+	return g.Process
 }
 
 type PathsConfig struct {
@@ -158,13 +185,24 @@ type PathsConfig struct {
 type HUDConfig struct {
 	Enabled bool `toml:"enabled"`
 
+	// OnlyWhenGameRunning hides the HUD entirely while the game is not running.
+	// Named to match poll.only_when_game_running, and separate from it on
+	// purpose: one governs traffic to somebody else's server, this one governs
+	// pixels on your own screen.
+	OnlyWhenGameRunning bool `toml:"only_when_game_running"`
+
+	// FollowGameWorkspace shows the HUD only while the game's own workspace is
+	// the one being displayed. The layer-shell protocol has no per-workspace
+	// concept, so this is emulated from the compositor's window list - see
+	// visibility.go, including why it fails open.
+	FollowGameWorkspace bool `toml:"follow_game_workspace"`
+
 	// Monitor is a connector name ("DP-1") or "auto".
 	//
-	// "auto" means the compositor decides, which in practice puts the HUD on
-	// the focused monitor. Following the GAME's monitor would be better and is
-	// what this key will eventually mean, but it needs the game window's output
-	// from Hyprland's command socket plus a way to move a live layer surface.
-	// Documented as what it does, not as what it should do.
+	// "auto" follows the GAME: the surface is pinned to whichever monitor the
+	// game's window is on, re-checked each time the HUD is shown. If the window
+	// cannot be identified, the compositor chooses, which in practice means the
+	// focused monitor.
 	Monitor string `toml:"monitor"`
 
 	// Layer must be "overlay" for the HUD to be visible over a fullscreen
@@ -193,6 +231,27 @@ type HUDConfig struct {
 	CSS string `toml:"css"`
 }
 
+// BossMapConfig is the third-party event feed: what has spawned on your block.
+//
+// It is the only thing df-hud fetches from a site that is not the game's own, so
+// it gets its own switch and its own interval rather than being folded into the
+// poll section. Turning it off costs the threat line and nothing else.
+type BossMapConfig struct {
+	Enabled  bool     `toml:"enabled"`
+	URL      string   `toml:"url"`
+	Interval duration `toml:"interval"`
+}
+
+// TrayConfig is the StatusNotifierItem in the system tray.
+//
+// It exists because hiding the HUD when the game is closed leaves df-hud with no
+// presence at all: a running background process with nothing on screen, no window
+// to close and no way to tell whether it is even alive. The tray icon is the
+// answer to "is it running, is it getting data, and how do I quit it".
+type TrayConfig struct {
+	Enabled bool `toml:"enabled"`
+}
+
 type WidgetConfig struct {
 	Block      BlockWidgetConfig      `toml:"block"`
 	Session    SessionWidgetConfig    `toml:"session"`
@@ -211,6 +270,8 @@ type BlockWidgetConfig struct {
 	ShowCoords bool `toml:"show_coords"`
 }
 
+// SessionWidgetConfig is the run clock: time since you entered the inner city.
+// See Store.updateRunLocked for why it is not the client's uptime.
 type SessionWidgetConfig struct {
 	Enabled bool `toml:"enabled"`
 	Order   int  `toml:"order"`
@@ -316,22 +377,39 @@ func defaultConfig() *Config {
 		},
 		Paths: PathsConfig{DataDir: defaultDataDir()},
 		HUD: HUDConfig{
-			Enabled:      true,
-			Monitor:      "auto",
-			Layer:        "overlay",
-			Anchors:      []string{"top", "left"},
-			MarginTop:    60, // clears waybar's 36px exclusive zone with room to spare
-			MarginLeft:   40,
-			ClickThrough: true,
-			FontFamily:   "Courier New, monospace",
-			FontSize:     12,
-			TextColor:    "#e6cc4d", // the game's own HUD yellow
-			Opacity:      1.0,
+			Enabled:             true,
+			OnlyWhenGameRunning: true,
+			FollowGameWorkspace: true,
+			Monitor:             "auto",
+			Layer:               "overlay",
+			Anchors:             []string{"top", "left"},
+			MarginTop:           60, // clears waybar's 36px exclusive zone with room to spare
+			MarginLeft:          40,
+			ClickThrough:        true,
+			FontFamily:          "Courier New, monospace",
+			FontSize:            12,
+			TextColor:           "#e6cc4d", // the game's own HUD yellow
+			Opacity:             1.0,
 		},
+		BossMap: BossMapConfig{
+			Enabled: true,
+			URL:     defaultBossMapURL,
+			// One minute: half of what dfprofiler's own page costs them per open
+			// tab, and enough to notice a spawn within a minute of the hour
+			// turning over, which is when they appear.
+			Interval: duration{time.Minute},
+		},
+		Tray: TrayConfig{Enabled: true},
 		Widget: WidgetConfig{
-			Block:      BlockWidgetConfig{Enabled: true, Order: 10},
-			Session:    SessionWidgetConfig{Enabled: true, Order: 20},
-			XP:         XPWidgetConfig{Enabled: true, Order: 30, Window: duration{30 * time.Second}, MinSamples: 3},
+			Block:   BlockWidgetConfig{Enabled: true, Order: 10},
+			Session: SessionWidgetConfig{Enabled: true, Order: 20},
+			// Five minutes, not thirty seconds. XP arrives in lumps - a kill, a
+			// challenge - so a window short enough to contain no lump reads as a
+			// rate of zero, and a HUD that flips between 20M/hr and nothing is
+			// worse than useless: it is actively misleading about how the run is
+			// going. Five minutes is long enough to smooth the gaps between kills
+			// and short enough to still respond when you change what you are doing.
+			XP:         XPWidgetConfig{Enabled: true, Order: 30, Window: duration{5 * time.Minute}, MinSamples: 3},
 			Challenges: ChallengesWidgetConfig{Enabled: true, Order: 40, ShowClan: true, MaxShown: 3},
 		},
 		Console: ConsoleConfig{Width: 720, Height: 560},
@@ -477,12 +555,22 @@ func (c *Config) validate() error {
 		errs = append(errs, fmt.Errorf("game.process %q must be a bare executable name, not a path",
 			c.Game.Process))
 	}
+	c.Game.WindowClass = strings.TrimSpace(c.Game.WindowClass)
 	errs = appendRange(errs, "game.scan_interval", c.Game.ScanInterval.Duration, 250*time.Millisecond, 5*time.Minute)
 
 	// --- paths ---
 	c.Paths.DataDir = expandHome(strings.TrimSpace(c.Paths.DataDir))
 	if c.Paths.DataDir == "" {
 		errs = append(errs, errors.New("paths.data_dir is empty"))
+	}
+
+	// --- bossmap ---
+	if c.BossMap.Enabled {
+		c.BossMap.URL = strings.TrimSpace(c.BossMap.URL)
+		if u, err := url.Parse(c.BossMap.URL); err != nil || u.Scheme != "https" || u.Host == "" {
+			errs = append(errs, fmt.Errorf("bossmap.url %q must be an absolute https URL", c.BossMap.URL))
+		}
+		errs = appendFloor(errs, "bossmap.interval", c.BossMap.Interval.Duration, floorBossMapInterval)
 	}
 
 	// --- hud ---
@@ -714,6 +802,12 @@ func (c *Config) RequestsPerHour(activeFraction float64) float64 {
 			(1-activeFraction)*perHour(c.Poll.EffectiveChallengeInterval(false))
 	}
 	total += perHour(c.Poll.CatalogInterval.Duration)
+	if c.BossMap.Enabled {
+		// Counted in the same number even though it is a different server: the
+		// point of the budget is to be able to answer "how much traffic does this
+		// thing make", and an honest answer includes everybody's.
+		total += activeFraction * perHour(c.BossMap.Interval.Duration)
+	}
 	return total
 }
 

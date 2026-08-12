@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -99,6 +101,9 @@ func main() {
 		// The HUD is the point of the program, so it is on unless the config
 		// disables it or the flag does.
 		hud: cfg.HUD.Enabled && !*headless,
+		// stop cancels the context, which is the same path SIGINT takes, so
+		// quitting from the tray shuts down exactly like Ctrl-C.
+		quit: stop,
 	})
 }
 
@@ -120,6 +125,7 @@ func reportGameDetection(cfg *Config) {
 		fmt.Printf("FOUND: pid %d, launched %s (%s ago)\n",
 			state.PID, state.StartedAt.Format(time.DateTime),
 			state.Elapsed(time.Now()).Round(time.Second))
+		reportWindowDetection(cfg, state)
 		return
 	}
 
@@ -139,6 +145,53 @@ func reportGameDetection(cfg *Config) {
 		fmt.Println("\nNote: poll.only_when_game_running is on, so df-hud will not poll at all " +
 			"until the game is detected.")
 	}
+}
+
+// reportWindowDetection answers the other half of "does df-hud see my game?":
+// whether the COMPOSITOR's view of it can be found.
+//
+// It is a separate question from the process, and it has its own silent failure.
+// If the window cannot be matched, hud.follow_game_workspace quietly does
+// nothing and monitor = "auto" cannot follow the game - both of which look like
+// the feature being broken rather than like one config line. The window classes
+// are printed on a miss because that is the whole answer.
+func reportWindowDetection(cfg *Config, game GameState) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	client := hyprClient{}
+	place, err := client.GameWindow(ctx, game.PID, cfg.Game.WindowMatch())
+	if err != nil {
+		fmt.Printf("\nThe compositor could not be asked where the window is (%v).\n"+
+			"The HUD will still work; it just shows on every workspace.\n", err)
+		return
+	}
+	if place.Known {
+		shown := "no - the HUD will be hidden while it stays there"
+		if place.OnActiveWorkspace {
+			shown = "yes"
+		}
+		fmt.Printf("\nWINDOW: class %q on monitor %s, workspace %s (matched by %s)\n",
+			place.Class, place.Monitor, place.WorkspaceName, place.MatchedBy)
+		fmt.Printf("        that workspace is being shown: %s\n", shown)
+		return
+	}
+
+	fmt.Printf("\nWINDOW NOT MATCHED: no window with pid %d, and none whose class looks like %q.\n",
+		game.PID, cfg.Game.WindowMatch())
+	if windows, err := client.Windows(ctx); err == nil {
+		fmt.Println("\nWindows the compositor knows about:")
+		for _, w := range windows {
+			title := w.Title
+			if len(title) > 40 {
+				title = title[:40] + "..."
+			}
+			fmt.Printf("  class %-32s pid %-8d %s\n", w.Class, w.PID, title)
+		}
+		fmt.Println("\nIf one of those is the game, set game.window_class to its class.")
+	}
+	fmt.Println("\nUntil then the HUD shows on every workspace, and monitor = \"auto\" " +
+		"leaves the choice to the compositor.")
 }
 
 // similarProcesses looks for the substring anywhere in a command line - the
@@ -193,13 +246,19 @@ func describeConfigSource(cfg *Config, path string) string {
 // flow is readable in one place: bridge -> credentials -> poller -> store, with
 // the game watcher gating the poller and the catalog feeding derived values.
 type app struct {
-	cfg     *Config
+	// cfg is swapped wholesale on a config reload, from the watcher's goroutine,
+	// while every poller reads it once per iteration from its own. An atomic
+	// pointer is what makes that safe: the previous plain field was a data race
+	// that only stayed quiet because nothing had reloaded a config under load.
+	cfg     atomic.Pointer[Config]
 	cfgPath string
 
 	creds      *credStore
 	catalog    *Catalog
 	client     *Client
 	game       *GameWatcher
+	visibility *visibilityWatcher
+	bosses     *BossPoller
 	poller     *Poller
 	challenges *ChallengePoller
 	gate       *rateGate
@@ -209,10 +268,18 @@ type app struct {
 	bridge    *bridgeServer
 	bridgeSrv *http.Server
 	watcher   *configWatcher
+
+	// lastRunStart is only touched from the poller's tick callback, which is a
+	// single goroutine, so it needs no lock.
+	lastRunStart time.Time
+
+	reloadMu       sync.Mutex
+	onConfigReload func(*Config)
 }
 
 func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (*app, error) {
-	a := &app{cfg: cfg, cfgPath: cfgPath}
+	a := &app{cfgPath: cfgPath}
+	a.cfg.Store(cfg)
 
 	a.creds = newCredStore(cfg.CredentialsPath())
 	if err := a.creds.Load(); err != nil {
@@ -251,6 +318,17 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 		UserAgent: cfg.DF.UserAgent,
 	}
 	a.game = newGameWatcher(cfg.Game.Process, cfg.Game.ScanInterval.Duration)
+	a.visibility = newVisibilityWatcher(a.game, a.Config, hyprClient{})
+	// A run persisted by a previous df-hud process. Restored only if the game it
+	// belongs to is still the one running, so restarting df-hud mid-run keeps the
+	// clock instead of resetting it.
+	if run := a.state.Get().Run; run != nil {
+		a.store.SetRunSeed(run)
+		// And seeded here too, or a resumed run looks like a brand new one to
+		// recordXPSample and it throws away the rate window that was just
+		// restored from disk - undoing the one thing that persisting it was for.
+		a.lastRunStart = run.StartedAt
+	}
 	// One gate for every scheduler, so the minimum spacing is a property of
 	// df-hud's traffic rather than of any one poller's.
 	a.gate = newRateGate(minRequestGap)
@@ -263,6 +341,12 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 			}
 			return 0, false
 		})
+	// The event feed is a different server with a different budget, so it gets its
+	// own client and its own scheduler rather than sharing the game's rate gate -
+	// coupling them would let one starve the other for no benefit.
+	a.bosses = newBossPoller(&http.Client{Timeout: cfg.DF.Timeout.Duration}, a.game, a.Config)
+	a.bosses.SetOnMap(func(m *BossMap) { a.store.SetBossMap(m) })
+
 	a.challenges.SetOnBoard(func(board []Challenge) {
 		a.store.SetChallenges(board, time.Now())
 		a.store.SetChallengeStatus("")
@@ -270,16 +354,31 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 	})
 
 	// The game starting or stopping changes the cadence, so tell the poller
-	// rather than making it discover the change on its next tick.
+	// rather than making it discover the change on its next tick. It also decides
+	// whether the HUD is on screen at all.
 	a.game.SetOnChange(func(g GameState) {
 		a.store.SetGame(g)
 		a.poller.Wake()
 		a.challenges.Wake()
+		a.bosses.Wake()
+		a.visibility.Poke()
 	})
+	// levelSeen fires the one event the challenge board is waiting for. Only on
+	// the transition, never on every tick: waking that scheduler when it is not
+	// paused makes it poll again as soon as the shared gate allows, which would
+	// quietly pull the board's cadence down to the minimum request gap.
+	levelSeen := false
 	a.poller.SetOnTick(func(tick Tick) {
 		a.store.ApplyTick(tick)
 		a.store.SetPollerStatus(a.poller.Status())
 		a.recordXPSample()
+		a.persistRun()
+		if !levelSeen {
+			if snap, ok := a.store.Snapshot(); ok && snap.Level > 0 {
+				levelSeen = true
+				a.challenges.Wake()
+			}
+		}
 	})
 
 	if cfg.Bridge.Enabled && withBridge {
@@ -318,9 +417,17 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 	return a, nil
 }
 
-// Config returns the live config, which the poller reads per iteration so a hot
-// reload takes effect without a restart.
-func (a *app) Config() *Config { return a.cfg }
+// Config returns the live config, which every component reads per iteration so a
+// hot reload takes effect without a restart.
+func (a *app) Config() *Config { return a.cfg.Load() }
+
+// SetOnConfigReload registers the HUD's re-styling hook. Guarded because it is
+// set from the GTK thread while the config watcher may already be running.
+func (a *app) SetOnConfigReload(fn func(*Config)) {
+	a.reloadMu.Lock()
+	a.onConfigReload = fn
+	a.reloadMu.Unlock()
+}
 
 func (a *app) Close() {
 	if a.bridgeSrv != nil {
@@ -360,6 +467,7 @@ type runOptions struct {
 	printView bool
 	printHUD  bool
 	hud       bool
+	quit      func()
 }
 
 // dumpChallenges fetches the challenge board once and prints it. This is a
@@ -373,13 +481,13 @@ func (a *app) dumpChallenges(ctx context.Context, raw bool) {
 	// The cookie travels with the request for endpoints that check the site
 	// session rather than only the credential triple.
 	a.client.Cookie = cr.Cookie
-	salt := a.cfg.SigningSalt(a.creds)
+	salt := a.Config().SigningSalt(a.creds)
 	if salt == "" {
 		log.Fatal("no signing salt: the bridge has not reported one, and df.skeygen is empty. " +
 			"Load the Outpost home page with the bridge userscript or the the bridge userscript installed.")
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, a.cfg.DF.Timeout.Duration)
+	reqCtx, cancel := context.WithTimeout(ctx, a.Config().DF.Timeout.Duration)
 	defer cancel()
 	vars, err := a.client.LoadChallenge(reqCtx, cr, salt)
 	if err != nil {
@@ -440,9 +548,20 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 	// store, which matters because GTK then takes the main thread and never
 	// gives it back.
 	go a.game.Run(ctx)
-	go watchHyprWindowEvents(ctx, a.game.Poke)
+	go a.visibility.Run(ctx)
+	// One event stream, two subscribers. Neither parses the payload: an event is
+	// only ever a hint to go and re-read the authoritative source.
+	go watchHyprEvents(ctx, func(name string) {
+		if hyprWindowEvents[name] {
+			a.game.Poke()
+		}
+		if hyprPlacementEvents[name] {
+			a.visibility.Poke()
+		}
+	})
 	go a.poller.Run(ctx)
 	go a.challenges.Run(ctx)
+	go a.bosses.Run(ctx)
 	go a.reportChallengeStatus(ctx)
 	if a.watcher != nil {
 		go a.watcher.Run(ctx, a.Config, a.applyReload)
@@ -450,9 +569,22 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 	if opts.printView || opts.printHUD {
 		go a.printLoop(ctx, opts)
 	}
+	if a.Config().Tray.Enabled {
+		// The tray is what gives df-hud a presence when the HUD is hidden, so it
+		// runs whether or not there is a HUD at all - including under -headless.
+		go runTray(ctx, trayActions{
+			SetOverlayEnabled: a.visibility.SetEnabled,
+			OverlayEnabled:    a.visibility.Enabled,
+			ResetXPRate:       a.resetXPRate,
+			ReloadConfig:      a.reloadConfig,
+			Quit:              opts.quit,
+			View:              func() *View { return a.store.Derive(time.Now()) },
+			Visibility:        a.visibility.State,
+		})
+	}
 
 	log.Printf("polling budget: about %.0f requests/hour while playing, %.0f idle",
-		a.cfg.RequestsPerHour(1), a.cfg.RequestsPerHour(0))
+		a.Config().RequestsPerHour(1), a.Config().RequestsPerHour(0))
 
 	if opts.hud {
 		// Blocks until the window closes or the context ends. The HUD runs its
@@ -488,13 +620,13 @@ func (a *app) applyPins(board []Challenge) {
 	st := a.state.Get()
 	pins := st.Pins
 	if len(pins) == 0 && !st.PinsSeeded {
-		pins = a.cfg.Widget.Challenges.Pinned
+		pins = a.Config().Widget.Challenges.Pinned
 		a.state.Update(func(s *State) {
 			s.Pins = append([]string(nil), pins...)
 			s.PinsSeeded = true
 		})
 	}
-	a.store.SetPinned(pickPinned(board, pins, a.cfg.Widget.Challenges))
+	a.store.SetPinned(pickPinned(board, pins, a.Config().Widget.Challenges))
 }
 
 // reportChallengeStatus keeps the widget's explanation current: a pause reason is
@@ -508,7 +640,8 @@ func (a *app) reportChallengeStatus(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if _, ok := a.store.Challenges(); ok {
-				continue // a board is showing; nothing to explain
+				a.store.SetChallengeStatus("") // a board is showing; nothing to explain
+				continue
 			}
 			if reason := a.challenges.pauseReason(); reason != "" {
 				a.store.SetChallengeStatus(reason)
@@ -517,7 +650,13 @@ func (a *app) reportChallengeStatus(ctx context.Context) {
 			if failures, _, lastErr := a.challenges.Status(); failures > 0 {
 				_ = lastErr
 				a.store.SetChallengeStatus("board unavailable (retrying)")
+				continue
 			}
+			// Nothing is wrong and no board has arrived yet: the first fetch is in
+			// flight. Clearing matters as much as setting - without it the last
+			// pause reason outlives the pause, so the HUD went on saying "the game
+			// is not running" for a whole session with the game plainly running.
+			a.store.SetChallengeStatus("")
 		}
 	}
 }
@@ -551,9 +690,59 @@ func (a *app) printLoop(ctx context.Context, opts runOptions) {
 // applyReload swaps in a reloaded config. Only the fields the running components
 // read per iteration change; the rest were already frozen by reloadableFrom.
 func (a *app) applyReload(next *Config, _ []string) {
-	a.cfg = next
+	a.cfg.Store(next)
 	a.poller.Wake()
+	// The visibility rules are config, so a reload can change whether the HUD
+	// should be on screen right now.
+	a.visibility.Poke()
+	a.bosses.Wake()
+	// And the HUD's appearance is config too: without this, font size, colours,
+	// margins and which widgets exist would silently need a restart while
+	// everything else reloaded, which is the sort of half-working reload that is
+	// worse than none.
+	a.reloadMu.Lock()
+	fn := a.onConfigReload
+	a.reloadMu.Unlock()
+	if fn != nil {
+		fn(next)
+	}
 	log.Print("config: reloaded")
+}
+
+// reloadConfig re-reads the file on demand, for the tray menu. The watcher
+// already reloads on every save; this is for when a save produced no event, which
+// happens on some network and bind-mounted home directories.
+func (a *app) reloadConfig() {
+	next, frozen, err := reloadFrom(a.cfgPath, a.Config())
+	if err != nil {
+		log.Printf("config: reload rejected, keeping the running config: %v", err)
+		return
+	}
+	a.applyReload(next, frozen)
+}
+
+// resetXPRate throws the rate window away so the average starts again from the
+// next poll.
+//
+// This is the tray menu's answer to a challenge reward: a lump of XP that no
+// amount of killing produced, which then inflates the average for as long as the
+// window is wide. df-hud cannot tell where a lump came from - the record reports
+// a total, not a source - so the judgement has to be the player's.
+func (a *app) resetXPRate() {
+	a.state.ResetXPWindow("reset from the tray menu")
+}
+
+// persistRun stores the run clock's start, so a df-hud restart mid-run resumes
+// the clock instead of showing zero for a run that is an hour old.
+func (a *app) persistRun() {
+	start, game := a.store.Run()
+	a.state.Update(func(st *State) {
+		if start.IsZero() || !game.Running {
+			st.Run = nil
+			return
+		}
+		st.Run = &RunState{StartedAt: start, GamePID: game.PID, GameStartedAt: game.StartedAt}
+	})
 }
 
 // recordXPSample feeds the rate window. It lives here rather than in the store
@@ -564,7 +753,19 @@ func (a *app) recordXPSample() {
 	if !ok || snap.XPSource == xpSourceNone || snap.CumulativeXP <= 0 {
 		return
 	}
-	window := a.cfg.Widget.XP.EffectiveWindow(a.cfg.Poll.ActiveInterval.Duration)
+	cfg := a.Config()
+	window := cfg.Widget.XP.EffectiveWindow(cfg.Poll.ActiveInterval.Duration)
+
+	// A new run starts a new average. The samples from before it were collected
+	// while the launcher was on screen earning nothing, and averaging across that
+	// makes the first minutes of a run read as a fraction of the real rate.
+	// Compared against the last value seen rather than handled inside the store,
+	// so the store stays a data structure and this stays the one place that knows
+	// about the persistent window.
+	if runStart, _ := a.store.Run(); xpRunReset(a.lastRunStart, runStart) {
+		a.lastRunStart = runStart
+		a.state.ResetXPWindow("a new run started")
+	}
 
 	// Discard the window when the samples either side stop being comparable - a
 	// boost, a death, a clock jump, a long absence. Averaging across any of those

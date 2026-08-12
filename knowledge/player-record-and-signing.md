@@ -68,6 +68,38 @@ because it has been 0 in every observation: if it turns out to use the compact
 epoch, the HUD omits the line instead of confidently showing a decades-wrong
 countdown.
 
+## `df_inoutpost` does not mean what it looks like
+
+It was the obvious signal for "am I playing", and it is wrong for that. Observed
+live on 2026-08-12: with the launcher on screen and **Start not yet pressed**, the
+record already read `df_inoutpost = 0`. A run clock built on it therefore started
+counting the loading screen, which is what it was reported for.
+
+What it does mean is unresolved. Two candidates fit the observation - "the browser
+is on an outpost page" and "the character is not docked, including after exiting
+the client from the city" - and nothing so far distinguishes them.
+
+df-hud uses **movement** instead: the run starts at the first poll where
+`df_positionx/y/z` changed. Nothing on the server moves your character while you
+are looking at a launcher. `df_inoutpost` is kept only as an end-of-run condition,
+where being wrong stops a clock early rather than inventing playing time.
+
+## There is no "session started" timestamp
+
+Checked exhaustively rather than assumed: of 342 fields, exactly three hold a
+value anywhere near the current time, and none of them is a session marker.
+
+| field | value at capture | meaning |
+| --- | --- | --- |
+| `df_servertime` | now | the server clock |
+| `df_hungertime` | now, to the second | the nourishment tick, which is continuous |
+| `df_looteditem_time` | 79 minutes earlier | the last item looted |
+
+No field advanced when Start was pressed either: `df_expstart` did **not** change
+across a launcher-to-playing transition that df-hud was watching. So the moment
+you enter the city is not recoverable from the record after the fact; it can only
+be observed as it happens.
+
 ## `df_expstart` — probably XP at the start of the run
 
 Observed mid-run, out in the city:
@@ -82,10 +114,15 @@ A million XP is a plausible amount for one trip into the city at level 415, so
 this looks like the cumulative total at the moment the run began — which would
 make "XP this run" free, with no averaging window at all.
 
-**Not yet confirmed.** It needs one observation across an outpost-to-city
-transition to prove the reset point. Until then df-hud parses it but no widget
-renders it, because a number labelled "this run" that actually means something
-else is worse than no number.
+**Not yet confirmed, and now less likely.** Live on 2026-08-12 it was observed
+*equal* to `df_exptotal` while playing, having not moved at any point between the
+launcher appearing and Start being pressed. That rules out "set when the run
+begins" as df-hud would need it, and points instead at "set when the last run
+ended", which is the same value from the outside but useless as a run marker.
+
+df-hud parses it and no widget renders it. A change in it is logged when it
+happens, so the next transition adds evidence rather than requiring the question
+to be asked again from scratch.
 
 ## Request signing
 
