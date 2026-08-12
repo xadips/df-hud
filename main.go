@@ -408,6 +408,12 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 		if err != nil {
 			return nil, err
 		}
+		// The same two corrections the tray offers, on the loopback listener so a
+		// keybind can reach them without taking a hand off the mouse.
+		bs.runStart = func() { a.store.RestartRun(time.Now()) }
+		bs.xpReset = a.resetXPRate
+		bs.runClick = a.runClick
+		bs.overlayToggle = func() { a.visibility.SetEnabled(!a.visibility.Enabled()) }
 		a.bridge, a.bridgeSrv = bs, srv
 	}
 	if !a.creds.UpdatedAt().IsZero() {
@@ -747,6 +753,45 @@ func (a *app) reloadConfig() {
 // a total, not a source - so the judgement has to be the player's.
 func (a *app) resetXPRate() {
 	a.state.ResetXPWindow("reset from the tray menu")
+}
+
+// runClick decides whether a passed-through click on the game window was the
+// Start button, and starts the run clock if it was.
+//
+// The three guards, in the order they are cheapest:
+//
+//  1. A run already in progress means every click during play is inert, which is
+//     what makes binding a mouse button safe at all. It also matches how the game
+//     works: you press Start once, and again only after extracting or dying.
+//  2. The click must be in the GAME's focused window, so a click at the same
+//     screen position in a browser does nothing.
+//  3. It must be inside the configured button, measured from the window's own
+//     corner rather than the screen's, so it survives the game being on another
+//     monitor.
+//
+// A rejected click is silent. It is the normal case - most clicks are not on that
+// button - and a line per click would be a log full of nothing.
+func (a *app) runClick() {
+	cfg := a.Config()
+	start, game := a.store.Run()
+	if !runClickAllowed(cfg.RunStart, !start.IsZero(), game.Running) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	x, y, ok := hyprClient{}.PointerInWindow(ctx, cfg.Game.WindowMatch())
+	if !ok || !cfg.RunStart.ButtonContains(x, y) {
+		return
+	}
+	log.Printf("session: Start pressed (click at %d, %d in the game window)", x, y)
+	a.store.RestartRun(time.Now())
+}
+
+// runClickAllowed is the part of the decision that needs nothing but state, kept
+// separate so the compositor is only asked when the answer could still be yes -
+// and so the guard order is testable.
+func runClickAllowed(cfg RunStartConfig, runInProgress, gameRunning bool) bool {
+	return cfg.ClickEnabled && gameRunning && !runInProgress
 }
 
 // persistRun stores the run clock's start, so a df-hud restart mid-run resumes

@@ -274,6 +274,34 @@ pinned = []
 show_clan = true
 max_shown = 3
 
+# The listener also exposes the two corrections the tray menu offers, so a key can
+# do them without taking a hand off the mouse:
+#
+#   bind = SUPER, F2, exec, curl -fsS -X POST http://127.0.0.1:9275/api/run/start
+#   bind = SUPER, F3, exec, curl -fsS -X POST http://127.0.0.1:9275/api/xp/reset
+#
+# /api/run/start is the answer to "start the clock exactly when I press Start in
+# the game", and it is deliberately a trigger rather than a detector. If you would
+# rather catch the click itself, Hyprland can do it without df-hud watching your
+# input at all - bindn passes the click through to the game as well as firing:
+#
+#   bindn = , mouse:272, exec, ~/.config/hypr/df-run-start.sh
+#
+# with a script that checks it was the right window and the right part of the
+# screen before calling the endpoint:
+#
+#   #!/bin/sh
+#   [ "$(hyprctl activewindow -j | jq -r .class)" = "deadfrontier.exe" ] || exit 0
+#   eval "$(hyprctl cursorpos | awk -F", " '"'"'{print "x="$1" y="$2}'"'"')"
+#   # the Start button, measured once at your resolution
+#   [ "$x" -gt 1100 ] && [ "$x" -lt 1460 ] && [ "$y" -gt 800 ] && [ "$y" -lt 880 ] || exit 0
+#   curl -fsS -X POST http://127.0.0.1:9275/api/run/start
+#
+# Worth knowing before you do: that fires on every left click, so it spawns a
+# process per shot fired, and the coordinates move with your resolution and with
+# any UI change the game ships. A key you press as you press Start has neither
+# problem.
+
 [console]
 # The console is an ordinary window (not an overlay), for the things a
 # click-through HUD cannot do: the full challenge list, pin checkboxes,

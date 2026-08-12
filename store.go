@@ -484,10 +484,16 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 	leftOutpost := s.havePrev && s.prevSnap.InOutpost && !snap.InOutpost
 
 	switch {
-	case snap.InOutpost:
+	case snap.InOutpost || snap.Dead:
+		// Dying ends a run as surely as extracting does, and df_dead is the
+		// server's own flag rather than an inference from HP.
 		if !s.runStart.IsZero() {
-			log.Printf("session: run ended after %s (the record says outpost)",
-				snap.At.Sub(s.runStart).Round(time.Second))
+			why := "the record says outpost"
+			if snap.Dead {
+				why = "you died"
+			}
+			log.Printf("session: run ended after %s (%s)",
+				snap.At.Sub(s.runStart).Round(time.Second), why)
 		}
 		s.runStart = time.Time{}
 	case s.runStart.IsZero() && (leftOutpost || moved || earned):

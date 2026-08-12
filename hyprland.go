@@ -238,6 +238,45 @@ func (hyprClient) GameWindow(ctx context.Context, pid int, class string) (window
 	return findGameWindow(windows, monitors, pid, class), nil
 }
 
+// pointerAt is where the cursor is, in coordinates relative to the game's window.
+//
+// Relative rather than absolute on purpose: hyprctl reports the cursor in
+// compositor space, which is offset by the monitor's position, so a region
+// measured on one screen would be wrong on another. Subtracting the window's own
+// origin makes a configured rectangle mean the same thing wherever the game is.
+//
+// ok is false when there is no focused window, when it is not the game, or when
+// the compositor cannot be reached - all of which mean "do not act".
+func (hyprClient) PointerInWindow(ctx context.Context, class string) (x, y int, ok bool) {
+	rawWindow, err := hyprRequest(ctx, "j/activewindow")
+	if err != nil {
+		return 0, 0, false
+	}
+	var window struct {
+		Class string `json:"class"`
+		At    []int  `json:"at"`
+	}
+	if err := json.Unmarshal(rawWindow, &window); err != nil || len(window.At) < 2 {
+		return 0, 0, false
+	}
+	if want := normaliseClass(class); want != "" && normaliseClass(window.Class) != want {
+		return 0, 0, false
+	}
+
+	rawCursor, err := hyprRequest(ctx, "j/cursorpos")
+	if err != nil {
+		return 0, 0, false
+	}
+	var cursor struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+	}
+	if err := json.Unmarshal(rawCursor, &cursor); err != nil {
+		return 0, 0, false
+	}
+	return cursor.X - window.At[0], cursor.Y - window.At[1], true
+}
+
 // Windows lists every window, for the -check-game diagnostic. When the game's
 // window cannot be matched, seeing the actual classes is the whole answer.
 func (hyprClient) Windows(ctx context.Context) ([]hyprWindow, error) {

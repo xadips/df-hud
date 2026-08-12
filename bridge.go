@@ -80,6 +80,24 @@ type bridgeServer struct {
 	onCredentials func()
 	// consoleToggle fires on POST /api/console/toggle, bound to a Hyprland key.
 	consoleToggle func()
+	// runStart and xpReset are the same two corrections the tray menu offers,
+	// exposed so a key can do them instead of a mouse.
+	//
+	// This is the layer the "detect the Start button being pressed" idea belongs
+	// at: df-hud publishes the action, the compositor decides what triggers it. A
+	// Hyprland bindn on a mouse button passes the click through and can check the
+	// cursor position before calling this, so the whole idea is configuration -
+	// and df-hud never needs to watch global input, which is a capability worth
+	// not having.
+	runStart func()
+	xpReset  func()
+	// runClick is the passed-through click on the game's Start button. Separate
+	// from runStart because it is a CANDIDATE rather than a command: df-hud checks
+	// the cursor position, the focused window and whether a run is already going
+	// before it acts on one.
+	runClick func()
+	// overlayToggle is the same switch as the tray checkbox.
+	overlayToggle func()
 	started       time.Time
 }
 
@@ -139,6 +157,10 @@ func (b *bridgeServer) handler() http.Handler {
 	mux.HandleFunc("POST /api/userData", b.handleUserData)
 	mux.HandleFunc("GET /healthz", b.handleHealth)
 	mux.HandleFunc("POST /api/console/toggle", b.handleConsoleToggle)
+	mux.HandleFunc("POST /api/run/start", b.hook(func() func() { return b.runStart }, "run clock"))
+	mux.HandleFunc("POST /api/xp/reset", b.hook(func() func() { return b.xpReset }, "xp rate"))
+	mux.HandleFunc("POST /api/run/click", b.hook(func() func() { return b.runClick }, "run clock"))
+	mux.HandleFunc("POST /api/overlay/toggle", b.hook(func() func() { return b.overlayToggle }, "overlay"))
 	return mux
 }
 
@@ -229,6 +251,20 @@ func (b *bridgeServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// hook turns an optional callback into a handler, so an endpoint whose feature is
+// not wired says so with a 503 rather than a silent 200 that did nothing.
+func (b *bridgeServer) hook(get func() func(), what string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		fn := get()
+		if fn == nil {
+			http.Error(w, what+" not available", http.StatusServiceUnavailable)
+			return
+		}
+		fn()
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 func (b *bridgeServer) handleConsoleToggle(w http.ResponseWriter, r *http.Request) {

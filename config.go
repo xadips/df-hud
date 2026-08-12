@@ -77,16 +77,17 @@ func (d *duration) UnmarshalText(text []byte) error {
 func (d duration) MarshalText() ([]byte, error) { return []byte(d.String()), nil }
 
 type Config struct {
-	DF      DFConfig      `toml:"df"`
-	Bridge  BridgeConfig  `toml:"bridge"`
-	Poll    PollConfig    `toml:"poll"`
-	Game    GameConfig    `toml:"game"`
-	Paths   PathsConfig   `toml:"paths"`
-	HUD     HUDConfig     `toml:"hud"`
-	BossMap BossMapConfig `toml:"bossmap"`
-	Tray    TrayConfig    `toml:"tray"`
-	Widget  WidgetConfig  `toml:"widget"`
-	Console ConsoleConfig `toml:"console"`
+	DF       DFConfig       `toml:"df"`
+	Bridge   BridgeConfig   `toml:"bridge"`
+	Poll     PollConfig     `toml:"poll"`
+	Game     GameConfig     `toml:"game"`
+	Paths    PathsConfig    `toml:"paths"`
+	HUD      HUDConfig      `toml:"hud"`
+	BossMap  BossMapConfig  `toml:"bossmap"`
+	RunStart RunStartConfig `toml:"run_start"`
+	Tray     TrayConfig     `toml:"tray"`
+	Widget   WidgetConfig   `toml:"widget"`
+	Console  ConsoleConfig  `toml:"console"`
 
 	// path is where this came from, for log lines and reload. Empty means
 	// built-in defaults, i.e. no file existed.
@@ -249,6 +250,43 @@ type BossMapConfig struct {
 	MaxInterval duration `toml:"max_interval"`
 }
 
+// RunStartConfig turns a passed-through click on the game's own Start button into
+// the run clock starting.
+//
+// It exists because nothing in the player record marks the client taking control -
+// position, zone and df_inoutpost all survive a client exit unchanged - so the
+// only thing that knows a run began is the player pressing the button.
+//
+// df-hud does not watch input to do this. The compositor passes the click through
+// with a non-consuming bind and calls POST /api/run/click; everything below is the
+// check df-hud then makes. That keeps global input monitoring, which is a
+// keylogger-shaped capability, out of this program entirely.
+//
+// Two things make it much less fragile than a bare coordinate check: the click
+// must be inside the GAME's focused window (so the rectangle is window-relative,
+// not screen-relative, and works on either monitor), and it is ignored outright
+// once a run is in progress - so every click fired during play is inert, and the
+// rectangle only matters on the menu where the button actually is.
+type RunStartConfig struct {
+	// ClickEnabled gates the endpoint. With no keybind it does nothing anyway.
+	ClickEnabled bool `toml:"click_enabled"`
+
+	// The Start button, in pixels from the game window's top-left corner.
+	ButtonX      int `toml:"button_x"`
+	ButtonY      int `toml:"button_y"`
+	ButtonWidth  int `toml:"button_width"`
+	ButtonHeight int `toml:"button_height"`
+}
+
+// ButtonContains reports whether a window-relative point is on the Start button.
+func (r RunStartConfig) ButtonContains(x, y int) bool {
+	if r.ButtonWidth <= 0 || r.ButtonHeight <= 0 {
+		return false
+	}
+	return x >= r.ButtonX && x < r.ButtonX+r.ButtonWidth &&
+		y >= r.ButtonY && y < r.ButtonY+r.ButtonHeight
+}
+
 // TrayConfig is the StatusNotifierItem in the system tray.
 //
 // It exists because hiding the HUD when the game is closed leaves df-hud with no
@@ -406,6 +444,12 @@ func defaultConfig() *Config {
 			// turning over, which is when they appear.
 			Interval:    duration{time.Minute},
 			MaxInterval: duration{5 * time.Minute},
+		},
+		RunStart: RunStartConfig{
+			ClickEnabled: true,
+			// Measured in the game at 2560x1440. Wrong for any other resolution,
+			// which is why it is a config key and not a constant.
+			ButtonX: 1230, ButtonY: 660, ButtonWidth: 100, ButtonHeight: 40,
 		},
 		Tray: TrayConfig{Enabled: true},
 		Widget: WidgetConfig{
@@ -583,6 +627,18 @@ func (c *Config) validate() error {
 			errs = append(errs, fmt.Errorf("bossmap.max_interval (%s) is shorter than bossmap.interval (%s): "+
 				"the heartbeat cannot be tighter than the minimum gap",
 				c.BossMap.MaxInterval, c.BossMap.Interval))
+		}
+	}
+
+	// --- run_start ---
+	if c.RunStart.ClickEnabled {
+		if c.RunStart.ButtonWidth <= 0 || c.RunStart.ButtonHeight <= 0 {
+			errs = append(errs, fmt.Errorf("run_start button is %dx%d: a zero-sized button can never be clicked",
+				c.RunStart.ButtonWidth, c.RunStart.ButtonHeight))
+		}
+		if c.RunStart.ButtonX < 0 || c.RunStart.ButtonY < 0 {
+			errs = append(errs, fmt.Errorf("run_start button at %d,%d must be inside the window",
+				c.RunStart.ButtonX, c.RunStart.ButtonY))
 		}
 	}
 

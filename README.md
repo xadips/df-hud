@@ -33,6 +33,59 @@ Working today:
 
 Planned: a console window for pin toggles.
 
+## Keybinds
+
+A Wayland client cannot grab a global hotkey - the compositor owns them, by
+design - so df-hud publishes each action on its loopback listener and the binding
+is yours:
+
+| | |
+|---|---|
+| `POST /api/run/start` | start the run clock from now |
+| `POST /api/xp/reset` | start the xp/hr average again from now |
+| `POST /api/overlay/toggle` | show or hide the overlay by hand |
+| `POST /api/console/toggle` | the console window |
+| `POST /api/run/click` | a click that *might* be the game's Start button |
+
+[contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf) has all of them ready to
+`source` from `hyprland.conf`, along with the layer rules.
+
+The tray menu offers the same three corrections, and the two stay in step: toggle
+the overlay from a key and the tray's tick follows.
+
+### Starting the clock from the game's own Start button
+
+The run clock cannot be inferred reliably, and it is worth being precise about
+why. Nothing in the player record marks the client taking control: position,
+trade zone and `df_inoutpost` all survive a client exit and relaunch unchanged,
+and pressing Start does not even move your character - it lets you move and drops
+your AFK invincibility. Meanwhile a whole loot run can happen inside one block, so
+"the position changed" can arrive a long way into a run, and killing is not what
+you do first.
+
+So `run_start` lets the button itself say so. **df-hud does not watch your input.**
+Hyprland passes the click through with a non-consuming bind and calls
+`/api/run/click`; df-hud then checks, for itself, whether the cursor was on the
+button. Global input monitoring is a keylogger-shaped capability and this program
+does not want it.
+
+Two things keep a pixel rectangle from being as fragile as it sounds:
+
+- the click must be inside the **game's focused window**, and the rectangle is
+  measured from that window's corner rather than the screen's, so it survives the
+  game moving to another monitor
+- it is **ignored outright once a run is in progress**, which is how the game
+  works anyway - you press Start once, then again only after extracting or dying.
+  Every click you fire during play is therefore inert, and answered without
+  asking the compositor anything.
+
+Rejected alternatives, both measured rather than assumed: the game's memory
+(`ptrace_scope` is 1, so it would need root or a machine-wide security change,
+and Mono pointer chains break on every patch - on an account that has already
+been temp-banned once, for polling), and the process's memory or CPU footprint
+(measured live: **Start changes neither**, because the world is fully loaded
+before you press it).
+
 ## When the overlay is on screen
 
 A layer surface belongs to a *monitor*, and the protocol has no concept of a

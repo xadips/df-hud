@@ -35,8 +35,9 @@ import (
 type visibilityRules struct {
 	OnlyWhenGameRunning bool
 	FollowGameWorkspace bool
-	// Enabled is the manual override from the tray menu. It is not a config key:
-	// it is the "hide it for a moment" switch, and it beats every other rule.
+	// Enabled is the manual override, from the tray menu or from a keybind hitting
+	// /api/overlay/toggle. It is not a config key: it is the "hide it for a
+	// moment" switch, and it beats every other rule.
 	Enabled bool
 }
 
@@ -44,7 +45,9 @@ type visibilityRules struct {
 // reason in words fit for a log line and a tray tooltip.
 func decideHUDVisible(r visibilityRules, game GameState, place windowPlacement) (bool, string) {
 	if !r.Enabled {
-		return false, "hidden from the tray menu"
+		// Not "from the tray": the same switch is on a keybind too, and naming one
+		// of the two would send someone looking in the wrong place.
+		return false, "hidden by hand"
 	}
 	if r.OnlyWhenGameRunning && !game.Running {
 		return false, "the game is not running"

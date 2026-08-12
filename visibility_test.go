@@ -63,8 +63,10 @@ func TestDecideHUDVisibleTrayOverride(t *testing.T) {
 	if visible {
 		t.Error("the tray toggle must win")
 	}
-	if !strings.Contains(reason, "tray") {
-		t.Errorf("reason = %q, want it to point at the tray menu", reason)
+	// Deliberately not naming the tray: the same switch is on a keybind, and
+	// naming one would send someone looking in the wrong place.
+	if !strings.Contains(reason, "by hand") {
+		t.Errorf("reason = %q, want it to say the override is manual", reason)
 	}
 }
 

@@ -113,6 +113,10 @@ type trayItem struct {
 
 	mu   sync.Mutex
 	face trayFace
+	// overlay is the checkbox, kept so it can be synced from the outside. It has
+	// to be: the same override is reachable from a keybind now, and a checkbox
+	// that disagrees with what it controls is worse than no checkbox.
+	overlay *systray.MenuItem
 }
 
 // runTray blocks until ctx ends. Safe to run in a goroutine: the Linux backend
@@ -183,19 +187,17 @@ func (t *trayItem) buildMenu() {
 	reload := systray.AddMenuItem("Reload config", "Re-read config.toml")
 	quit := systray.AddMenuItem("Quit df-hud", "Stop df-hud")
 
+	t.mu.Lock()
+	t.overlay = overlay
+	t.mu.Unlock()
+
 	go func() {
 		for range overlay.ClickedCh {
-			// The checkbox is the source of truth for the override, so the state
-			// is read back from the item rather than tracked separately - two
-			// copies of one boolean is how a checkbox ends up disagreeing with
-			// what it controls.
-			if overlay.Checked() {
-				overlay.Uncheck()
-			} else {
-				overlay.Check()
-			}
-			if t.actions.SetOverlayEnabled != nil {
-				t.actions.SetOverlayEnabled(overlay.Checked())
+			// The override itself is the source of truth, not the checkbox: it is
+			// also reachable from a keybind, so reading the tick back would be one
+			// of two copies of the same boolean. The refresh loop syncs the tick.
+			if t.actions.SetOverlayEnabled != nil && t.actions.OverlayEnabled != nil {
+				t.actions.SetOverlayEnabled(!t.actions.OverlayEnabled())
 			}
 		}
 	}()
@@ -253,5 +255,20 @@ func (t *trayItem) refresh() {
 	}
 	if prev.tooltip != next.tooltip {
 		systray.SetTooltip(next.tooltip)
+	}
+
+	// Sync the tick to the real override, which a keybind can also change.
+	t.mu.Lock()
+	overlay := t.overlay
+	t.mu.Unlock()
+	if overlay == nil || t.actions.OverlayEnabled == nil {
+		return
+	}
+	if enabled := t.actions.OverlayEnabled(); enabled != overlay.Checked() {
+		if enabled {
+			overlay.Check()
+		} else {
+			overlay.Uncheck()
+		}
 	}
 }
