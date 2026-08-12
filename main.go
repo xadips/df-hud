@@ -28,7 +28,11 @@ const namespace = "df-hud"
 const version = "0.1.0-dev"
 
 func main() {
-	log.SetFlags(0)
+	// Time only, no date: this log is read while something is happening, and
+	// "why did that take so long to appear" is unanswerable without it. The date
+	// would be noise on a process that is restarted several times an evening, and
+	// journald stamps its own copy anyway.
+	log.SetFlags(log.Ltime)
 
 	var (
 		configPath  = flag.String("config", defaultConfigPath(), "path to config.toml")
@@ -279,6 +283,10 @@ type app struct {
 	bridgeSrv *http.Server
 	watcher   *configWatcher
 
+	// groups is the runtime show/hide for individual widget groups, from a keybind
+	// or the tray. Not config, and not persisted - see groupToggles.
+	groups *groupToggles
+
 	// lastRunStart is only touched from the poller's tick callback, which is a
 	// single goroutine, so it needs no lock.
 	lastRunStart time.Time
@@ -346,6 +354,7 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 	}
 	// One gate for every scheduler, so the minimum spacing is a property of
 	// df-hud's traffic rather than of any one poller's.
+	a.groups = newGroupToggles()
 	a.gate = newRateGate(minRequestGap)
 	a.poller = newPoller(a.client, a.creds, a.game, a.Config)
 	a.poller.gate = a.gate
@@ -428,6 +437,18 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 		bs.xpReset = a.resetXPRate
 		bs.runClick = a.runClick
 		bs.overlayToggle = func() { a.visibility.SetEnabled(!a.visibility.Enabled()) }
+		bs.widgetToggle = func(group string) error {
+			if !knownGroup(group) {
+				return fmt.Errorf("no widget group %q", group)
+			}
+			hidden := a.groups.Toggle(group)
+			state := "shown"
+			if hidden {
+				state = "hidden"
+			}
+			log.Printf("hud: %s %s by hand", group, state)
+			return nil
+		}
 		a.bridge, a.bridgeSrv = bs, srv
 	}
 	if !a.creds.UpdatedAt().IsZero() {
@@ -609,14 +630,16 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 		// The tray is what gives df-hud a presence when the HUD is hidden, so it
 		// runs whether or not there is a HUD at all - including under -headless.
 		go runTray(ctx, trayActions{
-			SetOverlayEnabled: a.visibility.SetEnabled,
-			OverlayEnabled:    a.visibility.Enabled,
-			ResetXPRate:       a.resetXPRate,
-			RestartRunClock:   func() { a.store.RestartRun(time.Now(), "the tray menu") },
-			ReloadConfig:      a.reloadConfig,
-			Quit:              opts.quit,
-			View:              func() *View { return a.store.Derive(time.Now()) },
-			Visibility:        a.visibility.State,
+			SetOverlayEnabled:   a.visibility.SetEnabled,
+			OverlayEnabled:      a.visibility.Enabled,
+			SetChallengesHidden: func(hidden bool) { a.groups.Set("challenges", hidden) },
+			ChallengesHidden:    func() bool { return a.groups.Hidden("challenges") },
+			ResetXPRate:         a.resetXPRate,
+			RestartRunClock:     func() { a.store.RestartRun(time.Now(), "the tray menu") },
+			ReloadConfig:        a.reloadConfig,
+			Quit:                opts.quit,
+			View:                func() *View { return a.store.Derive(time.Now()) },
+			Visibility:          a.visibility.State,
 		})
 	}
 

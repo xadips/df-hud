@@ -175,6 +175,17 @@ func (h *hud) build(gtkApp *gtk.Application) {
 	// GtkApplication would exit the moment you closed the game.
 	gtkApp.Hold()
 
+	// A keypress must redraw now, not on the next tick: a group that takes a second
+	// to disappear reads as the key not having worked.
+	h.app.groups.SetOnChange(func() {
+		glib.IdleAdd(func() bool {
+			if h.visible {
+				h.update()
+			}
+			return false
+		})
+	})
+
 	h.app.SetOnConfigReload(func(next *Config) {
 		// Arrives on the config watcher's goroutine.
 		glib.IdleAdd(func() bool {
@@ -468,5 +479,14 @@ func (h *hud) update() {
 
 	for _, w := range h.widgets {
 		w.w.Update(view)
+		// The hand toggle is applied AFTER the widget's own decision, so it wins.
+		// Doing it here rather than inside each widget keeps every one of them
+		// ignorant of it: a widget decides whether it has anything to say, and this
+		// decides whether you want to hear it.
+		if h.app.groups.Hidden(w.name) {
+			if visible, ok := w.w.Root().(interface{ SetVisible(bool) }); ok {
+				visible.SetVisible(false)
+			}
+		}
 	}
 }

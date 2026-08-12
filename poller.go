@@ -17,15 +17,35 @@ import (
 //
 //  1. One request in flight at a time. The loop is a single goroutine, so this
 //     is structural rather than enforced.
+//
 //  2. No request may follow the previous one by less than minRequestGap,
 //     whatever wakes the loop. Credentials arriving, the game launching and a
 //     compositor event can all fire at once; without this floor a wake storm
 //     becomes a request burst, which is exactly the pattern that earns a temp
 //     ban.
+//
+//     That floor is ANTI-BURST ONLY, which is why it is a second rather than the
+//     five it used to be. What keeps any single endpoint from being hammered is
+//     its own interval floor - 5s for the player record, 30s for the challenge
+//     board, 30s for the event feed - and those are enforced at config time. The
+//     gate cannot improve on them; all it can do is stop two schedulers firing in
+//     the same instant.
+//
+//     Five seconds was measurably wrong for a different reason: the challenge
+//     board cannot be fetched until the first player record arrives (the level
+//     decides which challenges apply), so the two are serialised by construction
+//     and the gap landed in full on the board every time. Measured at 5.0s from
+//     startup to the board appearing, on a HUD where everything else was up
+//     instantly. One second is the same spacing already used for bulk calls on
+//     this account, and the game's own client routinely fires several endpoints
+//     closer together than that while loading a page.
+//
 //  3. Rejected credentials STOP the loop. They are not retried, not backed
 //     off - retrying a rejected login is the worst thing we could do. Recovery
 //     is a fresh bridge payload, which wakes the loop again.
+//
 //  4. Failures back off exponentially to poll.backoff_max.
+//
 //  5. Every interval carries jitter, so a restart loop cannot line requests up
 //     and our traffic never looks metronomic.
 //
@@ -40,7 +60,7 @@ import (
 // minutes of a wrong HUD at exactly the moment a run starts, which is when the
 // HUD matters most. Restocking in an outpost is short; the saving was not worth
 // the lag.
-const minRequestGap = 5 * time.Second
+const minRequestGap = time.Second
 
 // Tick is the outcome of one poll attempt, success or failure. Failures are
 // reported too, because the XP widget's stability colouring is defined in terms

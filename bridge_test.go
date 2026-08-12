@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -440,5 +442,47 @@ func TestRunStartButtonContains(t *testing.T) {
 	// A zero-sized button can never be hit, however the coordinates line up.
 	if (RunStartConfig{ButtonX: 10, ButtonY: 10}).ButtonContains(10, 10) {
 		t.Error("a zero-sized button must not swallow clicks")
+	}
+}
+
+// The widget toggle takes the group as a path value, so adding a widget does not
+// mean adding a route.
+func TestBridgeWidgetToggle(t *testing.T) {
+	var toggled []string
+	bs := &bridgeServer{widgetToggle: func(group string) error {
+		if !knownGroup(group) {
+			return errors.New("no widget group " + group)
+		}
+		toggled = append(toggled, group)
+		return nil
+	}}
+	srv := httptest.NewServer(bs.handler())
+	defer srv.Close()
+
+	res, err := http.Post(srv.URL+"/api/widget/challenges/toggle", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", res.StatusCode)
+	}
+	if len(toggled) != 1 || toggled[0] != "challenges" {
+		t.Errorf("toggled = %v", toggled)
+	}
+
+	// An unknown group is a 400 naming the ones that exist. A keybind is where this
+	// is called from, so a typo must not be a key that silently does nothing.
+	res, err = http.Post(srv.URL+"/api/widget/challenge/toggle", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for an unknown group", res.StatusCode)
+	}
+	if !strings.Contains(string(body), "challenges") {
+		t.Errorf("body = %q, want it to list the known groups", body)
 	}
 }

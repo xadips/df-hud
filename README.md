@@ -47,6 +47,7 @@ is yours:
 | `POST /api/run/start` | start the run clock from now |
 | `POST /api/xp/reset` | start the xp/hr average again from now |
 | `POST /api/overlay/toggle` | show or hide the overlay by hand |
+| `POST /api/widget/<group>/toggle` | show or hide one group: `block`, `bosses`, `session`, `xp`, `challenges` |
 | `POST /api/console/toggle` | the console window |
 | `POST /api/run/click` | a click that *might* be the game's Start button |
 
@@ -66,13 +67,21 @@ ln -s ~/Programming/df-hud/contrib/df-hud.lua ~/.config/hypr/conf.d/df-hud.lua
 require("df-hud")     -- in hyprland.lua, next to the other require lines
 ```
 
-Then `hyprctl reload`, and `hyprctl binds -j | grep df-hud` to see the five binds.
+Then `hyprctl reload`, and `hyprctl binds -j | grep df-hud` to see the six binds.
 There is a stubbed-`hl` check for that file in
 [contrib/df-hud_spec.lua](contrib/df-hud_spec.lua), run by `go test`, because a
 mistake in it is otherwise only visible in the compositor's log.
 
-The tray menu offers the same three corrections, and the two stay in step: toggle
-the overlay from a key and the tray's tick follows.
+The tray menu offers the same corrections, and the two stay in step: toggle the
+overlay or the challenge board from a key and the tray's tick follows.
+
+A group toggle is deliberately **not** written to the config and does not survive a
+restart. It answers a different question from `enabled`: `enabled` is "do I ever
+want this group", which belongs in a file, while the key is "get the board off my
+screen for a minute", which you undo thirty seconds later. A HUD that started with
+a group missing because of a keypress in a previous session would be
+indistinguishable from a broken one. The status banner cannot be hidden at all - it
+is how df-hud says it cannot do its job.
 
 ### Starting the clock from the game's own Start button
 

@@ -77,11 +77,12 @@ local function find_bind(keys)
     end
 end
 
--- The four keybinds, and that each posts to the endpoint it claims to.
+-- The keybinds, and that each posts to the endpoint it claims to.
 local want = {
     ["SUPER + ALT + T"] = "/api/run/start",
     ["SUPER + ALT + X"] = "/api/xp/reset",
-    ["SUPER + ALT + O"] = "/api/overlay/toggle",
+    ["SUPER + ALT + K"] = "/api/overlay/toggle",
+    ["SUPER + ALT + B"] = "/api/widget/challenges/toggle",
     ["SUPER + ALT + C"] = "/api/console/toggle",
 }
 for keys, path in pairs(want) do

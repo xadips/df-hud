@@ -50,7 +50,16 @@ hl.bind("SUPER + ALT + X", post("/api/xp/reset"), { description = "df-hud: reset
 
 -- Show or hide the overlay by hand. The automatic rules still apply on top: this
 -- cannot make the HUD appear over a game that is not running.
-hl.bind("SUPER + ALT + O", post("/api/overlay/toggle"), { description = "df-hud: toggle overlay" })
+hl.bind("SUPER + ALT + K", post("/api/overlay/toggle"), { description = "df-hud: toggle overlay" })
+
+-- Hide the challenge board without turning it off in the config. B for board.
+--
+-- Per group rather than one key per widget: the endpoint takes the group's name, so
+-- "block", "bosses", "session" and "xp" work the same way if you want keys for
+-- them. The status banner deliberately cannot be hidden - it is how df-hud says it
+-- cannot do its job.
+hl.bind("SUPER + ALT + B", post("/api/widget/challenges/toggle"),
+    { description = "df-hud: toggle the challenge board" })
 
 -- The console window, once it exists.
 hl.bind("SUPER + ALT + C", post("/api/console/toggle"), { description = "df-hud: console" })

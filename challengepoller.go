@@ -45,6 +45,10 @@ type ChallengePoller struct {
 	lastErr  string
 	lastAt   time.Time
 	stale    bool
+	// haveBoard suppresses the arrival line after the first one. The board is
+	// fetched every couple of minutes forever; only the first one after a pause
+	// answers "how long did that take", which is the question it exists for.
+	haveBoard bool
 }
 
 func newChallengePoller(client *Client, creds *credStore, game *GameWatcher, gate *rateGate,
@@ -283,6 +287,15 @@ func (p *ChallengePoller) pollOnce(ctx context.Context) error {
 		level, gold = p.level()
 	}
 	board := parseChallenges(vars, level, gold)
+
+	p.mu.Lock()
+	first := !p.haveBoard
+	p.haveBoard = true
+	p.mu.Unlock()
+	if first {
+		log.Printf("challenges: board of %d arrived (level %d)", len(board), level)
+	}
+
 	if fn != nil {
 		fn(board)
 	}

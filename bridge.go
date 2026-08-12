@@ -98,7 +98,10 @@ type bridgeServer struct {
 	runClick func()
 	// overlayToggle is the same switch as the tray checkbox.
 	overlayToggle func()
-	started       time.Time
+	// widgetToggle hides or shows one group. Named rather than one endpoint per
+	// group, so adding a widget does not mean adding a route.
+	widgetToggle func(group string) error
+	started      time.Time
 }
 
 // startBridge listens synchronously so a bad address is a startup failure
@@ -161,6 +164,7 @@ func (b *bridgeServer) handler() http.Handler {
 	mux.HandleFunc("POST /api/xp/reset", b.hook(func() func() { return b.xpReset }, "xp rate"))
 	mux.HandleFunc("POST /api/run/click", b.hook(func() func() { return b.runClick }, "run clock"))
 	mux.HandleFunc("POST /api/overlay/toggle", b.hook(func() func() { return b.overlayToggle }, "overlay"))
+	mux.HandleFunc("POST /api/widget/{group}/toggle", b.toggleWidget)
 	return mux
 }
 
@@ -274,4 +278,24 @@ func (b *bridgeServer) handleConsoleToggle(w http.ResponseWriter, r *http.Reques
 	}
 	b.consoleToggle()
 	w.WriteHeader(http.StatusOK)
+}
+
+// toggleWidget hides or shows one widget group.
+//
+// An unknown group is a 400 with the list in the body rather than a silent no-op:
+// this is reached from a keybind, and a typo'd group name in somebody's compositor
+// config would otherwise be a key that does nothing for no visible reason.
+func (b *bridgeServer) toggleWidget(w http.ResponseWriter, r *http.Request) {
+	fn := b.widgetToggle
+	if fn == nil {
+		http.Error(w, "widget toggling is not wired up", http.StatusServiceUnavailable)
+		return
+	}
+	group := r.PathValue("group")
+	if err := fn(group); err != nil {
+		http.Error(w, err.Error()+"; known groups: "+strings.Join(toggleableGroups(), ", "),
+			http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -34,6 +34,12 @@ type trayActions struct {
 	// SetOverlayEnabled is the manual show/hide override.
 	SetOverlayEnabled func(bool)
 	OverlayEnabled    func() bool
+	// SetChallengesHidden is the board's own show/hide, the same switch a keybind
+	// hits. Here as well as on a key because a menu is where you find out that the
+	// feature exists.
+	SetChallengesHidden func(bool)
+	ChallengesHidden    func() bool
+
 	// ResetXPRate throws away the rate window and starts a fresh average.
 	ResetXPRate func()
 	// RestartRunClock starts the run clock from now.
@@ -117,10 +123,11 @@ type trayItem struct {
 
 	mu   sync.Mutex
 	face trayFace
-	// overlay is the checkbox, kept so it can be synced from the outside. It has
-	// to be: the same override is reachable from a keybind now, and a checkbox
-	// that disagrees with what it controls is worse than no checkbox.
+	// overlay and board are the checkboxes, kept so they can be synced from the
+	// outside. They have to be: the same overrides are reachable from keybinds, and
+	// a checkbox that disagrees with what it controls is worse than no checkbox.
 	overlay *systray.MenuItem
+	board   *systray.MenuItem
 }
 
 // runTray blocks until ctx ends. Safe to run in a goroutine: the Linux backend
@@ -173,6 +180,12 @@ func (t *trayItem) buildMenu() {
 
 	overlay := systray.AddMenuItemCheckbox("Show overlay",
 		"Draw the HUD over the game. The other visibility rules still apply.", enabled)
+	boardShown := true
+	if t.actions.ChallengesHidden != nil {
+		boardShown = !t.actions.ChallengesHidden()
+	}
+	board := systray.AddMenuItemCheckbox("Show challenges",
+		"Hide the challenge board without turning it off in the config", boardShown)
 	// A challenge reward is a single lump of XP that no amount of killing
 	// produced, so it lands in the window and inflates the average for as long as
 	// the window is wide. The rate is not wrong - that XP really was earned - but
@@ -192,8 +205,16 @@ func (t *trayItem) buildMenu() {
 	quit := systray.AddMenuItem("Quit df-hud", "Stop df-hud")
 
 	t.mu.Lock()
-	t.overlay = overlay
+	t.overlay, t.board = overlay, board
 	t.mu.Unlock()
+
+	go func() {
+		for range board.ClickedCh {
+			if t.actions.SetChallengesHidden != nil && t.actions.ChallengesHidden != nil {
+				t.actions.SetChallengesHidden(!t.actions.ChallengesHidden())
+			}
+		}
+	}()
 
 	go func() {
 		for range overlay.ClickedCh {
@@ -261,18 +282,25 @@ func (t *trayItem) refresh() {
 		systray.SetTooltip(next.tooltip)
 	}
 
-	// Sync the tick to the real override, which a keybind can also change.
+	// Sync the ticks to the real overrides, which keybinds can also change.
 	t.mu.Lock()
-	overlay := t.overlay
+	overlay, board := t.overlay, t.board
 	t.mu.Unlock()
-	if overlay == nil || t.actions.OverlayEnabled == nil {
+	if overlay != nil && t.actions.OverlayEnabled != nil {
+		syncCheckbox(overlay, t.actions.OverlayEnabled())
+	}
+	if board != nil && t.actions.ChallengesHidden != nil {
+		syncCheckbox(board, !t.actions.ChallengesHidden())
+	}
+}
+
+func syncCheckbox(item *systray.MenuItem, want bool) {
+	if want == item.Checked() {
 		return
 	}
-	if enabled := t.actions.OverlayEnabled(); enabled != overlay.Checked() {
-		if enabled {
-			overlay.Check()
-		} else {
-			overlay.Uncheck()
-		}
+	if want {
+		item.Check()
+	} else {
+		item.Uncheck()
 	}
 }
