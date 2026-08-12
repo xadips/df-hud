@@ -132,8 +132,13 @@ func formatAge(d time.Duration) string {
 
 // formatRate renders XP per hour. Compact, because the number is in the millions
 // at high level and the HUD line is narrow.
+//
+// Zero renders as "0/hr" rather than as nothing. Returning "" for zero produced a
+// bare "xp" label on the live HUD, which reads as broken; a genuine zero is
+// information, and while playing it is information you want. Only a negative
+// rate renders as nothing, since that is never a real reading.
 func formatRate(perHour float64) string {
-	if perHour <= 0 {
+	if perHour < 0 {
 		return ""
 	}
 	return formatCompact(int64(perHour)) + "/hr"

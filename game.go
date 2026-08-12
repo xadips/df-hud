@@ -288,7 +288,13 @@ func (w *GameWatcher) scanOnce() {
 	}
 	w.mu.Lock()
 	prev, changed := w.state, false
-	if next.Running != prev.Running || !next.SameSession(prev) {
+	// The session comparison only applies when both sides are running.
+	// SameSession requires it by definition, so !SameSession is trivially true
+	// while the game is closed - and reporting a change on every scan of a
+	// steady "not running" state made the poller wake constantly, which pulled
+	// the idle cadence down to the minimum request gap. Found live: 5s polling
+	// against a configured 30s.
+	if next.Running != prev.Running || (next.Running && !next.SameSession(prev)) {
 		w.state, changed = next, true
 	}
 	fn := w.onChange

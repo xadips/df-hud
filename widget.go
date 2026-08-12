@@ -41,6 +41,9 @@ func buildWidgets(cfg *Config) []Widget {
 	if cfg.Widget.Session.Enabled {
 		entries = append(entries, entry{cfg.Widget.Session.Order, "session", newSessionWidget()})
 	}
+	if cfg.Widget.XP.Enabled {
+		entries = append(entries, entry{cfg.Widget.XP.Order, "xp", newXPWidget()})
+	}
 
 	// Ties keep their declaration order, so an unset order does something
 	// predictable rather than arbitrary.

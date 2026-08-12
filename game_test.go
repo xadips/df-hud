@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -344,6 +345,46 @@ func TestGameWatcherDetectsRelaunch(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the relaunch was not reported")
+	}
+}
+
+// TestGameWatcherIsQuietWhileTheGameIsClosed is a regression test for a bug
+// found live: SameSession requires both sides to be running, so !SameSession was
+// trivially true for a steady "not running" state, and every single scan reported
+// a change. Each one woke the poller, which pulled the idle cadence down to the
+// minimum request gap - 5s polling against a configured 30s, six times the
+// intended traffic, entirely silently.
+func TestGameWatcherIsQuietWhileTheGameIsClosed(t *testing.T) {
+	p := newFakeProc(t) // no game process in it at all
+	p.addProcess(t, 100, "firefox", "/usr/lib/firefox/firefox", 5000)
+
+	w := newGameWatcher("DeadFrontier.exe", 10*time.Millisecond)
+	w.scanner = p.scanner("DeadFrontier.exe")
+	var changes atomic.Int32
+	w.SetOnChange(func(GameState) { changes.Add(1) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	// Many scans over a steady state.
+	time.Sleep(200 * time.Millisecond)
+	if got := changes.Load(); got != 0 {
+		t.Errorf("%d changes reported while the game stayed closed, want 0", got)
+	}
+
+	// And it still notices the game actually starting.
+	p.addProcess(t, 200, "DeadFrontier.e", "/games/DeadFrontier.exe", 360_000)
+	deadline := time.After(2 * time.Second)
+	for changes.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("the game starting was not reported")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if got := changes.Load(); got != 1 {
+		t.Errorf("changes = %d, want exactly 1 for one launch", got)
 	}
 }
 

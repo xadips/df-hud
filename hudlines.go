@@ -52,6 +52,22 @@ func blockLines(v *View, cfg BlockWidgetConfig) (head, sub string, show bool) {
 	return head, strings.Join(parts, "  "), true
 }
 
+// xpLine is the XP rate. It renders the reason when there is no rate yet, rather
+// than an empty row: "collecting samples" tells you to wait, whereas a blank
+// tells you nothing and looks like a bug.
+func xpLine(v *View) (text, cssClass string, show bool) {
+	if !v.HaveData {
+		return "", "", false
+	}
+	if !v.XPAvailable {
+		if v.XPWhy == "" {
+			return "", "", false
+		}
+		return "xp " + v.XPWhy, "", true
+	}
+	return "xp " + formatRate(v.XPPerHour), v.XPStability.CSSClass(), true
+}
+
 // sessionLine is the game-client clock. show is false when the game is not
 // running, since a frozen clock reads as a broken one.
 func sessionLine(v *View) (string, bool) {
@@ -87,6 +103,11 @@ func hudLines(v *View, cfg *Config) []string {
 	if cfg.Widget.Session.Enabled {
 		if text, ok := sessionLine(v); ok {
 			rows = append(rows, row{cfg.Widget.Session.Order, []string{text}})
+		}
+	}
+	if cfg.Widget.XP.Enabled {
+		if text, _, ok := xpLine(v); ok {
+			rows = append(rows, row{cfg.Widget.XP.Order, []string{text}})
 		}
 	}
 

@@ -59,6 +59,15 @@ label.status {
 label.fixable {
   color: #ffd166;
 }
+/* Rate stability. Amber for one missed poll, red for two or more: the number
+   still looks authoritative when the window has a hole in it, so the colour is
+   how the HUD says so. */
+label.shaky {
+  color: #ffd166;
+}
+label.unstable {
+  color: #ff6b6b;
+}
 `
 
 type hud struct {

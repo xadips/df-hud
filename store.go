@@ -310,14 +310,35 @@ type Store struct {
 	credsAt     time.Time
 	loggedXPSrc bool
 
+	// xpSamples supplies the rate window. A function rather than a field because
+	// the window is owned by the persistent state store, and copying it into here
+	// on every poll would be two sources of truth for the same ring.
+	xpSamples  func() []XPSample
+	xpMinSamps int
+
 	// missedTicks counts consecutive scheduled polls that produced no usable
 	// sample. The XP widget colours by this.
 	missedTicks int
-	lastErr     string
+	// pendingPenalty and shownPenalty make one hiccup visible for TWO ticks.
+	// Without them a single missed poll flashes amber for a fraction of a second
+	// and is gone before you look up from the game, which defeats the point of
+	// having a stability signal at all: the first success after a miss carries
+	// the penalty forward, and the second clears it.
+	pendingPenalty int
+	shownPenalty   int
+	lastErr        string
 }
 
 func newStore(catalog *Catalog) *Store {
-	return &Store{catalog: catalog}
+	return &Store{catalog: catalog, xpMinSamps: 3}
+}
+
+// SetXPWindow wires the rate window in. Without it the XP fields stay blank,
+// which is what the headless -once path wants.
+func (s *Store) SetXPWindow(samples func() []XPSample, minSamples int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.xpSamples, s.xpMinSamps = samples, minSamples
 }
 
 // ApplyTick folds one poll outcome into the store. Returns whether a new
@@ -327,6 +348,9 @@ func (s *Store) ApplyTick(tick Tick) bool {
 		s.mu.Lock()
 		if tick.Scheduled {
 			s.missedTicks++
+			if s.missedTicks > s.pendingPenalty {
+				s.pendingPenalty = s.missedTicks
+			}
 		}
 		s.lastErr = tick.Err.Error()
 		s.mu.Unlock()
@@ -340,6 +364,7 @@ func (s *Store) ApplyTick(tick Tick) bool {
 	}
 	s.snapshot, s.haveSnap = snap, true
 	s.missedTicks = 0
+	s.shownPenalty, s.pendingPenalty = s.pendingPenalty, 0
 	s.lastErr = ""
 	logSource := !s.loggedXPSrc
 	s.loggedXPSrc = true
@@ -355,6 +380,32 @@ func (s *Store) ApplyTick(tick Tick) bool {
 		}
 	}
 	return true
+}
+
+// Stability is how much to trust the current rate. It counts both misses
+// happening now and the one carried over from the previous tick.
+func (s *Store) Stability() xpStability {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.stabilityLocked()
+}
+
+// stabilityLocked assumes the caller holds the lock, so Derive can use it without
+// re-locking (RWMutex is not reentrant, and a nested RLock would deadlock the
+// moment a writer is queued).
+func (s *Store) stabilityLocked() xpStability {
+	misses := s.missedTicks
+	if s.shownPenalty > misses {
+		misses = s.shownPenalty
+	}
+	switch {
+	case misses == 0:
+		return xpSteady
+	case misses == 1:
+		return xpShaky
+	default:
+		return xpUnstable
+	}
 }
 
 func (s *Store) SetGame(g GameState) {
@@ -379,6 +430,14 @@ func (s *Store) SetCredentialsAt(t time.Time) {
 	s.mu.Lock()
 	s.credsAt = t
 	s.mu.Unlock()
+}
+
+// PreviousSnapshot is the one before the latest, for change detection that needs
+// both sides (an XP boost starting, a death).
+func (s *Store) PreviousSnapshot() (Snapshot, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.prevSnap, s.havePrev
 }
 
 func (s *Store) Snapshot() (Snapshot, bool) {
@@ -428,6 +487,14 @@ type View struct {
 	BoostExpForever bool
 	Dead            bool
 
+	// XPRate is blank when there is not enough to say; XPWhy explains why.
+	XPPerHour   float64
+	XPAvailable bool
+	XPWhy       string
+	XPSpan      time.Duration
+	XPSamples   int
+	XPStability xpStability
+
 	// Status is what to show when something is wrong, empty when it is not.
 	Status      string
 	StatusIsFix bool // true when the user can act on it (stale credentials)
@@ -473,6 +540,16 @@ func (s *Store) Derive(now time.Time) *View {
 		v.BoostExpIn = snap.BoostExp.Remaining(now)
 		v.BoostExpForever = snap.BoostExp.Forever
 		v.Dead = snap.Dead
+	}
+
+	if s.xpSamples != nil {
+		rate := computeXPRate(s.xpSamples(), s.xpMinSamps, s.stabilityLocked())
+		v.XPAvailable = rate.Available
+		v.XPPerHour = rate.PerHour
+		v.XPWhy = rate.Why
+		v.XPSpan = rate.Span
+		v.XPSamples = rate.Samples
+		v.XPStability = rate.Stability
 	}
 
 	switch {

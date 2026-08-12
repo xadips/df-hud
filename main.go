@@ -236,6 +236,7 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 	}
 
 	a.store = newStore(a.catalog)
+	a.store.SetXPWindow(func() []XPSample { return a.state.Get().XPSamples }, cfg.Widget.XP.MinSamples)
 	a.client = &Client{
 		HTTP:      &http.Client{Timeout: cfg.DF.Timeout.Duration},
 		BaseURL:   cfg.DF.BaseURL,
@@ -422,6 +423,16 @@ func (a *app) recordXPSample() {
 		return
 	}
 	window := a.cfg.Widget.XP.EffectiveWindow(a.cfg.Poll.ActiveInterval.Duration)
+
+	// Discard the window when the samples either side stop being comparable - a
+	// boost, a death, a clock jump, a long absence. Averaging across any of those
+	// produces a rate that describes no real period.
+	if prev, had := a.store.PreviousSnapshot(); had {
+		if reason := xpWindowReset(prev, snap, window); reason != "" {
+			a.state.ResetXPWindow(reason)
+		}
+	}
+
 	a.state.AppendXPSample(XPSample{
 		At:         snap.At,
 		Cumulative: snap.CumulativeXP,

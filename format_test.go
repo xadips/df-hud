@@ -97,11 +97,13 @@ func TestFormatAgeStaysQuietWhenFresh(t *testing.T) {
 }
 
 func TestFormatRate(t *testing.T) {
-	if got := formatRate(0); got != "" {
-		t.Errorf("a zero rate should render as nothing, got %q", got)
+	// Zero is a real reading, and rendering it as nothing left a bare "xp" on the
+	// live HUD - which reads as broken rather than as idle.
+	if got := formatRate(0); got != "0/hr" {
+		t.Errorf("formatRate(0) = %q, want 0/hr", got)
 	}
 	if got := formatRate(-5); got != "" {
-		t.Errorf("a negative rate should render as nothing, got %q", got)
+		t.Errorf("a negative rate is never real and should render as nothing, got %q", got)
 	}
 	if got := formatRate(1_234_567); got != "1.23M/hr" {
 		t.Errorf("formatRate(1234567) = %q", got)
