@@ -35,12 +35,16 @@ and those exist only inside a logged-in page's JavaScript. A userscript posts
 them to a **loopback-only** listener on `127.0.0.1:9275`; df-hud makes every game
 request itself.
 
+Endpoints under `hotrods/` — the challenge board among them — additionally need
+the **session cookie**, and hashed ones need the request **signing salt**. So the
+payload carries all three.
+
 Either script works:
 
-- **the bridge userscript** (or the bridge userscript) — already posts to that exact endpoint.
-  Load the Outpost home page and you are done.
-- **the bridge userscript** (`the bridge userscript`) — also reports the request
-  signing salt, which hashed endpoints such as the challenge board need, and
+- **the bridge userscript+** (or the bridge userscript) — already posts to that exact
+  endpoint. Load the Outpost home page and you are done. Versions before ***
+  do not send the signing salt, so the challenge board will not work with them.
+- **the bridge userscript** (`the bridge userscript`) — reports the salt too, and
   re-posts every five minutes so a rotated `sc` recovers by itself.
 
 ### Credential handling
@@ -54,9 +58,13 @@ The payload is account-equivalent, so:
   re-verified after writing
 - `String`, `GoString` and `MarshalJSON` all redact, so a stray `%v` cannot leak
   them; a test asserts no secret ever reaches log output
-- the session cookie is accepted for wire compatibility and then **discarded** —
-  the API does not need it, so keeping it would put another secret on disk for
-  nothing
+
+The session cookie is stored, which reverses an earlier decision here. It was
+discarded at first on the reasoning that `userID`+`password`+`sc` authenticates
+everything, so a cookie would add a secret without adding capability. That is true
+of `get_values` and wrong of endpoints under `hotrods/`: the challenge board
+redirects to the site's front page without one. It gets exactly the same treatment
+as the rest — 0600, redacted, never logged.
 
 ## Being a good citizen
 
