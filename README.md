@@ -88,6 +88,14 @@ Two things keep a pixel rectangle from being as fragile as it sounds:
   Every click you fire during play is therefore inert, and answered without
   asking the compositor anything.
 
+The bind itself is **armed only while the game is focused**. That part matters as
+much as the rest: a plain global bind on the left mouse button spawns a process on
+every click you make all day, in every application. Hyprland has no per-window
+bind filter, so [contrib/df-hud.lua](contrib/df-hud.lua) subscribes to
+`window.active` and calls `set_enabled` on the keybind - it does not exist while you
+are anywhere else. The `hyprland.conf` dialect cannot express that, which is worth
+knowing before copying the bind out of the other file.
+
 Rejected alternatives, both measured rather than assumed: the game's memory
 (`ptrace_scope` is 1, so it would need root or a machine-wide security change,
 and Mono pointer chains break on every patch - on an account that has already

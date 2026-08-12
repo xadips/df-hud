@@ -60,12 +60,47 @@ hl.bind("SUPER + ALT + C", post("/api/console/toggle"), { description = "df-hud:
 -- window, with no run already in progress. Configure the rectangle under
 -- [run_start] in df-hud's config; the default is measured at 2560x1440.
 --
--- Commented out because it fires on every left click, which is also how you shoot.
--- Each one costs a curl while no run is in progress, and nothing once one is:
--- df-hud answers immediately without asking the compositor anything.
+-- The bind is ENABLED ONLY WHILE THE GAME IS FOCUSED, which is the difference
+-- between this being usable and being a nuisance: a plain global bind on the left
+-- mouse button spawns a curl on every click you make all day, in every
+-- application. Hyprland has no per-window bind filter, so it is done with an event
+-- subscription and set_enabled - the bind simply does not exist while you are
+-- anywhere else.
 --
--- hl.bind("mouse:272", post("/api/run/click"),
---     { non_consuming = true, click = true, description = "df-hud: catch the Start button" })
+-- Set catch_start_button to true to use it. Even then it fires on every click
+-- inside the game, which is also how you shoot: each costs one curl while no run
+-- is in progress, and nothing at all once one is, because df-hud answers those
+-- immediately without asking the compositor anything.
+local catch_start_button = false
+
+if catch_start_button then
+    local catch = hl.bind("mouse:272", post("/api/run/click"), {
+        non_consuming = true,
+        click = true,
+        description = "df-hud: catch the Start button",
+    })
+
+    -- Matched on the class rather than the exact name because Wine reports it
+    -- lowercased, and on a substring so a rename to DeadFrontier2.exe or similar
+    -- does not silently stop this working.
+    local function is_game(window)
+        return window ~= nil and type(window.class) == "string"
+            and window.class:lower():find("deadfrontier", 1, true) ~= nil
+    end
+
+    local function arm()
+        -- The event's argument shape is not something to rely on, so the focused
+        -- window is asked for directly.
+        catch:set_enabled(is_game(hl.get_active_window()))
+    end
+
+    arm()
+    hl.on("window.active", arm)
+    -- Closing the game does not always produce a window.active, so the close is
+    -- watched too: a bind left armed with no game focused is the exact thing this
+    -- is here to avoid.
+    hl.on("window.close", arm)
+end
 
 -- The overlay is text over a game, redrawn every second. It never wants animating,
 -- blurring, or its transparent parts treated as something to dim behind.
