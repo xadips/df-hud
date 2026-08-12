@@ -125,6 +125,19 @@ func (p *ChallengePoller) pauseReason() string {
 	if cfg.Poll.OnlyWhenGameRunning && p.game != nil && !p.game.State().Running {
 		return "the game is not running (poll.only_when_game_running)"
 	}
+	// Wait for the player record before the first board.
+	//
+	// This is not cosmetic ordering. The level drives the eligibility filter the
+	// game itself applies, so parsing the board at level 0 hides challenges that
+	// are genuinely in-band - a board of 11 where the truth is 12 - and it also
+	// leaves reward XP unscaled. A board that is subtly wrong is worse than one
+	// that arrives five seconds later.
+	if p.level != nil {
+		if level, _ := p.level(); level <= 0 {
+			return "waiting for the first player record (the level decides which " +
+				"challenges apply to you)"
+		}
+	}
 	return ""
 }
 
