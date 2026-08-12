@@ -191,12 +191,24 @@ opacity = 1.0
 # The game's API knows where YOU are and the public stats feed knows the map's
 # geometry, but neither knows what has spawned on it; dfprofiler publishes that.
 #
-# The interval floor is 30s, which is what dfprofiler's own boss map page polls at
-# per open tab - df-hud must never cost the operator more than their own page
-# does. Nothing is fetched at all while the game is not running.
+# There is no fixed cadence. The feed states when every event starts and ends, so
+# the schedule comes from the data: a fetch shortly after the next changeover, one
+# when you arrive on a new block (the only question this feed answers), and
+# otherwise a heartbeat for the once-a-day random spawns that nothing predicts.
+#
+# Most cycles turn over on the hour, and the feed carries the NEXT cycle from
+# around :59 and keeps the previous one for a few minutes after :00. df-hud reads
+# each event's own start and end times against the clock, so a changeover costs no
+# request at all - one fetch stays correct straight through it.
+#
+# interval is the MINIMUM gap between fetches, not the cadence. Its floor is 30s,
+# which is what dfprofiler's own boss map page polls at per open tab: df-hud must
+# never cost the operator more than their own page does. Nothing is fetched at all
+# while the game is not running.
 enabled = true
 url = "https://www.dfprofiler.com/bossmap/json/"
 interval = "1m"
+max_interval = "5m"
 
 [tray]
 # The icon in the system tray (waybar's "tray" module, or any other

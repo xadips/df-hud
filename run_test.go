@@ -275,3 +275,54 @@ func TestPersistedRunRoundTrips(t *testing.T) {
 		t.Errorf("StartedAt = %s, want %s", run.StartedAt, started)
 	}
 }
+
+// Killing things without leaving the block is still playing, and it is the case
+// movement alone misses. It also insures the clock against df_positionx/y being
+// updated less often than it appears to be - 1623 consecutive polls of an
+// unchanged position were observed in one live session.
+func TestRunClockStartsOnEarnedXP(t *testing.T) {
+	s := newStore(nil)
+	launch := time.Now().Add(-5 * time.Minute)
+	s.SetGame(runningGame(launch))
+
+	still := movedTo(1058, 1016)
+	s.ApplyTick(Tick{At: launch, Vars: still, Scheduled: true})
+	if v := s.Derive(launch); v.HasSession {
+		t.Fatal("one poll is not evidence of anything")
+	}
+
+	// Same block, more XP.
+	killing := movedTo(1058, 1016)
+	killing["df_exptotal"] = "23480999999"
+	at := launch.Add(10 * time.Second)
+	s.ApplyTick(Tick{At: at, Vars: killing, Scheduled: true})
+
+	v := s.Derive(at.Add(time.Minute))
+	if !v.HasSession {
+		t.Fatal("earning XP is proof of play")
+	}
+	if v.SessionTime != time.Minute {
+		t.Errorf("SessionTime = %s, want 1m from the poll that proved it", v.SessionTime)
+	}
+}
+
+// XP going DOWN, or the tier changing, is not evidence of play: the two
+// cumulative tiers differ by a large constant, so a tier change would look like
+// earning hundreds of thousands of XP out of nowhere.
+func TestRunClockIgnoresXPGoingBackwards(t *testing.T) {
+	s := newStore(nil)
+	start := time.Now()
+	s.SetGame(runningGame(start.Add(-time.Minute)))
+
+	high := movedTo(1058, 1016)
+	high["df_exptotal"] = "23480999999"
+	s.ApplyTick(Tick{At: start, Vars: high, Scheduled: true})
+
+	low := movedTo(1058, 1016)
+	low["df_exptotal"] = "23480000000"
+	s.ApplyTick(Tick{At: start.Add(10 * time.Second), Vars: low, Scheduled: true})
+
+	if v := s.Derive(start.Add(time.Minute)); v.HasSession {
+		t.Error("cumulative XP falling is a death or a correction, not a run starting")
+	}
+}

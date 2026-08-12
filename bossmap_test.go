@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,13 @@ import (
 // testdata/bossmap.json is a real capture. It is safe to keep: the feed is public
 // and carries no account data at all, which is also why this feature needs no
 // credentials.
+// fixtureNow is the instant the capture was taken, which is what its events'
+// start and end times are relative to.
+func fixtureNow(t *testing.T, m *BossMap) time.Time {
+	t.Helper()
+	return m.FetchedAt
+}
+
 func loadFixtureBossMap(t *testing.T) *BossMap {
 	t.Helper()
 	data, err := os.ReadFile("testdata/bossmap.json")
@@ -64,7 +72,7 @@ func TestParseBossMapFixture(t *testing.T) {
 func TestBossMapAtTheBlockTheFeedSaysBandits(t *testing.T) {
 	m := loadFixtureBossMap(t)
 
-	events := m.At(1058, 1016)
+	events := m.At(1058, 1016, fixtureNow(t, m))
 	if len(events) == 0 {
 		t.Fatal("expected an event on 1058, 1016")
 	}
@@ -86,7 +94,7 @@ func TestBossMapAtTheBlockTheFeedSaysBandits(t *testing.T) {
 
 	// A block with nothing on it is the normal case and must come back empty
 	// rather than as an error or a placeholder.
-	if events := m.At(1234, 1234); len(events) != 0 {
+	if events := m.At(1234, 1234, fixtureNow(t, m)); len(events) != 0 {
 		t.Errorf("expected nothing on an empty block, got %+v", events)
 	}
 }
@@ -117,7 +125,7 @@ func TestBossMapClassifiesMissions(t *testing.T) {
 	}
 
 	// "Red Inferno" is a mission with three flaming titans and a kill objective.
-	events := m.At(1029, 1006)
+	events := m.At(1029, 1006, fixtureNow(t, m))
 	if len(events) == 0 {
 		t.Fatal("expected the mission at 1029, 1006")
 	}
@@ -168,13 +176,13 @@ func TestBossMapOnslaught(t *testing.T) {
 		t.Fatal("the capture contains Onslaught cycles; they must be kept")
 	}
 	// Out in the city you must never be told about them.
-	for _, e := range m.At(1058, 1016) {
+	for _, e := range m.At(1058, 1016, fixtureNow(t, m)) {
 		if e.Onslaught {
 			t.Error("an Onslaught cycle surfaced on a city block")
 		}
 	}
 	// In Onslaught, they are exactly what you want to know.
-	if events := m.At(onslaughtCoord, onslaughtCoord); len(events) == 0 {
+	if events := m.At(onslaughtCoord, onslaughtCoord, fixtureNow(t, m)); len(events) == 0 {
 		t.Error("expected the Onslaught cycle at 3000, 3000")
 	}
 }
@@ -185,18 +193,19 @@ func TestBossMapOnslaught(t *testing.T) {
 func TestBossMapPreviousCycle(t *testing.T) {
 	m := loadFixtureBossMap(t)
 
-	past := m.AtEnded(onslaughtCoord, onslaughtCoord)
+	past := m.AtEnded(onslaughtCoord, onslaughtCoord, fixtureNow(t, m))
 	if len(past) == 0 {
 		t.Fatal("the capture has an ended Onslaught cycle; it must be kept, not dropped")
 	}
+	now := fixtureNow(t, m)
 	for _, e := range past {
-		if e.Active {
+		if e.ActiveAt(m.ServerNow(now)) {
 			t.Error("an ended event must not also be active")
 		}
 	}
 	// And the current cycle is still separate from it.
-	for _, e := range m.At(onslaughtCoord, onslaughtCoord) {
-		if e.Ended {
+	for _, e := range m.At(onslaughtCoord, onslaughtCoord, now) {
+		if e.EndedRecentlyAt(m.ServerNow(now)) {
 			t.Error("At must return only the live cycle")
 		}
 	}
@@ -206,8 +215,8 @@ func TestThreatLineMarksThePreviousCycle(t *testing.T) {
 	v := &View{
 		HaveData: true, HasPosition: true,
 		PositionX: onslaughtCoord, PositionY: onslaughtCoord,
-		BlockEvents:     []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Charred Giant Spider"}, Active: true}},
-		BlockEventsPast: []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Irradiated Wraith"}, Ended: true}},
+		BlockEvents:     []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Charred Giant Spider"}}},
+		BlockEventsPast: []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Irradiated Wraith"}}},
 	}
 	text, _, show := threatLine(v)
 	if !show {
@@ -236,17 +245,18 @@ func TestParseBossMapKeepsEndedEventsOutOfAt(t *testing.T) {
 	       "event_type":"","dfp_objectives":[],"start_time":"300","end_time":"400"},
 	  "bosshash":"abc","servertime":350,"version":"1"}`
 
-	m, err := parseBossMap([]byte(raw), time.Unix(350, 0))
+	at := time.Unix(350, 0)
+	m, err := parseBossMap([]byte(raw), at)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(m.Events) != 2 {
 		t.Fatalf("got %d events, want both kept", len(m.Events))
 	}
-	if got := m.At(1000, 1000); len(got) != 1 || got[0].Label() != "1 x Mother" {
+	if got := m.At(1000, 1000, at); len(got) != 1 || got[0].Label() != "1 x Mother" {
 		t.Errorf("got %+v, want only the live event", got)
 	}
-	if got := m.AtEnded(1000, 1000); len(got) != 1 || got[0].Label() != "9 x Titan" {
+	if got := m.AtEnded(1000, 1000, at); len(got) != 1 || got[0].Label() != "9 x Titan" {
 		t.Errorf("got %+v, want the previous cycle available separately", got)
 	}
 }
@@ -263,7 +273,8 @@ func TestParseBossMapOutpostAttack(t *testing.T) {
 	       "event_type":"","dfp_objectives":[],"start_time":"100","end_time":"900"},
 	  "bosshash":"abc","servertime":350,"version":"1"}`
 
-	m, err := parseBossMap([]byte(raw), time.Unix(350, 0))
+	at := time.Unix(350, 0)
+	m, err := parseBossMap([]byte(raw), at)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +283,7 @@ func TestParseBossMapOutpostAttack(t *testing.T) {
 	}
 	// The attack is map-wide, so it must not be filed as an event on the block its
 	// location happens to name.
-	if got := m.At(1000, 1000); len(got) != 0 {
+	if got := m.At(1000, 1000, at); len(got) != 0 {
 		t.Errorf("got %+v, want the outpost attack kept out of the block index", got)
 	}
 }
@@ -291,7 +302,7 @@ func TestParseBossMapRejectsAnEmptyFeed(t *testing.T) {
 func TestThreatLine(t *testing.T) {
 	m := loadFixtureBossMap(t)
 	v := &View{HaveData: true, HasPosition: true, PositionX: 1058, PositionY: 1016}
-	v.BlockEvents = m.At(1058, 1016)
+	v.BlockEvents = m.At(1058, 1016, fixtureNow(t, m))
 
 	text, urgent, show := threatLine(v)
 	if !show || !strings.Contains(text, "6 x Bandits") {
@@ -312,5 +323,112 @@ func TestThreatLine(t *testing.T) {
 	text, urgent, show = threatLine(attack)
 	if !show || !urgent || !strings.Contains(text, "OUTPOST ATTACK") {
 		t.Errorf("threatLine = %q, urgent=%v", text, urgent)
+	}
+}
+
+// The point of deriving state from the clock: one fetch stays correct through a
+// changeover, with no request at the moment it matters.
+//
+// This is what was observed live - the feed carries the next cycle before it
+// starts (appearing around :59 for a cycle that begins at :00) and keeps the
+// previous one for minutes afterwards - so the information needed to switch over
+// is already in hand well before the switch.
+func TestBossMapCrossesABoundaryWithoutRefetching(t *testing.T) {
+	// Fetched at :59:00. One cycle ends at :00:00, the next begins there.
+	fetched := time.Date(2026, 8, 12, 13, 59, 0, 0, time.UTC)
+	turnover := time.Date(2026, 8, 12, 14, 0, 0, 0, time.UTC)
+	raw := `{
+	  "0":{"event_id":"now","isoa":"0","locations":[["1058","1016"]],"started":"1","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"6 x Bandits","special_enemy_amount":"6","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],
+	       "start_time":"` + unixStr(turnover.Add(-time.Hour)) + `",
+	       "end_time":"` + unixStr(turnover) + `"},
+	  "1":{"event_id":"next","isoa":"0","locations":[["1058","1016"]],"started":"0","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"2 x Titan","special_enemy_amount":"2","boss_num":"2",
+	       "event_type":"","dfp_objectives":[],
+	       "start_time":"` + unixStr(turnover) + `",
+	       "end_time":"` + unixStr(turnover.Add(time.Hour)) + `"},
+	  "bosshash":"abc","servertime":` + unixStr(fetched) + `,"version":"1"}`
+
+	m, err := parseBossMap([]byte(raw), fetched)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Before the changeover: this cycle only. The next one is in the map but must
+	// not be presented as though it were here.
+	got := m.At(1058, 1016, fetched)
+	if len(got) != 1 || got[0].Label() != "6 x Bandits" {
+		t.Fatalf("before the turnover: %+v", got)
+	}
+
+	// One second after, with no new fetch at all.
+	got = m.At(1058, 1016, turnover.Add(time.Second))
+	if len(got) != 1 || got[0].Label() != "2 x Titan" {
+		t.Fatalf("after the turnover: %+v, want the new cycle from the cached map", got)
+	}
+	// And the one that just finished is available as the previous cycle.
+	past := m.AtEnded(1058, 1016, turnover.Add(time.Second))
+	if len(past) != 1 || past[0].Label() != "6 x Bandits" {
+		t.Errorf("previous cycle = %+v", past)
+	}
+	// But not forever: an event that finished long ago is not news.
+	if past := m.AtEnded(1058, 1016, turnover.Add(30*time.Minute)); len(past) != 0 {
+		t.Errorf("still reporting a cycle that ended half an hour ago: %+v", past)
+	}
+
+	// The boundary is what the schedule is built from.
+	if b := m.NextBoundary(fetched, false); !b.Equal(turnover) {
+		t.Errorf("NextBoundary = %s, want the turnover at %s", b, turnover)
+	}
+	// Past it, the next boundary is the following one rather than nothing.
+	if b := m.NextBoundary(turnover.Add(time.Second), false); !b.Equal(turnover.Add(time.Hour)) {
+		t.Errorf("NextBoundary after the turnover = %s", b)
+	}
+}
+
+// unixStr writes an instant the way the feed does: unix seconds, as a string.
+func unixStr(t time.Time) string { return strconv.FormatInt(t.Unix(), 10) }
+
+// Onslaught cycles are five minutes long and always in the feed, so counting them
+// unconditionally would drag the whole schedule down to five minutes for a player
+// out in the city who cannot see them.
+func TestBossMapNextBoundaryIgnoresOnslaughtInTheCity(t *testing.T) {
+	m := loadFixtureBossMap(t)
+	now := fixtureNow(t, m)
+
+	city := m.NextBoundary(now, false)
+	both := m.NextBoundary(now, true)
+	if city.IsZero() || both.IsZero() {
+		t.Fatalf("boundaries: city %s, both %s", city, both)
+	}
+	if !both.Before(city) {
+		t.Errorf("with Onslaught counted the next boundary should be sooner: %s vs %s", both, city)
+	}
+}
+
+func TestBossPollerNextDelayClamps(t *testing.T) {
+	cfg := defaultConfig()
+	m := loadFixtureBossMap(t)
+	now := fixtureNow(t, m)
+
+	p := newBossPoller(nil, nil, func() *Config { return cfg }, func() bool { return false })
+	// No map yet: the heartbeat, which is what catches the once-a-day random
+	// spawns that no boundary predicts.
+	if got := p.nextDelay(now); got < 4*time.Minute || got > 6*time.Minute {
+		t.Errorf("with no map, delay = %s, want about the 5m heartbeat", got)
+	}
+
+	p.current = m
+	// A boundary sooner than the heartbeat wins.
+	if got := p.nextDelay(now); got > 5*time.Minute+30*time.Second {
+		t.Errorf("delay = %s, want no more than the heartbeat", got)
+	}
+	// And the minimum interval is never breached, however close the boundary is.
+	late := m.NextBoundary(now, false).Add(-time.Second)
+	if got := p.nextDelay(late); got < cfg.BossMap.Interval.Duration-time.Second {
+		t.Errorf("delay = %s, want at least the %s minimum", got, cfg.BossMap.Interval)
 	}
 }

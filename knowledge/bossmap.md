@@ -49,3 +49,35 @@ value inside an event is a **string**, including numbers and booleans.
 Onslaught cycles are five minutes long and overlap - last cycle's boss is
 routinely still standing there - so the previous cycle is shown for that block
 alone, marked `last:`. City cycles are hourly, where the previous boss has gone.
+
+
+## Cycles, from the player rather than from the data
+
+Not everything in the feed follows the hourly cycle, which matters for how often
+it is worth fetching:
+
+| what | cycle |
+| --- | --- |
+| city bosses, bandit packs, QRF | on the hour, `XX:00` |
+| Onslaught (block `3000,3000`) | every 5 minutes |
+| Devil Hound, Behemoth, Volatile Leaper, 8x Bandits | **once a day at a random time**, lasting 3 hours for the zombies and 2 for the bandits |
+
+The last row is why a heartbeat exists at all: nothing in the data predicts a
+random daily spawn appearing, so no amount of boundary arithmetic will catch one.
+
+## The feed carries the changeover before it happens
+
+Observed live: around `:59` the next cycle is already in the response with
+`started = "0"`, and for some minutes after `:00` the previous one is still there
+with `ended = "1"`. Both carry their own `start_time` and `end_time`.
+
+So a single fetch made at `:59` contains everything needed to be correct at
+`:01`, and df-hud derives an event's state from those timestamps against the
+clock rather than from the `started`/`ended` flags. The changeover then costs no
+request at all and lands on the second rather than at the next poll.
+
+The schedule that falls out of this: fetch shortly after the next boundary in the
+data, on arriving at a new block (which is the only question the feed answers),
+and otherwise on a heartbeat for the random spawns. The minimum gap is a floor
+none of those can breach, and jitter is applied before the floor rather than
+after, so it can never reduce it.

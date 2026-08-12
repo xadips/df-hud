@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -408,11 +409,20 @@ func (s *Store) ApplyTick(tick Tick) bool {
 // be minutes ahead of any playing, and a clock counting that is timing a loading
 // screen.
 //
-// The signal is MOVEMENT: the run starts at the first poll where the position has
-// changed. That is the one piece of evidence that cannot be faked by a game
-// sitting at its launcher - nothing on the server moves your character while you
-// are looking at a Launch button - and it matches what a player means by starting
-// a run, which is the moment they start moving.
+// The signal is EVIDENCE OF PLAY, of which there are two independent kinds and
+// either will do:
+//
+//   - the position changed, or
+//   - cumulative XP went up.
+//
+// Neither can happen while a launcher sits on screen: nothing on the server moves
+// your character or awards XP while you are looking at a Launch button. Two
+// signals rather than one because each covers the other's blind spot - XP catches
+// a player killing things without leaving the block, and movement catches one
+// walking to somewhere worth killing. It also insures the clock against
+// df_positionx/y turning out to be updated less often than it appears to be,
+// which is an open question: 1623 consecutive polls of an unchanged position were
+// observed in one session.
 //
 // Two rejected alternatives, both tried:
 //
@@ -433,6 +443,10 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 		(s.prevSnap.PositionX != snap.PositionX ||
 			s.prevSnap.PositionY != snap.PositionY ||
 			s.prevSnap.PositionZ != snap.PositionZ)
+	// Compared only within the same XP tier: the two differ by a large constant,
+	// so a tier change would look like earning hundreds of thousands of XP.
+	earned := s.havePrev && snap.XPSource == s.prevSnap.XPSource &&
+		snap.CumulativeXP > s.prevSnap.CumulativeXP
 
 	switch {
 	case snap.InOutpost:
@@ -441,11 +455,15 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 				snap.At.Sub(s.runStart).Round(time.Second))
 		}
 		s.runStart = time.Time{}
-	case s.runStart.IsZero() && moved:
+	case s.runStart.IsZero() && (moved || earned):
 		// Timed from the observation that proves it, not from the one before it:
 		// never claim to have been playing for longer than there is evidence for.
 		s.runStart = snap.At
-		log.Printf("session: run started (moved to %d, %d)", snap.PositionX, snap.PositionY)
+		why := "earned xp"
+		if moved {
+			why = fmt.Sprintf("moved to %d, %d", snap.PositionX, snap.PositionY)
+		}
+		log.Printf("session: run started (%s)", why)
 	}
 
 	// Evidence for the two unconfirmed fields, gathered while the game is being
@@ -743,12 +761,12 @@ func (s *Store) Derive(now time.Time) *View {
 		v.BossMapAge = s.bossMap.Age(now)
 		v.OutpostAttack = s.bossMap.OutpostAttack
 		if v.HasPosition {
-			v.BlockEvents = s.bossMap.At(v.PositionX, v.PositionY)
+			v.BlockEvents = s.bossMap.At(v.PositionX, v.PositionY, now)
 			if v.PositionX == onslaughtCoord && v.PositionY == onslaughtCoord {
 				// Onslaught only. Its cycle is five minutes and the cycles overlap,
 				// so last cycle's boss is often still in front of you. Out in the
 				// city the cycle is an hour and the previous boss is gone.
-				v.BlockEventsPast = s.bossMap.AtEnded(v.PositionX, v.PositionY)
+				v.BlockEventsPast = s.bossMap.AtEnded(v.PositionX, v.PositionY, now)
 			}
 		}
 	}

@@ -344,7 +344,11 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 	// The event feed is a different server with a different budget, so it gets its
 	// own client and its own scheduler rather than sharing the game's rate gate -
 	// coupling them would let one starve the other for no benefit.
-	a.bosses = newBossPoller(&http.Client{Timeout: cfg.DF.Timeout.Duration}, a.game, a.Config)
+	a.bosses = newBossPoller(&http.Client{Timeout: cfg.DF.Timeout.Duration}, a.game, a.Config,
+		func() bool {
+			snap, ok := a.store.Snapshot()
+			return ok && snap.PositionX == onslaughtCoord && snap.PositionY == onslaughtCoord
+		})
 	a.bosses.SetOnMap(func(m *BossMap) { a.store.SetBossMap(m) })
 
 	a.challenges.SetOnBoard(func(board []Challenge) {
@@ -368,6 +372,7 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 	// paused makes it poll again as soon as the shared gate allows, which would
 	// quietly pull the board's cadence down to the minimum request gap.
 	levelSeen := false
+	var lastBlock [2]int
 	a.poller.SetOnTick(func(tick Tick) {
 		a.store.ApplyTick(tick)
 		a.store.SetPollerStatus(a.poller.Status())
@@ -377,6 +382,17 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 			if snap, ok := a.store.Snapshot(); ok && snap.Level > 0 {
 				levelSeen = true
 				a.challenges.Wake()
+			}
+		}
+		// Arriving on a new block is the moment the event map matters, since what
+		// is standing on the block you just walked onto is the only question it
+		// answers. Subject to the minimum interval, so walking cannot turn into a
+		// burst.
+		if snap, ok := a.store.Snapshot(); ok && snap.HasPosition {
+			block := [2]int{snap.PositionX, snap.PositionY}
+			if block != lastBlock {
+				lastBlock = block
+				a.bosses.Wake()
 			}
 		}
 	})

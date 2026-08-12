@@ -237,9 +237,16 @@ type HUDConfig struct {
 // it gets its own switch and its own interval rather than being folded into the
 // poll section. Turning it off costs the threat line and nothing else.
 type BossMapConfig struct {
-	Enabled  bool     `toml:"enabled"`
-	URL      string   `toml:"url"`
+	Enabled bool   `toml:"enabled"`
+	URL     string `toml:"url"`
+
+	// Interval is the MINIMUM gap between fetches, not the cadence. The schedule
+	// itself comes from the feed's own event boundaries plus arriving on a new
+	// block; this is the floor none of that can breach.
 	Interval duration `toml:"interval"`
+	// MaxInterval is the heartbeat, for the events that follow no cycle: the
+	// once-a-day random spawns that nothing in the data predicts.
+	MaxInterval duration `toml:"max_interval"`
 }
 
 // TrayConfig is the StatusNotifierItem in the system tray.
@@ -397,7 +404,8 @@ func defaultConfig() *Config {
 			// One minute: half of what dfprofiler's own page costs them per open
 			// tab, and enough to notice a spawn within a minute of the hour
 			// turning over, which is when they appear.
-			Interval: duration{time.Minute},
+			Interval:    duration{time.Minute},
+			MaxInterval: duration{5 * time.Minute},
 		},
 		Tray: TrayConfig{Enabled: true},
 		Widget: WidgetConfig{
@@ -571,6 +579,11 @@ func (c *Config) validate() error {
 			errs = append(errs, fmt.Errorf("bossmap.url %q must be an absolute https URL", c.BossMap.URL))
 		}
 		errs = appendFloor(errs, "bossmap.interval", c.BossMap.Interval.Duration, floorBossMapInterval)
+		if c.BossMap.MaxInterval.Duration < c.BossMap.Interval.Duration {
+			errs = append(errs, fmt.Errorf("bossmap.max_interval (%s) is shorter than bossmap.interval (%s): "+
+				"the heartbeat cannot be tighter than the minimum gap",
+				c.BossMap.MaxInterval, c.BossMap.Interval))
+		}
 	}
 
 	// --- hud ---
@@ -806,6 +819,9 @@ func (c *Config) RequestsPerHour(activeFraction float64) float64 {
 		// Counted in the same number even though it is a different server: the
 		// point of the budget is to be able to answer "how much traffic does this
 		// thing make", and an honest answer includes everybody's.
+		//
+		// The minimum interval is used, so this is the WORST case - a player who
+		// changes block continuously. Standing still costs the heartbeat instead.
 		total += activeFraction * perHour(c.BossMap.Interval.Duration)
 	}
 	return total

@@ -48,6 +48,10 @@ import (
 // also left off, so any HTTP cache in between is free to help.
 const defaultBossMapURL = "https://www.dfprofiler.com/bossmap/json/"
 
+// bossMapPastWindow is how long a finished event stays worth mentioning. Sized
+// for Onslaught, whose cycles are five minutes and overlap in practice.
+const bossMapPastWindow = 6 * time.Minute
+
 // onslaughtCoord is the block Onslaught events sit on.
 //
 // Their own page treats it as "off screen" and labels it "OS", because the city
@@ -102,22 +106,53 @@ type CityEvent struct {
 	Start     time.Time
 	End       time.Time
 
-	// Active means started and not ended; Upcoming has a slot but has not begun;
-	// Ended is last cycle's.
-	//
-	// Ended events are KEPT rather than dropped, because whether they still matter
-	// depends on the cycle. Out in the city the cycles are hourly and their own
-	// page hides the previous one by default. In Onslaught the cycle is five
-	// minutes and they overlap in practice - the boss from the last cycle is still
-	// standing there - so the previous one is real information. See AtEnded.
-	Active   bool
-	Upcoming bool
-	Ended    bool
+	// startedFlag and endedFlag are the feed's own booleans, used only when an
+	// event carries no usable timestamps. Everything else derives state from
+	// Start and End against the clock - see ActiveAt.
+	startedFlag bool
+	endedFlag   bool
 
 	// Onslaught marks the boss cycles that run in the instanced Onslaught mode
 	// rather than out on the city map. They shift every five minutes, which is the
 	// tightest cycle in the feed and the reason a one-minute poll is worth having.
 	Onslaught bool
+}
+
+// ActiveAt reports whether this event is happening at a given instant.
+//
+// Derived from the event's own start and end times rather than from the feed's
+// started/ended flags, and this is the whole trick: the feed contains the NEXT
+// cycle before it begins (observed appearing around :59 for a cycle that starts
+// at :00) and keeps the PREVIOUS one for minutes afterwards. Deciding from the
+// clock means one fetch stays correct straight through a changeover, with no
+// request at the moment it matters and no window where the HUD shows a boss that
+// has gone or hides one that has arrived.
+//
+// The flags are the fallback for an event with no usable timestamps, so a feed
+// that stops sending them degrades to what it used to do rather than to nothing.
+func (e CityEvent) ActiveAt(now time.Time) bool {
+	if e.Start.IsZero() || e.End.IsZero() {
+		return e.startedFlag && !e.endedFlag
+	}
+	return !now.Before(e.Start) && now.Before(e.End)
+}
+
+// UpcomingAt is an event with a slot that has not begun.
+func (e CityEvent) UpcomingAt(now time.Time) bool {
+	if e.Start.IsZero() {
+		return !e.startedFlag && !e.endedFlag
+	}
+	return now.Before(e.Start)
+}
+
+// EndedRecentlyAt is last cycle's, and only while "last cycle" still means
+// something. The window exists because an event that finished an hour ago is not
+// news, and the feed can carry one for a while.
+func (e CityEvent) EndedRecentlyAt(now time.Time) bool {
+	if e.End.IsZero() {
+		return e.endedFlag
+	}
+	return !now.Before(e.End) && now.Sub(e.End) <= bossMapPastWindow
 }
 
 // Label is the one-line form for the HUD.
@@ -151,6 +186,12 @@ type BossMap struct {
 	Hash   string
 	Events []CityEvent
 
+	// skew is the feed's clock minus ours at the moment of the fetch. Every
+	// boundary in the feed is in their time, so comparing against our clock
+	// without this makes a changeover land early or late by however far the two
+	// have drifted.
+	skew time.Duration
+
 	// OutpostAttack is the feed's isoa flag: every outpost is under attack. It is
 	// map-wide rather than per-block, and it is the sort of thing worth knowing
 	// wherever you happen to be standing.
@@ -159,11 +200,23 @@ type BossMap struct {
 	byBlock map[[2]int][]int
 }
 
-// At returns the ACTIVE events on one block. Upcoming ones are deliberately not
-// included: "a titan will be here in forty minutes" is planning information, not
-// something to put in front of someone who is being chased.
-func (b *BossMap) At(x, y int) []CityEvent {
-	return b.eventsAt(x, y, func(e CityEvent) bool { return e.Active })
+// ServerNow converts a local instant into the feed's clock.
+func (b *BossMap) ServerNow(now time.Time) time.Time {
+	if b == nil {
+		return now
+	}
+	return now.Add(b.skew)
+}
+
+// At returns the events happening on one block at a given instant.
+//
+// Upcoming ones are deliberately excluded: "a titan will be here in forty
+// minutes" is planning information, not something to put in front of someone who
+// is being chased. They are still in the map, which is what lets a cached fetch
+// become correct on its own when their start time arrives.
+func (b *BossMap) At(x, y int, now time.Time) []CityEvent {
+	server := b.ServerNow(now)
+	return b.eventsAt(x, y, func(e CityEvent) bool { return e.ActiveAt(server) })
 }
 
 // AtEnded returns the previous cycle's events on one block.
@@ -173,8 +226,9 @@ func (b *BossMap) At(x, y int) []CityEvent {
 // is routinely still standing there when the next one appears. The caller decides
 // whether to ask - out in the city, where cycles are hourly, the previous cycle is
 // a boss that has gone, and reporting it would send you somewhere for nothing.
-func (b *BossMap) AtEnded(x, y int) []CityEvent {
-	return b.eventsAt(x, y, func(e CityEvent) bool { return e.Ended })
+func (b *BossMap) AtEnded(x, y int, now time.Time) []CityEvent {
+	server := b.ServerNow(now)
+	return b.eventsAt(x, y, func(e CityEvent) bool { return e.EndedRecentlyAt(server) })
 }
 
 func (b *BossMap) eventsAt(x, y int, keep func(CityEvent) bool) []CityEvent {
@@ -188,6 +242,46 @@ func (b *BossMap) eventsAt(x, y int, keep func(CityEvent) bool) []CityEvent {
 		}
 	}
 	return out
+}
+
+// NextBoundary is the next instant at which this map's answer changes: the
+// earliest start or end still ahead of now, in local time. Zero when there is
+// none.
+//
+// This is what replaces polling on a fixed timer. The feed tells us exactly when
+// it will next be wrong, so the schedule can be derived from the data instead of
+// guessed at, which is both fresher at the moments that matter and quieter at the
+// ones that do not.
+//
+// withOnslaught decides whether the five-minute Onslaught cycles count. They are
+// always in the feed, so including them unconditionally would pull the whole
+// schedule down to five minutes for someone who is out in the city and cannot see
+// them.
+func (b *BossMap) NextBoundary(now time.Time, withOnslaught bool) time.Time {
+	if b == nil {
+		return time.Time{}
+	}
+	server := b.ServerNow(now)
+	var best time.Time
+	consider := func(t time.Time) {
+		if t.IsZero() || !t.After(server) {
+			return
+		}
+		if best.IsZero() || t.Before(best) {
+			best = t
+		}
+	}
+	for _, e := range b.Events {
+		if e.Onslaught && !withOnslaught {
+			continue
+		}
+		consider(e.Start)
+		consider(e.End)
+	}
+	if best.IsZero() {
+		return time.Time{}
+	}
+	return best.Add(-b.skew) // back into local time
 }
 
 // Age is how stale this fetch is, for deciding whether to trust it.
@@ -243,6 +337,7 @@ func parseBossMap(data []byte, fetchedAt time.Time) (*BossMap, error) {
 	}
 	if serverTime > 0 {
 		out.ServerTime = time.Unix(serverTime, 0)
+		out.skew = out.ServerTime.Sub(fetchedAt)
 	} else {
 		out.ServerTime = fetchedAt
 	}
@@ -265,13 +360,12 @@ func parseBossMap(data []byte, fetchedAt time.Time) (*BossMap, error) {
 			continue
 		}
 		event := CityEvent{
-			ID:       re.EventID,
-			Kind:     classifyBossEvent(re),
-			Title:    strings.TrimSpace(html.UnescapeString(re.Title)),
-			Enemies:  splitEnemyTypes(re.SpecialEnemyType),
-			Ended:    re.Ended == "1",
-			Active:   re.Started == "1" && re.Ended != "1",
-			Upcoming: re.Started == "0" && re.Ended != "1",
+			ID:          re.EventID,
+			Kind:        classifyBossEvent(re),
+			Title:       strings.TrimSpace(html.UnescapeString(re.Title)),
+			Enemies:     splitEnemyTypes(re.SpecialEnemyType),
+			startedFlag: re.Started == "1",
+			endedFlag:   re.Ended == "1",
 		}
 		event.RewardExp, _ = strconv.ParseInt(re.RewardExp, 10, 64)
 		if secs, err := strconv.ParseInt(re.StartTime, 10, 64); err == nil && secs > 0 {
@@ -400,12 +494,34 @@ func fetchBossMap(ctx context.Context, client *http.Client, url, userAgent strin
 }
 
 // BossPoller keeps the event map current while the game is running.
+//
+// The schedule is derived from three things rather than from a fixed timer, which
+// is both fresher where it matters and quieter where it does not:
+//
+//  1. The next boundary in the data. Every event states when it starts and ends,
+//     so the feed says exactly when it will next be wrong. Most cycles turn over
+//     on the hour, and a poll a few seconds later picks the new one up.
+//  2. Arriving on a new block. What is on the block you just walked onto is the
+//     one question this feed answers, so that is the moment to be current.
+//  3. A heartbeat, for the events that follow no cycle at all: Devil Hound,
+//     Behemoth, Volatile Leaper and the 8x bandit packs spawn once a day at a
+//     random time and last two or three hours, so nothing in the data predicts
+//     them appearing.
+//
+// Underneath all three is the minimum interval, which nothing can breach.
 type BossPoller struct {
 	client *http.Client
 	game   *GameWatcher
 	cfg    func() *Config
+	// inOnslaught decides whether the five-minute Onslaught cycles are worth
+	// scheduling around. They are always in the feed, so counting them for a
+	// player out in the city would drag the whole schedule down to five minutes
+	// for events they cannot see.
+	inOnslaught func() bool
 
 	onMap func(*BossMap)
+	// current is the last good map, kept so the schedule can be read out of it.
+	current *BossMap
 
 	wake chan struct{}
 
@@ -415,12 +531,14 @@ type BossPoller struct {
 	lastHash string
 }
 
-func newBossPoller(client *http.Client, game *GameWatcher, cfg func() *Config) *BossPoller {
+func newBossPoller(client *http.Client, game *GameWatcher, cfg func() *Config,
+	inOnslaught func() bool) *BossPoller {
 	return &BossPoller{
-		client: client,
-		game:   game,
-		cfg:    cfg,
-		wake:   make(chan struct{}, 1),
+		client:      client,
+		game:        game,
+		cfg:         cfg,
+		inOnslaught: inOnslaught,
+		wake:        make(chan struct{}, 1),
 	}
 }
 
@@ -512,8 +630,44 @@ func (p *BossPoller) Run(ctx context.Context) {
 			next = time.Now().Add(p.backoff())
 			continue
 		}
-		next = time.Now().Add(p.jittered(p.cfg().BossMap.Interval.Duration))
+		next = time.Now().Add(p.nextDelay(time.Now()))
 	}
+}
+
+// bossMapBoundarySlack is how long after a changeover to poll. A few seconds,
+// because the event's own end time is when it stops being true and their server
+// needs a moment to have published the replacement.
+const bossMapBoundarySlack = 5 * time.Second
+
+// nextDelay is how long to wait before the next fetch.
+func (p *BossPoller) nextDelay(now time.Time) time.Duration {
+	cfg := p.cfg()
+	min := cfg.BossMap.Interval.Duration
+	max := cfg.BossMap.MaxInterval.Duration
+	if max < min {
+		max = min
+	}
+
+	p.mu.RLock()
+	current := p.current
+	p.mu.RUnlock()
+
+	onslaught := p.inOnslaught != nil && p.inOnslaught()
+	delay := max
+	if boundary := current.NextBoundary(now, onslaught); !boundary.IsZero() {
+		if until := boundary.Add(bossMapBoundarySlack).Sub(now); until < delay {
+			delay = until
+		}
+	}
+	// Jittered BEFORE the floor is applied, not after. Jitter is allowed to spread
+	// requests out; it is not allowed to breach a minimum that exists to protect
+	// somebody else's server. Clamping last is what makes the floor absolute - a
+	// test caught 60s of minimum becoming 54s of actual.
+	delay = p.jittered(delay)
+	if delay < min {
+		delay = min
+	}
+	return delay
 }
 
 func (p *BossPoller) backoff() time.Duration {
@@ -553,6 +707,7 @@ func (p *BossPoller) pollOnce(ctx context.Context) error {
 		return err
 	}
 	p.failures, p.lastErr = 0, ""
+	p.current = m
 	changed := p.lastHash != "" && p.lastHash != m.Hash
 	first := p.lastHash == ""
 	p.lastHash = m.Hash
