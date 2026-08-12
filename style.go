@@ -28,37 +28,70 @@ label {
   font-weight: bold;
   text-shadow: 0 0 4px #000, 1px 1px 0 #000, -1px -1px 0 #000;
 }
-label.status {
+/* Every rule below is a STATE colour: it says something the text cannot, and it
+   has to survive a per-group colour being configured over the top of it.
+
+   Hence the redundant-looking "window" on each one. A group override is
+   ".group-x label", which has exactly the same CSS specificity as "label.threat"
+   and comes later in the sheet, so it would win the tie and silently take the
+   amber off a bandit pack. Scoping to the window outranks it by one element
+   instead, which settles the question by specificity rather than by which rule
+   happens to be appended last. */
+window label.status {
   color: #ff6b6b;
 }
-label.fixable {
+window label.fixable {
   color: #ffd166;
 }
 /* Rate stability. Amber for one missed poll, red for two or more: the number
    still looks authoritative when the window has a hole in it, so the colour is
    how the HUD says so. */
-label.shaky {
+window label.shaky {
   color: #ffd166;
 }
-label.unstable {
+window label.unstable {
   color: #ff6b6b;
 }
 /* What is on your block. Amber because it is a warning rather than a failure;
    an outpost attack is map-wide and gets the red. */
-label.threat {
+window label.threat {
   color: #ffd166;
 }
-label.threat.urgent {
+window label.threat.urgent {
   color: #ff6b6b;
 }
 `
 
-// groupClass is the CSS class carrying one group's font overrides. Prefixed so a
+// groupClass is the CSS class carrying one group's font and colour overrides. Prefixed so a
 // group can never collide with the state classes (status, threat, shaky) that
 // widgets add to individual labels.
 func groupClass(name string) string { return "group-" + name }
 
-// widgetFontCSS is the per-group font overrides, appended to the base sheet.
+// groupStyle is one group's appearance, gathered from wherever it lives in the
+// config so the generator below reads as a list rather than as five special cases.
+//
+// Colour is separate from Placement because the status banner does not have one:
+// its red and amber ARE the message, so there is deliberately no key to override
+// them with. Better an asymmetry that means something than a key that is accepted
+// and then ignored.
+type groupStyle struct {
+	name  string
+	place Placement
+	color string
+}
+
+func groupStyles(cfg *Config) []groupStyle {
+	return []groupStyle{
+		{name: "status", place: cfg.Widget.Status.Placement},
+		{name: "block", place: cfg.Widget.Block.Placement, color: cfg.Widget.Block.Color},
+		{name: "session", place: cfg.Widget.Session.Placement, color: cfg.Widget.Session.Color},
+		{name: "xp", place: cfg.Widget.XP.Placement, color: cfg.Widget.XP.Color},
+		{name: "challenges", place: cfg.Widget.Challenges.Placement, color: cfg.Widget.Challenges.Color},
+	}
+}
+
+// widgetStyleCSS is the per-group font and colour overrides, appended to the base
+// sheet.
 //
 // Two selectors per group because a group's root is sometimes a bare label
 // (the clock, the rate) and sometimes a box of them (block info, the board).
@@ -66,27 +99,25 @@ func groupClass(name string) string { return "group-" + name }
 // plain `label` rule in the base sheet - a class beats a type selector, which is
 // what makes an override take without !important anywhere.
 //
-// A group with neither key set contributes nothing at all, so the common case
-// generates no CSS and inherits [hud] exactly as before.
-func widgetFontCSS(cfg *Config) string {
-	groups := []struct {
-		name  string
-		place Placement
-	}{
-		{"status", cfg.Widget.Status.Placement},
-		{"block", cfg.Widget.Block.Placement},
-		{"session", cfg.Widget.Session.Placement},
-		{"xp", cfg.Widget.XP.Placement},
-		{"challenges", cfg.Widget.Challenges.Placement},
-	}
+// A group that sets none of the keys contributes nothing at all, so the common
+// case generates no CSS and inherits [hud] exactly as before.
+//
+// A configured colour is the group's NORMAL colour. The state colours in the base
+// sheet still win, because those carry information the colour cannot: a rate that
+// has stopped being reliable, an outpost attack, a block with bandits on it. See
+// the note in hudCSS for how that is enforced.
+func widgetStyleCSS(cfg *Config) string {
 	var b strings.Builder
-	for _, g := range groups {
+	for _, g := range groupStyles(cfg) {
 		var decls string
 		if g.place.FontFamily != "" {
 			decls += fmt.Sprintf("  font-family: %s;\n", g.place.FontFamily)
 		}
 		if g.place.FontSize > 0 {
 			decls += fmt.Sprintf("  font-size: %.1fpt;\n", g.place.FontSize)
+		}
+		if g.color != "" {
+			decls += fmt.Sprintf("  color: %s;\n", g.color)
 		}
 		if decls == "" {
 			continue
@@ -106,5 +137,5 @@ func widgetSignature(cfg *Config) string { return fmt.Sprintf("%+v", cfg.Widget)
 // order so the overrides win.
 func styleSheet(cfg *Config) string {
 	return fmt.Sprintf(hudCSS, cfg.HUD.TextColor, cfg.HUD.FontFamily, cfg.HUD.FontSize) +
-		widgetFontCSS(cfg)
+		widgetStyleCSS(cfg)
 }

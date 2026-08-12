@@ -182,6 +182,18 @@ func TestConfigCrossFieldRules(t *testing.T) {
 			body: "[widget.block]\nfont_size = -2\n",
 			want: "font_size",
 		},
+		"widget colour malformed": {
+			// GTK skips a rule it cannot parse without a word, so a bad hex value
+			// would leave the group looking untouched with nothing to grep for.
+			body: "[widget.xp]\ncolor = \"#gg0000\"\n",
+			want: "widget.xp.color",
+		},
+		"widget colour is a stylesheet": {
+			// This one is interpolated into CSS, so a brace is an injection rather
+			// than a typo.
+			body: "[widget.block]\ncolor = \"red; font-size: 90pt\"\n",
+			want: "widget.block.color",
+		},
 		"console too small": {
 			body: "[console]\nwidth = 100\nheight = 100\n",
 			want: "too small",

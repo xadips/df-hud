@@ -5,22 +5,23 @@ import (
 	"testing"
 )
 
-// The default config sets no per-group font, so it must generate no CSS at all.
+// The default config sets no per-group font or colour, so it must generate no CSS
+// at all.
 // A rule emitted for every group would be five rules overriding [hud] with the
 // same values it already has - harmless until someone changes hud.font_size and
 // finds it does nothing.
-func TestWidgetFontCSSIsEmptyByDefault(t *testing.T) {
-	if got := widgetFontCSS(defaultConfig()); got != "" {
-		t.Errorf("widgetFontCSS = %q, want nothing when no group overrides anything", got)
+func TestWidgetStyleCSSIsEmptyByDefault(t *testing.T) {
+	if got := widgetStyleCSS(defaultConfig()); got != "" {
+		t.Errorf("widgetStyleCSS = %q, want nothing when no group overrides anything", got)
 	}
 }
 
-func TestWidgetFontCSSOverrides(t *testing.T) {
+func TestWidgetStyleCSSOverrides(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Widget.XP.FontSize = 22
 	cfg.Widget.Challenges.FontFamily = "Iosevka"
 
-	got := widgetFontCSS(cfg)
+	got := widgetStyleCSS(cfg)
 
 	// Both selectors, because a group's root is a bare label for the rate and a box
 	// of labels for the board. Only the pair covers both shapes.
@@ -31,7 +32,7 @@ func TestWidgetFontCSSOverrides(t *testing.T) {
 		"font-family: Iosevka;",
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("widgetFontCSS is missing %q:\n%s", want, got)
+			t.Errorf("widgetStyleCSS is missing %q:\n%s", want, got)
 		}
 	}
 	// A group that overrides only the size must not also pin the family, or it
@@ -77,5 +78,59 @@ func TestGroupClassIsNamespaced(t *testing.T) {
 	}
 	if got := groupClass("xp"); got != "group-xp" {
 		t.Errorf("groupClass(xp) = %q", got)
+	}
+}
+
+// Per-group colour, and the precedence that makes it safe.
+//
+// A configured colour is the group's NORMAL colour; the state colours have to keep
+// winning, because they say what the text cannot - that a rate is averaged over a
+// window with a hole in it, or that there are bandits where you are standing.
+//
+// This is settled by specificity rather than by which rule is appended last: a
+// group override is ".group-x label" and a state rule is "window label.threat",
+// which outranks it by one element. Without the window scope the two would tie and
+// the later one would win, silently taking the amber off a bandit pack.
+func TestStyleSheetColourPrecedence(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Widget.Block.Color = "#88ccff"
+	cfg.Widget.XP.Color = "#ffffff"
+
+	sheet := styleSheet(cfg)
+	if !strings.Contains(sheet, "color: #88ccff;") || !strings.Contains(sheet, "color: #ffffff;") {
+		t.Fatalf("the configured colours never reached the sheet:\n%s", sheet)
+	}
+
+	// Every state rule must be window-scoped, or a group colour would beat it.
+	for _, state := range []string{"status", "fixable", "shaky", "unstable", "threat"} {
+		scoped := "window label." + state
+		if !strings.Contains(sheet, scoped) {
+			t.Errorf("state rule for .%s is not window-scoped, so a per-group colour would win it:\n%s",
+				state, sheet)
+		}
+		// And the unscoped form must not appear, which is what would happen if
+		// someone "tidied" the selector back.
+		for _, line := range strings.Split(sheet, "\n") {
+			if strings.HasPrefix(line, "label."+state) {
+				t.Errorf("found an unscoped state rule %q; it would tie with a group colour", line)
+			}
+		}
+	}
+}
+
+// The status banner has no colour key at all: its red and amber ARE the message.
+// A key that was accepted and then silently outranked would be worse than not
+// offering one.
+func TestStatusGroupHasNoColourKey(t *testing.T) {
+	for _, g := range groupStyles(defaultConfig()) {
+		if g.name == "status" && g.color != "" {
+			t.Errorf("the status group should carry no colour, got %q", g.color)
+		}
+	}
+	// It still takes placement and font, which is the whole reason it is a group.
+	cfg := defaultConfig()
+	cfg.Widget.Status.FontSize = 30
+	if !strings.Contains(widgetStyleCSS(cfg), ".group-status") {
+		t.Error("the status banner must still accept a font override")
 	}
 }

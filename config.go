@@ -350,6 +350,11 @@ type BlockWidgetConfig struct {
 	Placement
 	Enabled bool `toml:"enabled"`
 
+	// Color is this group's normal text colour, empty to follow hud.text_color.
+	// The threat rows keep their own amber and red on top of it: those say
+	// something the words do not.
+	Color string `toml:"color"`
+
 	// ShowCoords prints the raw df_positionx/y under the block name. Useful
 	// while calibrating the area grid, noise afterwards.
 	ShowCoords bool `toml:"show_coords"`
@@ -361,6 +366,8 @@ type SessionWidgetConfig struct {
 	Placement
 	Enabled bool `toml:"enabled"`
 
+	Color string `toml:"color"`
+
 	// Prefix labels the number. A bare clock on an overlay is ambiguous - the
 	// game has its own clocks - so it says what it is timing.
 	Prefix string `toml:"prefix"`
@@ -369,6 +376,11 @@ type SessionWidgetConfig struct {
 type XPWidgetConfig struct {
 	Placement
 	Enabled bool `toml:"enabled"`
+
+	// Color is the rate's normal colour. The stability amber and red still win:
+	// a rate averaged over a window with a hole in it looks just as
+	// authoritative as one that is not, and the colour is how it admits that.
+	Color string `toml:"color"`
 
 	Prefix string `toml:"prefix"`
 
@@ -397,6 +409,8 @@ type XPWidgetConfig struct {
 type ChallengesWidgetConfig struct {
 	Placement
 	Enabled bool `toml:"enabled"`
+
+	Color string `toml:"color"`
 
 	ShowRepeatable bool `toml:"show_repeatable"`
 	ShowClan       bool `toml:"show_clan"`
@@ -752,26 +766,28 @@ func (c *Config) validate() error {
 		errs = append(errs, fmt.Errorf("widget.challenges.max_shown %d cannot be negative (0 means no cap)",
 			c.Widget.Challenges.MaxShown))
 	}
-	// Placement, for every group. Negative coordinates would put a group off the
-	// top or left of its own surface, where it is not clipped so much as simply
-	// absent - which looks like the group being broken rather than misplaced.
-	for _, g := range []struct {
-		key   string
-		place Placement
-	}{
-		{"status", c.Widget.Status.Placement},
-		{"block", c.Widget.Block.Placement},
-		{"session", c.Widget.Session.Placement},
-		{"xp", c.Widget.XP.Placement},
-		{"challenges", c.Widget.Challenges.Placement},
-	} {
+	// Placement and appearance, for every group. Negative coordinates would put a
+	// group off the top or left of its own surface, where it is not clipped so much
+	// as simply absent - which looks like the group being broken rather than
+	// misplaced. The same list drives the generated CSS (see groupStyles).
+	for _, g := range groupStyles(c) {
 		if g.place.X < 0 || g.place.Y < 0 {
 			errs = append(errs, fmt.Errorf("widget.%s position %d, %d cannot be negative: "+
-				"it is measured from the top-left of the screen", g.key, g.place.X, g.place.Y))
+				"it is measured from the top-left of the screen", g.name, g.place.X, g.place.Y))
 		}
 		if g.place.FontSize < 0 {
 			errs = append(errs, fmt.Errorf("widget.%s.font_size %g cannot be negative (0 inherits from [hud])",
-				g.key, g.place.FontSize))
+				g.name, g.place.FontSize))
+		}
+		// Caught here rather than at render time: GTK skips a rule it cannot parse
+		// without a word, so a malformed colour would just leave the group looking
+		// untouched with nothing to grep for. Note this catches bad hex and
+		// stylesheet injection, not a misspelled colour NAME - validateColor stays
+		// permissive there rather than shipping a list of CSS names to go stale.
+		if g.color != "" {
+			if err := validateColor(g.color); err != nil {
+				errs = append(errs, fmt.Errorf("widget.%s.color: %w", g.name, err))
+			}
 		}
 	}
 

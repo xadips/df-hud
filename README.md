@@ -161,10 +161,21 @@ widest row happens to be. `hud.margin_*` insets it, which moves the origin every
 group is measured from - useful for pushing everything below a bar, and zero by
 default.
 
-`font_family` and `font_size` are per group and optional; absent means "use the
-`[hud]` values", so a group only carries the keys it differs on. The defaults were
-measured at 2560x1440, so another resolution wants its own numbers - and on a
-scaled monitor these are logical pixels, not device ones.
+`font_family`, `font_size` and `color` are per group and optional; absent means
+"use the `[hud]` values", so a group only carries the keys it differs on. The
+position defaults were measured at 2560x1440, so another resolution wants its own
+numbers - and on a scaled monitor these are logical pixels, not device ones.
+
+A group's `color` is its **normal** colour. The colours that carry meaning still
+win over it: the error banner's red, an outpost attack's red, the amber on a block
+with bandits on it, and the amber or red on a rate whose polls have been landing
+badly. Those say something the words do not, so a colour preference does not switch
+them off - which is why the state rules in the built-in sheet are scoped one level
+deeper than the per-group ones rather than merely appearing earlier in it.
+
+`[widget.status]` has no `color` at all: the banner is red when you cannot fix the
+problem and amber when you can, and that is the whole message. It takes a position
+and a font like every other group.
 
 Two things to know. A group placed near the right edge is **clipped, not wrapped**,
 because a HUD line that reflows makes everything below it jump as values change

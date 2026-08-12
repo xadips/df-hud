@@ -232,12 +232,21 @@ enabled = true
 # were set at 2560x1440 against the game's own interface - so on another
 # resolution they are the first thing to change.
 #
-# font_family and font_size are optional per group. Zero or absent means "use the
-# [hud] values", so a group only needs the keys it actually differs on.
+# font_family, font_size and color are optional per group. Zero, absent or empty
+# means "use the [hud] values", so a group only needs the keys it differs on.
+#
+# A group's color is its NORMAL colour. The colours that carry meaning still win
+# over it: the error banner's red, an outpost attack's red, the amber on a block
+# with bandits on it, and the amber or red on an xp rate whose polls have been
+# landing badly. Those say something the words do not, so a colour preference does
+# not switch them off.
 
 [widget.status]
-# df-hud's own error banner: stale credentials, a board it cannot fetch. There is
-# no enabled key, because this is how df-hud tells you it cannot do its job.
+# df-hud's own error banner: stale credentials, a board it cannot fetch.
+#
+# Two keys it deliberately does not have. No enabled, because this is how df-hud
+# tells you it cannot do its job. And no color: the banner is red when you cannot
+# fix it and amber when you can, which is the whole message.
 x = 10
 y = 10
 
@@ -247,6 +256,8 @@ y = 10
 enabled = true
 x = 2340
 y = 300
+# font_size = 14
+# color = "#88ccff"
 # Print the raw position coordinates under the block name. Useful while
 # calibrating the area grid, noise once that is done.
 show_coords = false
@@ -266,6 +277,8 @@ show_coords = false
 enabled = true
 x = 350
 y = 60
+# font_size = 16
+# color = "#ffffff"
 # Labels the clock. A bare number on an overlay over a game that has its own
 # clocks says nothing about what it is timing. Set it to "" for just the digits.
 prefix = "IC Time: "
@@ -274,6 +287,9 @@ prefix = "IC Time: "
 enabled = true
 x = 160
 y = 100
+# font_size = 16
+# The amber and red that say recent polls have been missing still win over this.
+# color = "#9be564"
 prefix = "Xp/Hr: "
 # Averaging window, and the number of usable samples below which the rate is
 # left blank rather than extrapolated from too little data. The window must be
@@ -296,6 +312,8 @@ min_samples = 3
 enabled = true
 x = 10
 y = 190
+# font_size = 11
+# color = "#cfd3dc"
 
 # Which parts of the board are worth a row. Each is a category rather than a
 # guess at what matters:
