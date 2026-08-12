@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,6 +34,7 @@ func main() {
 		printView   = flag.Bool("print-view", false, "print the derived view as JSON on every update")
 		showVersion = flag.Bool("version", false, "print the version and exit")
 		checkConfig = flag.Bool("check-config", false, "validate the config and exit")
+		checkGame   = flag.Bool("check-game", false, "report whether the game client is detected, and exit")
 		dumpFields  = flag.Bool("dump-fields", false, "with -once, print the player record for diagnostics (credentials withheld)")
 		headless    = flag.Bool("headless", false, "run without the HUD window")
 		printHUD    = flag.Bool("print-hud", false, "print the HUD's text lines on every update")
@@ -52,6 +54,10 @@ func main() {
 		fmt.Printf("config ok (%s)\n", describeConfigSource(cfg, *configPath))
 		fmt.Printf("request budget: about %.0f/hour while playing, %.0f/hour idle\n",
 			cfg.RequestsPerHour(1), cfg.RequestsPerHour(0))
+		return
+	}
+	if *checkGame {
+		reportGameDetection(cfg)
 		return
 	}
 	log.Printf("df-hud %s starting (%s)", version, describeConfigSource(cfg, *configPath))
@@ -88,6 +94,86 @@ func main() {
 		// disables it or the flag does.
 		hud: cfg.HUD.Enabled && !*headless,
 	})
+}
+
+// reportGameDetection answers "does df-hud see my game?" without starting
+// anything. Worth its own flag because the failure is silent: with
+// only_when_game_running set, a process name that does not match means df-hud
+// simply never polls, and the session clock never appears - which looks like the
+// HUD being broken rather than like a one-word config problem.
+func reportGameDetection(cfg *Config) {
+	scanner := newProcScanner(cfg.Game.Process)
+	fmt.Printf("looking for a process whose argv[0] basename is %q\n", cfg.Game.Process)
+
+	state, err := scanner.scan()
+	if err != nil {
+		fmt.Printf("could not scan /proc: %v\n", err)
+		return
+	}
+	if state.Running {
+		fmt.Printf("FOUND: pid %d, launched %s (%s ago)\n",
+			state.PID, state.StartedAt.Format(time.DateTime),
+			state.Elapsed(time.Now()).Round(time.Second))
+		return
+	}
+
+	fmt.Println("NOT FOUND - the game does not appear to be running.")
+	// If it is running under another name, saying so is far more useful than
+	// "not found", since the fix is one config line.
+	if candidates := similarProcesses(scanner.procRoot, "frontier"); len(candidates) > 0 {
+		fmt.Println("\nProcesses with a similar name, in case the executable is named differently:")
+		for _, c := range candidates {
+			fmt.Println("  " + c)
+		}
+		fmt.Println("\nIf one of those is the game, set game.process to its basename.")
+	} else {
+		fmt.Println("Nothing similar is running either. Start the game and run this again.")
+	}
+	if cfg.Poll.OnlyWhenGameRunning {
+		fmt.Println("\nNote: poll.only_when_game_running is on, so df-hud will not poll at all " +
+			"until the game is detected.")
+	}
+}
+
+// similarProcesses looks for the substring anywhere in a command line - the
+// opposite of the strict argv[0] match the scanner uses, and appropriate here
+// because this is a diagnostic rather than a decision.
+func similarProcesses(procRoot, needle string) []string {
+	entries, err := os.ReadDir(procRoot)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	self, parent := os.Getpid(), os.Getppid()
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid == self || pid == parent {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(procRoot, entry.Name(), "cmdline"))
+		if err != nil {
+			continue
+		}
+		line := strings.ReplaceAll(string(raw), "\x00", " ")
+		lower := strings.ToLower(line)
+		if !strings.Contains(lower, needle) {
+			continue
+		}
+		// Anything mentioning df-hud is our own tooling - the shell that invoked
+		// this check names the game in its own command line - and the game's
+		// command line will never mention us.
+		if strings.Contains(lower, "df-hud") {
+			continue
+		}
+		if len(line) > 120 {
+			line = line[:120] + "..."
+		}
+		out = append(out, fmt.Sprintf("pid %d: %s", pid, strings.TrimSpace(line)))
+		if len(out) >= 8 {
+			break
+		}
+	}
+	return out
 }
 
 func describeConfigSource(cfg *Config, path string) string {
