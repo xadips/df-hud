@@ -205,6 +205,32 @@ There used to be pinning here, showing two or three challenges chosen by name. I
 existed because a dozen rows in a shared corner would bury everything else. With
 the board in its own place on screen there is nothing left to bury.
 
+Each challenge is a group: the challenge on one row, its objectives indented
+underneath. A weekly with four objectives is why - four of them on one line is a
+wall of text, and the sum of four different tasks is not something you can act on
+anyway. A challenge whose name already says its objective stays one row, which is
+how every clan entry reads.
+
+Three levels of hierarchy, built out of weight, size and alpha rather than colour,
+so they compose with whatever `color` the group is set to:
+
+```
+Summer Death
+  Kill Regular Infected  55/100
+First Strike                      20h20m
+  Kill Any Boss          0/7
+Summer Loot                                  (struck through when complete)
+  Loot Anything          10/10
+```
+
+The progress is bold, because it is what you scan the board for. The objective is
+dimmed and a step smaller, because it is subordinate to the challenge it belongs
+to. A finished challenge or objective is struck through rather than labelled.
+
+Everything from the board is escaped before it reaches Pango. That is not
+optional: Pango refuses to parse malformed markup and GTK answers with an empty
+label, so one challenge named with an ampersand would silently blank its own row.
+
 ## When the overlay is on screen
 
 A layer surface belongs to a *monitor*, and the protocol has no concept of a

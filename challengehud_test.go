@@ -35,6 +35,16 @@ func board() []Challenge {
 	}
 }
 
+// texts is the plain form of a rendered board, for assertions that care about
+// wording rather than styling.
+func texts(rows []challengeRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Text())
+	}
+	return out
+}
+
 func allCategories() ChallengesWidgetConfig {
 	return ChallengesWidgetConfig{
 		Enabled: true, ShowRepeatable: true, ShowClan: true, ShowPersonal: true, ShowCompleted: true,
@@ -141,28 +151,37 @@ func TestChallengeLines(t *testing.T) {
 	cfg := allCategories()
 	v := &View{Now: time.Now(), Challenges: board()}
 
-	lines := challengeLines(v, cfg)
-	if len(lines) != 6 {
-		t.Fatalf("lines = %v", lines)
+	lines := texts(challengeLines(v, cfg))
+	// Six challenges: five as a name row plus an indented objective, and the clan
+	// one as a single row because its name already says its objective.
+	if len(lines) != 11 {
+		t.Fatalf("lines = %#v", lines)
 	}
-	// The OBJECTIVE, not just the name. "First Strike 0/7" does not say what the
-	// seven are, which makes the number one you cannot act on.
-	if !strings.Contains(lines[0], "Summer Death") || !strings.Contains(lines[0], "55/100") {
-		t.Errorf("line = %q, want the name and progress", lines[0])
+	if lines[0] != "Summer Death" {
+		t.Errorf("lines[0] = %q, want the challenge alone on its row", lines[0])
 	}
-	if !strings.Contains(lines[0], "Kill Regular Infected") {
-		t.Errorf("line = %q, want the objective named", lines[0])
+	if lines[1] != "  Kill Regular Infected  55/100" {
+		t.Errorf("lines[1] = %q, want the objective indented with its progress", lines[1])
 	}
 	// A countdown appears only when it is close enough to matter; "5d" on every
-	// row is noise.
-	if strings.Contains(lines[0], "5d") {
-		t.Errorf("a far-off deadline should not be shown: %q", lines[0])
+	// row is noise. It sits on the challenge, not on the objective.
+	for _, line := range lines {
+		if strings.Contains(line, "5d") {
+			t.Errorf("a far-off deadline should not be shown: %q", line)
+		}
 	}
-	if !strings.Contains(lines[3], "m") {
-		t.Errorf("a deadline within the day should be shown: %q", lines[3])
+	if !strings.Contains(lines[6], "Nearly There") || !strings.Contains(lines[6], "20m") {
+		t.Errorf("lines[6] = %q, want the near deadline on the challenge row", lines[6])
 	}
-	if !strings.Contains(lines[1], "done") {
-		t.Errorf("a completed challenge should say so: %q", lines[1])
+	// Completion is marked on the challenge and on the objective independently.
+	if !strings.Contains(lines[2], "Summer Loot") || !strings.Contains(lines[2], "done") {
+		t.Errorf("lines[2] = %q, want the finished challenge marked", lines[2])
+	}
+	if !strings.Contains(lines[3], "done") {
+		t.Errorf("lines[3] = %q, want the finished objective marked", lines[3])
+	}
+	if lines[10] != "Weekly Challenge - Kill Infected  159,487/162,401" {
+		t.Errorf("lines[10] = %q, want the clan challenge as one row", lines[10])
 	}
 }
 
@@ -178,15 +197,21 @@ func TestChallengeRowsNameTheObjective(t *testing.T) {
 		Name: "First Strike", End: now.Add(20 * time.Hour),
 		Objectives: []Objective{{Name: "Kill Any Boss", Target: 7}},
 	}
-	rows := challengeRows(first, now)
-	if len(rows) != 1 {
-		t.Fatalf("rows = %v, want one", rows)
+	rows := texts(challengeRows(first, now))
+	// The objective lands UNDER the challenge, indented: a weekly with four of them
+	// and a daily with one should look like the same kind of thing, and an objective
+	// on the same line as its challenge reads as part of the name.
+	if len(rows) != 2 {
+		t.Fatalf("rows = %v, want the challenge and its objective below it", rows)
 	}
-	if !strings.Contains(rows[0], "First Strike") || !strings.Contains(rows[0], "Kill Any Boss") {
-		t.Errorf("row = %q, want the challenge and the objective", rows[0])
+	if !strings.Contains(rows[0], "First Strike") || strings.Contains(rows[0], "Kill Any Boss") {
+		t.Errorf("first row = %q, want the challenge alone", rows[0])
 	}
-	if !strings.Contains(rows[0], "0/7") {
-		t.Errorf("row = %q, want the progress", rows[0])
+	if !strings.HasPrefix(rows[1], "  ") {
+		t.Errorf("second row = %q, want it indented under the challenge", rows[1])
+	}
+	if !strings.Contains(rows[1], "Kill Any Boss") || !strings.Contains(rows[1], "0/7") {
+		t.Errorf("second row = %q, want the objective and its progress", rows[1])
 	}
 
 	// When the name already contains the objective - which is exactly how the clan
@@ -195,9 +220,17 @@ func TestChallengeRowsNameTheObjective(t *testing.T) {
 		Name: "Weekly Challenge - Kill Infected", Clan: true, End: now.Add(4 * 24 * time.Hour),
 		Objectives: []Objective{{Name: "Kill Infected", Target: 162401, Score: 162423, HasScore: true}},
 	}
-	rows = challengeRows(clan, now)
+	rows = texts(challengeRows(clan, now))
+	// One row, not two: an objective row here would be the name again with a number
+	// on it, so the number joins the name instead.
+	if len(rows) != 1 {
+		t.Fatalf("rows = %v, want one row when the name already says the objective", rows)
+	}
 	if strings.Count(strings.ToLower(rows[0]), "kill infected") != 1 {
 		t.Errorf("row = %q, want the objective named once", rows[0])
+	}
+	if !strings.Contains(rows[0], "162,423/162,401") {
+		t.Errorf("row = %q, want the progress on the name row", rows[0])
 	}
 	if !strings.Contains(rows[0], "done") {
 		t.Errorf("row = %q, want the completion mark", rows[0])
@@ -216,7 +249,7 @@ func TestChallengeRowsSplitsMultipleObjectives(t *testing.T) {
 		},
 	}
 
-	rows := challengeRows(c, now)
+	rows := texts(challengeRows(c, now))
 	if len(rows) != 3 {
 		t.Fatalf("rows = %v, want the name and a row per objective", rows)
 	}
@@ -240,7 +273,7 @@ func TestChallengeRowsSplitsMultipleObjectives(t *testing.T) {
 func TestChallengeLinesExplainsAnEmptyBoard(t *testing.T) {
 	cfg := allCategories()
 
-	lines := challengeLines(&View{Now: time.Now(), ChallengeStatus: "no signing salt yet"}, cfg)
+	lines := texts(challengeLines(&View{Now: time.Now(), ChallengeStatus: "no signing salt yet"}, cfg))
 	if len(lines) != 1 || !strings.Contains(lines[0], "no signing salt") {
 		t.Errorf("lines = %v, want the reason", lines)
 	}
@@ -281,5 +314,92 @@ func TestStoreHoldsTheBoard(t *testing.T) {
 	}
 	if got, ok := s.Challenges(); !ok || len(got) != len(b) {
 		t.Error("the full board should be available for the console window")
+	}
+}
+
+// The drawn form. Three levels of hierarchy in one label, so a weekly with four
+// objectives reads as a group rather than as a wall of same-weight text.
+func TestChallengeRowMarkupHierarchy(t *testing.T) {
+	row := challengeRow{Name: "First Strike", Objective: "Kill Any Boss",
+		Progress: "0/7", Countdown: "20h20m"}
+
+	got := row.Markup()
+	// Progress is bold because it is what you scan the board for.
+	if !strings.Contains(got, "<b>0/7</b>") {
+		t.Errorf("markup = %q, want the progress bold", got)
+	}
+	// The objective is subordinate to the challenge it belongs to.
+	if !strings.Contains(got, `size="smaller">Kill Any Boss`) {
+		t.Errorf("markup = %q, want the objective a step smaller", got)
+	}
+	if !strings.Contains(got, `alpha="78%"`) {
+		t.Errorf("markup = %q, want the objective dimmed", got)
+	}
+	// Deliberately no colour anywhere: a hardcoded one would fight both the
+	// per-group color key and the state colours.
+	if strings.Contains(got, "foreground") || strings.Contains(got, "color") {
+		t.Errorf("markup = %q, want no hardcoded colour", got)
+	}
+}
+
+// A finished challenge is struck through rather than labelled, and the word goes
+// away because the line through it says the same thing.
+func TestChallengeRowMarkupStrikesCompleted(t *testing.T) {
+	done := challengeRow{Name: "Summer Loot", Progress: "10/10", Done: true}
+
+	got := done.Markup()
+	if !strings.Contains(got, "<s>") || !strings.Contains(got, "</s>") {
+		t.Errorf("markup = %q, want it struck through", got)
+	}
+	if strings.Contains(got, "done") {
+		t.Errorf("markup = %q, want the strikethrough instead of the word", got)
+	}
+	// The plain form has no strikethrough to say it with, so there it stays a word.
+	if !strings.Contains(done.Text(), "done") {
+		t.Errorf("text = %q, want the word when there is no styling", done.Text())
+	}
+}
+
+// Escaping is not optional. Pango refuses to parse malformed markup and GTK
+// answers with a warning and an EMPTY label, so one challenge named with an
+// ampersand would silently blank its own row - and the board's text comes from
+// the game, not from us.
+func TestChallengeRowMarkupEscapes(t *testing.T) {
+	row := challengeRow{Name: "Fish & Chips <b>", Objective: `"Quotes" & 'more'`, Progress: "1/2"}
+
+	got := row.Markup()
+	if strings.Contains(got, "Fish & Chips") {
+		t.Errorf("markup = %q, want the ampersand escaped", got)
+	}
+	if !strings.Contains(got, "Fish &amp; Chips") {
+		t.Errorf("markup = %q, want &amp;", got)
+	}
+	// The name's own tag must arrive as text, not as markup.
+	if !strings.Contains(got, "&lt;b&gt;") {
+		t.Errorf("markup = %q, want the tag in the name neutralised", got)
+	}
+	// Our own tags survive.
+	if !strings.Contains(got, "<b>1/2</b>") {
+		t.Errorf("markup = %q, want our own tags intact", got)
+	}
+	// The plain form is never escaped: it goes to a terminal, not to Pango.
+	if !strings.Contains(row.Text(), "Fish & Chips") {
+		t.Errorf("text = %q, want it unescaped", row.Text())
+	}
+}
+
+// An objective row is indented in both forms, so the grouping survives whether it
+// is drawn or printed.
+func TestChallengeRowSubIsIndented(t *testing.T) {
+	sub := challengeRow{Objective: "Loot Food", Progress: "4/25", Sub: true}
+	if !strings.HasPrefix(sub.Text(), "  ") {
+		t.Errorf("text = %q, want it indented", sub.Text())
+	}
+	if !strings.HasPrefix(sub.Markup(), "  ") {
+		t.Errorf("markup = %q, want it indented", sub.Markup())
+	}
+	// With no name there is no separator to leave dangling.
+	if strings.Contains(sub.Text(), ": ") {
+		t.Errorf("text = %q, want no dangling separator", sub.Text())
 	}
 }

@@ -242,71 +242,183 @@ func filterChallenges(board []Challenge, cfg ChallengesWidgetConfig) []Challenge
 // bury everything else. That was a consequence of every group sharing one corner:
 // with the board in its own place on screen there is nothing to bury, so the whole
 // thing is shown and the category switches decide what is worth a row.
-func challengeLines(v *View, cfg ChallengesWidgetConfig) []string {
+func challengeLines(v *View, cfg ChallengesWidgetConfig) []challengeRow {
 	shown := filterChallenges(v.Challenges, cfg)
 	if len(shown) == 0 {
 		// The status only replaces the board when there is no board at all. With
 		// rows on screen it would be a second explanation of something already
 		// visible, and with everything filtered out it would read as an error.
 		if len(v.Challenges) == 0 && v.ChallengeStatus != "" {
-			return []string{"challenges: " + v.ChallengeStatus}
+			return []challengeRow{{Name: "challenges: " + v.ChallengeStatus}}
 		}
 		return nil
 	}
-	lines := make([]string, 0, len(shown))
+	rows := make([]challengeRow, 0, len(shown))
 	for _, c := range shown {
-		lines = append(lines, challengeRows(c, v.Now)...)
+		rows = append(rows, challengeRows(c, v.Now)...)
 	}
-	return lines
+	return rows
 }
 
-// challengeRows renders one challenge, and names the OBJECTIVE rather than only
-// the challenge.
+// challengeRow is one row of the board, kept in parts rather than pre-joined.
 //
-// "First Strike  0/7" was the previous form, and it does not say what the seven
-// are. The objective is the actionable half - "Kill Any Boss" - and a progress
-// figure without it is a number you cannot act on.
+// The parts exist because the three of them answer different questions and want
+// to look different: the name says which challenge, the objective says what to
+// do, the progress says how far. Flattened into one string they were a wall of
+// same-weight text - and with a weekly carrying four objectives, an unreadable
+// one.
+//
+// Text() is the plain form for -print-hud and the tests; Markup() is what the HUD
+// draws. Keeping both off one structure is what stops the two forms drifting.
+type challengeRow struct {
+	Name      string
+	Objective string
+	Progress  string
+	Countdown string
+	// Done draws the row struck through. A finished challenge is still worth a row -
+	// it is how you know not to chase it - but it should read as settled rather than
+	// competing with the ones that are not.
+	Done bool
+	// Sub marks an objective belonging to the challenge above it, which is indented
+	// and dimmed so the grouping is visible without a blank line between challenges.
+	Sub bool
+}
+
+// Text is the plain form. The parts are separated by two spaces, which reads as a
+// column in the monospace font the HUD defaults to.
+func (r challengeRow) Text() string {
+	var b strings.Builder
+	if r.Sub {
+		b.WriteString("  ")
+	}
+	b.WriteString(r.Name)
+	if r.Objective != "" {
+		if r.Name != "" {
+			b.WriteString(": ")
+		}
+		b.WriteString(r.Objective)
+	}
+	if r.Progress != "" {
+		b.WriteString("  " + r.Progress)
+	}
+	if r.Countdown != "" {
+		b.WriteString("  " + r.Countdown)
+	}
+	if r.Done {
+		// Said in words here because plain text has no strikethrough to say it with.
+		b.WriteString(" done")
+	}
+	return b.String()
+}
+
+// Markup is the drawn form, in Pango markup.
+//
+// Everything here is deliberately colour-free: weight, size, alpha and
+// strikethrough only. A hardcoded colour would fight both the per-group color key
+// and the state colours, so the hierarchy is built out of the attributes that
+// compose with whatever colour the text already has.
+//
+//	progress   bold, because it is what you scan the board for
+//	name       plain
+//	objective  dimmed and a step smaller: subordinate to the challenge it belongs to
+//	countdown  dimmed, same reason
+//	done       struck through, and the whole row dimmed
+func (r challengeRow) Markup() string {
+	var b strings.Builder
+	if r.Sub {
+		b.WriteString("  ")
+	}
+	if r.Done {
+		b.WriteString(`<span alpha="60%"><s>`)
+	}
+	b.WriteString(escapeMarkup(r.Name))
+	if r.Objective != "" {
+		if r.Name != "" {
+			b.WriteString(": ")
+		}
+		b.WriteString(`<span alpha="78%" size="smaller">` + escapeMarkup(r.Objective) + `</span>`)
+	}
+	if r.Progress != "" {
+		b.WriteString("  <b>" + escapeMarkup(r.Progress) + "</b>")
+	}
+	if r.Countdown != "" {
+		b.WriteString(`  <span alpha="70%">` + escapeMarkup(r.Countdown) + `</span>`)
+	}
+	if r.Done {
+		// No "done" in words: the strikethrough is the word.
+		b.WriteString(`</s></span>`)
+	}
+	return b.String()
+}
+
+// escapeMarkup makes text safe to interpolate into Pango markup.
+//
+// Not optional. Pango refuses to parse a label whose markup is malformed, and GTK
+// answers with a warning and an EMPTY label - so one challenge named with an
+// ampersand would silently blank its row. The board's text comes from the game, so
+// it is not ours to trust.
+func escapeMarkup(s string) string {
+	return markupEscaper.Replace(s)
+}
+
+// & first, or the escapes would be escaped again.
+var markupEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	`"`, "&quot;",
+	"'", "&#39;",
+)
+
+// challengeRows renders one challenge as a GROUP: the challenge on one row, its
+// objectives indented underneath.
+//
+// "First Strike  0/7" was the first form, and it does not say what the seven are.
+// The objective is the actionable half - "Kill Any Boss" - and a progress figure
+// without it is a number you cannot act on.
 //
 // The name is kept as well as the objective, because dropping it collides: the
 // live board carries both "Summer Loot" and "Weekly Challenge - Loot Anything",
 // and the objective of each is "Loot Anything". Two identical rows with different
-// numbers is worse than a long one.
-//
-// It is omitted when the name already contains the objective, which is how the
-// clan board reads ("Weekly Challenge - Kill Infected" against an objective of
-// "Kill Infected"). Saying it twice on one row is noise.
-func challengeRows(c Challenge, now time.Time) []string {
+// numbers is worse than one long row.
+func challengeRows(c Challenge, now time.Time) []challengeRow {
 	countdown := ""
 	if remaining := c.Remaining(now); remaining > 0 && remaining < 24*time.Hour {
 		// Only when it is close enough to matter; "5d" on every row is noise.
-		countdown = "  " + formatCountdown(remaining)
-	}
-	mark := ""
-	if c.Complete() {
-		mark = " done"
+		countdown = formatCountdown(remaining)
 	}
 
-	// More than one objective gets a row each, because the sum of two different
-	// tasks is not a thing you can act on either.
-	if len(c.Objectives) > 1 {
-		rows := make([]string, 0, len(c.Objectives)+1)
-		rows = append(rows, c.Name+mark+countdown)
-		for _, o := range c.Objectives {
-			done := ""
-			if o.Done() {
-				done = " done"
-			}
-			rows = append(rows, "  "+o.Name+"  "+formatInt(o.Score)+"/"+formatInt(o.Target)+done)
-		}
-		return rows
+	// One row for the challenge, then its objectives UNDER it, indented. Always,
+	// not only when there are several: a weekly with four objectives and a daily
+	// with one should look like the same kind of thing, and an objective on the
+	// same line as its own challenge reads as part of the name.
+	//
+	// The exception is a challenge whose name already says what the objective is,
+	// which is how every clan entry reads ("Weekly Challenge - Kill Infected"
+	// against an objective of "Kill Infected"). There the objective row would be
+	// the name again with a number on it, so the number joins the name instead and
+	// the challenge stays one row.
+	if len(c.Objectives) == 1 && nameCoversObjective(c.Name, c.Objectives[0].Name) {
+		score, target := c.Progress()
+		return []challengeRow{{
+			Name:      c.Name,
+			Progress:  formatInt(score) + "/" + formatInt(target),
+			Countdown: countdown,
+			Done:      c.Complete(),
+		}}
 	}
 
-	label := c.Name
-	if len(c.Objectives) == 1 && !nameCoversObjective(c.Name, c.Objectives[0].Name) {
-		label += ": " + c.Objectives[0].Name
+	rows := make([]challengeRow, 0, len(c.Objectives)+1)
+	rows = append(rows, challengeRow{Name: c.Name, Countdown: countdown, Done: c.Complete()})
+	for _, o := range c.Objectives {
+		rows = append(rows, challengeRow{
+			Objective: o.Name,
+			Progress:  formatInt(o.Score) + "/" + formatInt(o.Target),
+			Done:      o.Done(),
+			Sub:       true,
+		})
 	}
-	score, target := c.Progress()
-	return []string{label + "  " + formatInt(score) + "/" + formatInt(target) + mark + countdown}
+	return rows
 }
 
 // nameCoversObjective reports whether the challenge's name already says what the
@@ -380,7 +492,11 @@ func hudLines(v *View, cfg *Config) []string {
 		}
 	}
 	if cfg.Widget.Challenges.Enabled {
-		if text := challengeLines(v, cfg.Widget.Challenges); len(text) > 0 {
+		if board := challengeLines(v, cfg.Widget.Challenges); len(board) > 0 {
+			text := make([]string, 0, len(board))
+			for _, r := range board {
+				text = append(text, r.Text())
+			}
 			rows = append(rows, row{cfg.Widget.Challenges.Placement, text})
 		}
 	}
