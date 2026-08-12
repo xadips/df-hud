@@ -72,50 +72,104 @@ func outpostAttackLine(v *View) (text string, show bool) {
 	return "OUTPOST ATTACK", true
 }
 
-// threatLine is what is standing on your block, from the city event feed.
+// threatLines is what is standing on your block, from the city event feed, ONE
+// ROW PER ENEMY TYPE.
 //
-// This is the row the HUD exists for as much as any other: a block with six
+// This is the part of the HUD the whole bossmap exists for: a block with six
 // bandits on it is a different proposition from an empty one, and the game's own
 // client does not tell you until you are looking at them.
 //
+// It returns rows rather than a joined line because a boss nest is not rare. A
+// live one carried seven types at once:
+//
+//	1 x Evolved Longarms / 1 x Irradiated Titan / 1 x Irradiated Mother /
+//	1 x Irradiated Giant Spider / 2 x Mega Wraith / 1 x Charred Mother /
+//	1 x Charred Giant Spider
+//
+// which as a single string is around 140 characters. It cannot be read at a
+// glance, and at this group's position it ran off the side of the screen, so the
+// tail of it - the part naming what is actually dangerous - was the part that got
+// clipped.
+//
 // Nothing is rendered when the feed has no events for your block. That is the
 // normal case for most of the map, and "nothing here" on every block would train
-// you to stop reading the line.
-func threatLine(v *View) (text string, show bool) {
+// you to stop reading it.
+func threatLines(v *View) []string {
 	if !v.HaveData {
-		return "", false
+		return nil
 	}
-	var parts []string
+	var rows []string
 	for _, e := range v.BlockEvents {
-		label := e.Label()
-		if len(e.Objectives) > 0 {
-			label += " (" + strings.Join(e.Objectives, ", ") + ")"
-		}
-		parts = append(parts, label)
+		rows = append(rows, eventRows(e, "")...)
 	}
 	// Last cycle's, which the store fills only in Onslaught. Prefixed rather than
 	// mixed in: a boss that may or may not still be standing there is a different
 	// claim from one that is.
 	for _, e := range v.BlockEventsPast {
-		parts = append(parts, "last: "+e.Label())
+		rows = append(rows, eventRows(e, "last: ")...)
 	}
-	if len(parts) == 0 {
-		return "", false
-	}
-	return strings.Join(parts, "  "), true
+	return rows
 }
+
+// eventRows breaks one event into its rows.
+//
+// A plain spawn is nothing but its enemy list, so its rows ARE the enemies and a
+// title would repeat them. A mission or a QRF has a name worth its own row, and
+// then any enemies it brings underneath - a mission also carries a
+// special_enemy_type, so those two are not alternatives.
+func eventRows(e CityEvent, prefix string) []string {
+	var rows []string
+	if e.Kind != EventSpawn || len(e.Enemies) == 0 {
+		rows = append(rows, prefix+e.Label())
+	}
+	for _, enemy := range e.Enemies {
+		rows = append(rows, prefix+enemy)
+	}
+	if len(e.Objectives) > 0 {
+		rows = append(rows, prefix+"("+strings.Join(e.Objectives, ", ")+")")
+	}
+	return rows
+}
+
+// xpPending stands in for the rate until there are two samples to subtract, which
+// is one poll interval. xpRough marks a rate computed from fewer samples than
+// min_samples: correct arithmetic on thin evidence.
+const (
+	xpPending = "--"
+	xpRough   = "~"
+)
 
 // xpLine is the XP rate, and nothing else.
 //
-// When there is no rate the row disappears rather than explaining itself.
-// "collecting samples" was on screen for the first thirty seconds of every run
-// and after every window reset, which is a progress report on df-hud's internals
-// on a HUD whose whole job is to be glanceable. The reason still exists in
-// View.XPWhy, where -print-view and the tray tooltip can show it to whoever is
-// actually debugging.
+// A rate appears as soon as there are two samples to subtract, marked with a tilde
+// until the window holds min_samples. That is the third arrangement of this row and
+// the first that behaves; the other two are worth recording because both looked
+// reasonable:
+//
+//   - "collecting samples" in place of the number was a progress report on
+//     df-hud's internals, on a HUD whose whole job is to be glanceable.
+//   - hiding the row until the window filled, which replaced it, and which reads as
+//     the HUD being broken. Every run start clears the window, so this happened
+//     after every single press of Start: the row vanished for half a minute and
+//     then came back. It was reported as a bug within the hour, and rightly - a
+//     blank where a number lives looks nothing like a number that is not ready.
+//
+// So the number arrives as early as arithmetic allows and says how much to trust
+// itself. Only the first interval of a run has nothing at all to show, and that
+// gets dashes to hold the row's place.
+//
+// Neither dashes nor a provisional rate carries a stability colour: the amber and
+// red mean "recent polls did not land", which is a different complaint from "there
+// have not been many polls yet", and one colour cannot say both.
 func xpLine(v *View, cfg XPWidgetConfig) (text, cssClass string, show bool) {
-	if !v.HaveData || !v.XPAvailable {
+	if !v.HaveData {
 		return "", "", false
+	}
+	if !v.XPAvailable {
+		return cfg.Prefix + xpPending, "", true
+	}
+	if v.XPProvisional {
+		return cfg.Prefix + xpRough + formatRate(v.XPPerHour), "", true
 	}
 	return cfg.Prefix + formatRate(v.XPPerHour), v.XPStability.CSSClass(), true
 }
@@ -201,20 +255,68 @@ func challengeLines(v *View, cfg ChallengesWidgetConfig) []string {
 	}
 	lines := make([]string, 0, len(shown))
 	for _, c := range shown {
-		score, target := c.Progress()
-		mark := ""
-		if c.Complete() {
-			mark = " done"
-		}
-		row := c.Name + "  " + formatInt(score) + "/" + formatInt(target) + mark
-		if remaining := c.Remaining(v.Now); remaining > 0 && remaining < 24*time.Hour {
-			// Only show the countdown when it is close enough to matter; "5d"
-			// on every row is noise.
-			row += "  " + formatCountdown(remaining)
-		}
-		lines = append(lines, row)
+		lines = append(lines, challengeRows(c, v.Now)...)
 	}
 	return lines
+}
+
+// challengeRows renders one challenge, and names the OBJECTIVE rather than only
+// the challenge.
+//
+// "First Strike  0/7" was the previous form, and it does not say what the seven
+// are. The objective is the actionable half - "Kill Any Boss" - and a progress
+// figure without it is a number you cannot act on.
+//
+// The name is kept as well as the objective, because dropping it collides: the
+// live board carries both "Summer Loot" and "Weekly Challenge - Loot Anything",
+// and the objective of each is "Loot Anything". Two identical rows with different
+// numbers is worse than a long one.
+//
+// It is omitted when the name already contains the objective, which is how the
+// clan board reads ("Weekly Challenge - Kill Infected" against an objective of
+// "Kill Infected"). Saying it twice on one row is noise.
+func challengeRows(c Challenge, now time.Time) []string {
+	countdown := ""
+	if remaining := c.Remaining(now); remaining > 0 && remaining < 24*time.Hour {
+		// Only when it is close enough to matter; "5d" on every row is noise.
+		countdown = "  " + formatCountdown(remaining)
+	}
+	mark := ""
+	if c.Complete() {
+		mark = " done"
+	}
+
+	// More than one objective gets a row each, because the sum of two different
+	// tasks is not a thing you can act on either.
+	if len(c.Objectives) > 1 {
+		rows := make([]string, 0, len(c.Objectives)+1)
+		rows = append(rows, c.Name+mark+countdown)
+		for _, o := range c.Objectives {
+			done := ""
+			if o.Done() {
+				done = " done"
+			}
+			rows = append(rows, "  "+o.Name+"  "+formatInt(o.Score)+"/"+formatInt(o.Target)+done)
+		}
+		return rows
+	}
+
+	label := c.Name
+	if len(c.Objectives) == 1 && !nameCoversObjective(c.Name, c.Objectives[0].Name) {
+		label += ": " + c.Objectives[0].Name
+	}
+	score, target := c.Progress()
+	return []string{label + "  " + formatInt(score) + "/" + formatInt(target) + mark + countdown}
+}
+
+// nameCoversObjective reports whether the challenge's name already says what the
+// objective is. Case-insensitive substring, which is all the real board needs:
+// the clan entries are named "Weekly Challenge - <objective>" exactly.
+func nameCoversObjective(name, objective string) bool {
+	if objective == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(name), strings.ToLower(objective))
 }
 
 // sessionLine is the run clock: time in the inner city.
@@ -263,8 +365,8 @@ func hudLines(v *View, cfg *Config) []string {
 		if text, ok := outpostAttackLine(v); ok {
 			rows = append(rows, row{block, []string{text}})
 		}
-		if text, ok := threatLine(v); ok {
-			rows = append(rows, row{block, []string{text}})
+		if threats := threatLines(v); len(threats) > 0 {
+			rows = append(rows, row{block, threats})
 		}
 	}
 	if cfg.Widget.Session.Enabled {

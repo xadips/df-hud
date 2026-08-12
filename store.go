@@ -753,13 +753,16 @@ type View struct {
 	BoostExpForever bool
 	Dead            bool
 
-	// XPRate is blank when there is not enough to say; XPWhy explains why.
-	XPPerHour   float64
-	XPAvailable bool
-	XPWhy       string
-	XPSpan      time.Duration
-	XPSamples   int
-	XPStability xpStability
+	// XPRate is blank only when there are fewer than two samples; XPWhy explains
+	// why. XPProvisional marks a rate computed from fewer than min_samples, which
+	// is shown with a tilde rather than withheld.
+	XPPerHour     float64
+	XPAvailable   bool
+	XPProvisional bool
+	XPWhy         string
+	XPSpan        time.Duration
+	XPSamples     int
+	XPStability   xpStability
 
 	// Challenges is the whole board. Which rows reach the HUD is decided at
 	// render time from the config, not here, so toggling a category takes effect
@@ -851,6 +854,7 @@ func (s *Store) Derive(now time.Time) *View {
 	if s.xpSamples != nil {
 		rate := computeXPRate(s.xpSamples(), s.xpMinSamps, s.stabilityLocked())
 		v.XPAvailable = rate.Available
+		v.XPProvisional = rate.Provisional
 		v.XPPerHour = rate.PerHour
 		v.XPWhy = rate.Why
 		v.XPSpan = rate.Span

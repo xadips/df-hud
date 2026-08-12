@@ -1,14 +1,19 @@
 package main
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 // The XP rate. Pure functions over the sample ring, so every timeline that
 // matters - a level-up, a death, a boost starting, a dropped poll, a clock jump -
 // can be tested without a network or a GUI.
 //
-// The rate itself is the easy part. What takes care is knowing when NOT to show
-// one: a number that is confidently wrong is worse than a blank, because you
-// cannot tell it is wrong by looking at it.
+// The rate itself is the easy part. What takes care is saying how much to trust
+// one: a number that is confidently wrong is worse than a marked estimate, because
+// you cannot tell it is wrong by looking at it. Hence Provisional and Stability,
+// which are the two ways the rate qualifies itself - too few samples, and samples
+// that did not arrive.
 
 // xpStability is how much to trust the current rate, driven by whether recent
 // scheduled polls actually produced samples.
@@ -52,6 +57,17 @@ type XPRate struct {
 	Samples   int
 	Stability xpStability
 
+	// Provisional means the rate came from fewer than min_samples points, so it is
+	// arithmetically correct but statistically thin: two samples one interval apart
+	// turn a single kill into a five-figure-per-hour claim, and standing still for
+	// one interval into a flat zero.
+	//
+	// It is rendered anyway, marked, because the alternative was worse. Every run
+	// start clears the window, so waiting for min_samples meant no number at all
+	// for the first half-minute of every run - and a blank where a number lives
+	// reads as a broken HUD, which is exactly how it was reported.
+	Provisional bool
+
 	// Why is set when Available is false, so the HUD can say what it is waiting
 	// for instead of showing an unexplained blank.
 	Why string
@@ -64,16 +80,20 @@ type XPRate struct {
 // would smooth over exactly the lumps that make up the total, and the endpoints
 // already give the exact XP earned across the window - which is the definition
 // of the average rate.
+// minSamples is the threshold for a rate being TRUSTED, not for it being shown:
+// below it the rate is still returned, with Provisional set. Two samples is the
+// arithmetic floor, since one point spans no time at all.
 func computeXPRate(samples []XPSample, minSamples int, stability xpStability) XPRate {
 	if minSamples < 2 {
 		minSamples = 2
 	}
-	if len(samples) < minSamples {
+	if len(samples) < 2 {
 		return XPRate{
 			Samples: len(samples),
 			Why:     "collecting samples",
 		}
 	}
+	provisional := len(samples) < minSamples
 
 	oldest, newest := samples[0], samples[len(samples)-1]
 
@@ -98,14 +118,22 @@ func computeXPRate(samples []XPSample, minSamples int, stability xpStability) XP
 		return XPRate{Samples: len(samples), Why: "XP went backwards"}
 	}
 
-	return XPRate{
-		Available: true,
-		PerHour:   float64(gained) / span.Seconds() * 3600,
-		Gained:    gained,
-		Span:      span,
-		Samples:   len(samples),
-		Stability: stability,
+	rate := XPRate{
+		Available:   true,
+		PerHour:     float64(gained) / span.Seconds() * 3600,
+		Gained:      gained,
+		Span:        span,
+		Samples:     len(samples),
+		Stability:   stability,
+		Provisional: provisional,
 	}
+	if provisional {
+		// Kept for -print-view and the tray, so "why does that number have a tilde
+		// on it" has an answer without reading the source.
+		rate.Why = "provisional: " + strconv.Itoa(len(samples)) + " of " +
+			strconv.Itoa(minSamples) + " samples"
+	}
+	return rate
 }
 
 // xpRunReset reports whether the rate window must be discarded because a new run

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -45,19 +46,25 @@ func TestComputeXPRate(t *testing.T) {
 
 // Below min_samples the rate must be blank rather than extrapolated: two points a
 // second apart imply an hourly figure that is pure noise.
+// min_samples is the threshold for TRUSTING a rate, not for having one: below it
+// the rate is still computed and flagged provisional. Only fewer than two samples
+// means there is no arithmetic to do.
 func TestComputeXPRateNeedsMinSamples(t *testing.T) {
 	start := time.Unix(1786484051, 0)
-	for n := 0; n < 3; n++ {
+	for n := 0; n < 2; n++ {
 		rate := computeXPRate(ring(start, n, 10*time.Second, 1000, 100), 3, xpSteady)
 		if rate.Available {
-			t.Errorf("%d samples should not produce a rate", n)
+			t.Errorf("%d samples span no time, so there is no rate", n)
 		}
 		if rate.Why == "" {
 			t.Errorf("%d samples: the widget needs a reason to display", n)
 		}
 	}
-	if rate := computeXPRate(ring(start, 3, 10*time.Second, 1000, 100), 3, xpSteady); !rate.Available {
-		t.Error("exactly min_samples should produce a rate")
+	if rate := computeXPRate(ring(start, 2, 10*time.Second, 1000, 100), 3, xpSteady); !rate.Available || !rate.Provisional {
+		t.Errorf("two samples should give a provisional rate, got %+v", rate)
+	}
+	if rate := computeXPRate(ring(start, 3, 10*time.Second, 1000, 100), 3, xpSteady); !rate.Available || rate.Provisional {
+		t.Errorf("exactly min_samples should give a full rate, got %+v", rate)
 	}
 	// min_samples below 2 is meaningless and must be floored, not honoured.
 	if rate := computeXPRate(ring(start, 1, time.Second, 1000, 100), 0, xpSteady); rate.Available {
@@ -275,12 +282,37 @@ func TestXPLine(t *testing.T) {
 		t.Errorf("class = %q, want shaky", class)
 	}
 
-	// No rate yet: no row. The reason used to be rendered here, which put
-	// "collecting samples" on screen for the first thirty seconds of every run and
-	// after every reset - a progress report on df-hud's internals, on a HUD whose
-	// job is to be glanceable. It stays in View.XPWhy for -print-view and the tray.
-	if _, _, show := xpLine(&View{HaveData: true, XPWhy: "collecting samples"}, cfg); show {
-		t.Error("a rate that is not available yet must not take a row")
+	// A provisional rate is shown, marked with a tilde. Every run start clears the
+	// window, so withholding it meant no number for the first half-minute of every
+	// run - reported as a bug, because a blank where a number lives looks nothing
+	// like a number that is not ready.
+	rough := &View{HaveData: true, XPAvailable: true, XPProvisional: true,
+		XPPerHour: 12_000_000, XPStability: xpUnstable}
+	text, class, show = xpLine(rough, cfg)
+	if !show || text != "Xp/Hr: ~12,000,000" {
+		t.Errorf("provisional rate = %q, %v", text, show)
+	}
+	// No stability colour on a provisional rate: amber and red mean "recent polls
+	// did not land", which is a different complaint from "there have not been many
+	// polls yet", and one colour cannot say both.
+	if class != "" {
+		t.Errorf("class = %q, want none on a provisional rate", class)
+	}
+
+	// Below two samples there is no arithmetic at all, so the row holds its place
+	// with dashes rather than vanishing.
+	text, class, show = xpLine(&View{HaveData: true, XPWhy: "collecting samples"}, cfg)
+	if !show {
+		t.Fatal("a rate that is not ready must still hold its row")
+	}
+	if text != "Xp/Hr: --" {
+		t.Errorf("pending rate = %q, want the prefix and dashes", text)
+	}
+	if strings.Contains(text, "collecting") {
+		t.Errorf("the internal reason must not reach the screen: %q", text)
+	}
+	if class != "" {
+		t.Errorf("class = %q, want none while there is no rate", class)
 	}
 
 	// No data at all: no row.
@@ -298,5 +330,52 @@ func TestStabilityCSSClasses(t *testing.T) {
 	}
 	if xpSteady.String() != "steady" || xpShaky.String() != "shaky" || xpUnstable.String() != "unstable" {
 		t.Error("stability should stringify for logs")
+	}
+}
+
+// A rate arrives as early as the arithmetic allows: two samples, one interval
+// apart, marked provisional. This is what makes the row useful in the first half
+// minute of a run instead of blank.
+func TestComputeXPRateIsProvisionalBelowMinSamples(t *testing.T) {
+	base := time.Unix(1786484051, 0)
+	samples := []XPSample{
+		{At: base, Cumulative: 1_000_000, Source: "df_exptotal"},
+		{At: base.Add(10 * time.Second), Cumulative: 1_050_000, Source: "df_exptotal"},
+	}
+
+	rate := computeXPRate(samples, 3, xpSteady)
+	if !rate.Available {
+		t.Fatalf("two samples must produce a rate, got %+v", rate)
+	}
+	if !rate.Provisional {
+		t.Error("a rate from fewer than min_samples must say so")
+	}
+	// 50,000 over ten seconds.
+	if rate.PerHour != 18_000_000 {
+		t.Errorf("PerHour = %v, want 18000000", rate.PerHour)
+	}
+	// The reason survives for -print-view and the tray, where the tilde is not
+	// self-explanatory.
+	if !strings.Contains(rate.Why, "2 of 3") {
+		t.Errorf("Why = %q, want the sample count", rate.Why)
+	}
+
+	// At min_samples it stops being provisional.
+	samples = append(samples, XPSample{At: base.Add(20 * time.Second), Cumulative: 1_100_000, Source: "df_exptotal"})
+	rate = computeXPRate(samples, 3, xpSteady)
+	if !rate.Available || rate.Provisional {
+		t.Errorf("at min_samples the rate must be full, got %+v", rate)
+	}
+	if rate.Why != "" {
+		t.Errorf("Why = %q, want nothing to explain", rate.Why)
+	}
+
+	// One sample spans no time, so there is genuinely nothing to divide.
+	rate = computeXPRate(samples[:1], 3, xpSteady)
+	if rate.Available {
+		t.Error("a single sample cannot be a rate")
+	}
+	if rate.Why != "collecting samples" {
+		t.Errorf("Why = %q", rate.Why)
 	}
 }

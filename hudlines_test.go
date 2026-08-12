@@ -146,18 +146,20 @@ func TestHudLinesOrdersByPositionAndLeadsWithStatus(t *testing.T) {
 	v.SessionTime = time.Hour
 
 	lines := hudLines(v, cfg)
-	// The defaults put the clock at y=60 and block info at y=300.
-	if len(lines) != 3 {
-		t.Fatalf("lines = %v, want the clock and the two block rows", lines)
+	// The defaults stack them clock (y=60), rate (y=100), block info (y=300). The
+	// rate is dashes here because this view carries no samples, and it holds its
+	// row rather than vanishing.
+	if len(lines) != 4 {
+		t.Fatalf("lines = %v, want the clock, the rate and the two block rows", lines)
 	}
-	if lines[0] != "IC Time: 1:00:00" || lines[1] != "1058, 1016" {
-		t.Errorf("lines = %v, want the clock first at y=60", lines)
+	if lines[0] != "IC Time: 1:00:00" || lines[1] != "Xp/Hr: --" || lines[2] != "1058, 1016" {
+		t.Errorf("lines = %v, want them ordered down the screen", lines)
 	}
 
 	// Moving a group down the screen moves it down the printed list.
 	cfg.Widget.Session.Y = 900
 	lines = hudLines(v, cfg)
-	if lines[2] != "IC Time: 1:00:00" {
+	if lines[len(lines)-1] != "IC Time: 1:00:00" {
 		t.Errorf("after moving the clock to y=900, lines = %v; it should be last", lines)
 	}
 
@@ -171,6 +173,7 @@ func TestHudLinesOrdersByPositionAndLeadsWithStatus(t *testing.T) {
 	// A disabled widget produces nothing.
 	cfg.Widget.Block.Enabled = false
 	cfg.Widget.Session.Enabled = false
+	cfg.Widget.XP.Enabled = false
 	lines = hudLines(v, cfg)
 	if len(lines) != 1 || lines[0] != v.Status {
 		t.Errorf("with every widget off, only the status should render, got %v", lines)

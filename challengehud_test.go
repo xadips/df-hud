@@ -145,8 +145,13 @@ func TestChallengeLines(t *testing.T) {
 	if len(lines) != 6 {
 		t.Fatalf("lines = %v", lines)
 	}
+	// The OBJECTIVE, not just the name. "First Strike 0/7" does not say what the
+	// seven are, which makes the number one you cannot act on.
 	if !strings.Contains(lines[0], "Summer Death") || !strings.Contains(lines[0], "55/100") {
 		t.Errorf("line = %q, want the name and progress", lines[0])
+	}
+	if !strings.Contains(lines[0], "Kill Regular Infected") {
+		t.Errorf("line = %q, want the objective named", lines[0])
 	}
 	// A countdown appears only when it is close enough to matter; "5d" on every
 	// row is noise.
@@ -158,6 +163,75 @@ func TestChallengeLines(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "done") {
 		t.Errorf("a completed challenge should say so: %q", lines[1])
+	}
+}
+
+// The objective is the actionable half of a challenge, so it is on the row. The
+// name stays too, because dropping it collides - the live board carries both
+// "Summer Loot" and "Weekly Challenge - Loot Anything", each with an objective of
+// "Loot Anything", and two identical rows with different numbers is worse than one
+// long row.
+func TestChallengeRowsNameTheObjective(t *testing.T) {
+	now := time.Now()
+
+	first := Challenge{
+		Name: "First Strike", End: now.Add(20 * time.Hour),
+		Objectives: []Objective{{Name: "Kill Any Boss", Target: 7}},
+	}
+	rows := challengeRows(first, now)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %v, want one", rows)
+	}
+	if !strings.Contains(rows[0], "First Strike") || !strings.Contains(rows[0], "Kill Any Boss") {
+		t.Errorf("row = %q, want the challenge and the objective", rows[0])
+	}
+	if !strings.Contains(rows[0], "0/7") {
+		t.Errorf("row = %q, want the progress", rows[0])
+	}
+
+	// When the name already contains the objective - which is exactly how the clan
+	// board reads - saying it twice is noise.
+	clan := Challenge{
+		Name: "Weekly Challenge - Kill Infected", Clan: true, End: now.Add(4 * 24 * time.Hour),
+		Objectives: []Objective{{Name: "Kill Infected", Target: 162401, Score: 162423, HasScore: true}},
+	}
+	rows = challengeRows(clan, now)
+	if strings.Count(strings.ToLower(rows[0]), "kill infected") != 1 {
+		t.Errorf("row = %q, want the objective named once", rows[0])
+	}
+	if !strings.Contains(rows[0], "done") {
+		t.Errorf("row = %q, want the completion mark", rows[0])
+	}
+}
+
+// Two objectives summed into one figure is not something you can act on either, so
+// they get a row each under the challenge's name.
+func TestChallengeRowsSplitsMultipleObjectives(t *testing.T) {
+	now := time.Now()
+	c := Challenge{
+		Name: "Two Jobs", End: now.Add(3 * time.Hour),
+		Objectives: []Objective{
+			{Name: "Kill Dogs", Target: 100, Score: 100, HasScore: true},
+			{Name: "Loot Food", Target: 25, Score: 4, HasScore: true},
+		},
+	}
+
+	rows := challengeRows(c, now)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %v, want the name and a row per objective", rows)
+	}
+	if !strings.Contains(rows[0], "Two Jobs") || !strings.Contains(rows[0], "h") {
+		t.Errorf("first row = %q, want the name and the countdown", rows[0])
+	}
+	if !strings.Contains(rows[1], "Kill Dogs") || !strings.Contains(rows[1], "100/100") {
+		t.Errorf("row = %q", rows[1])
+	}
+	// Per-objective completion, since the challenge as a whole is not done.
+	if !strings.Contains(rows[1], "done") {
+		t.Errorf("row = %q, want the finished objective marked", rows[1])
+	}
+	if !strings.Contains(rows[2], "Loot Food") || strings.Contains(rows[2], "done") {
+		t.Errorf("row = %q", rows[2])
 	}
 }
 

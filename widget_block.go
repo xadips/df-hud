@@ -25,12 +25,13 @@ type blockWidget struct {
 	box  *gtk.Box
 	head *gtk.Label
 	sub  *gtk.Label
-	// attack and threat are two labels rather than one because they are two
-	// different claims with two different colours: the attack is map-wide, the
-	// threat is your own block. Sharing a label meant the attack's colour was
-	// applied to both.
+	// attack is separate from the threat rows because it is a different claim with
+	// a different colour: the attack is map-wide, the threats are your own block.
+	// Sharing a label meant the attack's colour was applied to both.
 	attack *gtk.Label
-	threat *gtk.Label
+	// threats is one label per enemy type, grown on demand. A boss nest can carry
+	// seven, and they arrive and leave as you move.
+	threats []*gtk.Label
 }
 
 func newBlockWidget(cfg BlockWidgetConfig) *blockWidget {
@@ -40,17 +41,15 @@ func newBlockWidget(cfg BlockWidgetConfig) *blockWidget {
 		head:   newHUDLabel(),
 		sub:    newHUDLabel(),
 		attack: newHUDLabel(),
-		threat: newHUDLabel(),
 	}
 	w.attack.AddCSSClass("threat")
 	// The loud colour is permanent on this label, since it only ever says one
-	// thing. Nothing toggles it, which is what stops the two rows sharing a state.
+	// thing. Nothing toggles it, which is what stops the two kinds of row sharing a
+	// piece of state.
 	w.attack.AddCSSClass("urgent")
-	w.threat.AddCSSClass("threat")
 	w.box.Append(w.head)
 	w.box.Append(w.sub)
 	w.box.Append(w.attack)
-	w.box.Append(w.threat)
 	return w
 }
 
@@ -74,9 +73,24 @@ func (w *blockWidget) Update(v *View) {
 		w.attack.SetText(attack)
 	}
 
-	threat, showThreat := threatLine(v)
-	w.threat.SetVisible(showThreat)
-	if showThreat {
-		w.threat.SetText(threat)
+	// One row per enemy type, because a boss nest can carry seven at once and a
+	// joined line runs off the side of the screen. Rows are created on demand and
+	// then reused: this runs every second forever, so surplus rows are hidden
+	// rather than destroyed, and a block with fewer bosses than the last one does
+	// not rebuild the tree.
+	threats := threatLines(v)
+	for len(w.threats) < len(threats) {
+		label := newHUDLabel()
+		label.AddCSSClass("threat")
+		w.box.Append(label)
+		w.threats = append(w.threats, label)
+	}
+	for i, label := range w.threats {
+		if i >= len(threats) {
+			label.SetVisible(false)
+			continue
+		}
+		label.SetText(threats[i])
+		label.SetVisible(true)
 	}
 }

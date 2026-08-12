@@ -294,7 +294,19 @@ func (h *hud) applyVisibility(state hudVisibility) {
 		h.window.SetVisible(false)
 	}
 	if !h.visible {
-		h.pinMonitor(want)
+		monitor := h.pinMonitor(want)
+		// Tell the window how big it is about to be BEFORE the first frame.
+		//
+		// Hiding destroys the surface and showing recreates it, so on every remap
+		// GTK has to lay out the groups once before the compositor's configure
+		// arrives with the monitor's real size. Without a default size that first
+		// layout happens inside a window a few hundred pixels wide: labels get less
+		// width than they asked for and come out squeezed, groups placed near the
+		// right edge land nowhere near where they belong, and it all snaps into place
+		// a moment later when the configure lands. Reported as text being "smushed
+		// and on the wrong coordinates" for about a second after every switch back to
+		// the game's workspace.
+		h.sizeToMonitor(monitor)
 		// Render before mapping, so the surface is sized to real content rather
 		// than appearing empty and then jumping.
 		h.update()
@@ -317,38 +329,23 @@ func (h *hud) wantMonitor(state hudVisibility) string {
 }
 
 // pinMonitor points the surface at one output, or at none, which is how
-// layer-shell spells "compositor's choice" (in practice the focused monitor).
+// layer-shell spells "compositor's choice" (in practice the focused monitor). It
+// returns the output it resolved, for sizing, and nil when it could not.
 //
 // An unknown connector is a warning rather than a failure: losing the whole HUD
 // because a connector got renamed after a cable swap would be a poor trade. The
 // warning is said once per name, since this now runs on every show.
-func (h *hud) pinMonitor(want string) {
+func (h *hud) pinMonitor(want string) *gdk.Monitor {
 	h.monitorPinned = want
 	if want == "" {
 		SetMonitor(h.handle, 0)
-		return
+		return nil
 	}
-	display := gdk.DisplayGetDefault()
-	if display == nil {
-		return
-	}
-	monitors := display.Monitors()
-	var names []string
-	for i := uint(0); i < monitors.NItems(); i++ {
-		object := monitors.Item(i)
-		if object == nil {
-			continue
-		}
-		monitor, ok := object.Cast().(*gdk.Monitor)
-		if !ok {
-			continue
-		}
-		connector := monitor.Connector()
-		names = append(names, connector)
-		if connector == want {
-			SetMonitor(h.handle, monitor.Native())
-			return
-		}
+	monitors := allMonitors()
+	monitor := monitorByConnector(monitors, want)
+	if monitor != nil {
+		SetMonitor(h.handle, monitor.Native())
+		return monitor
 	}
 	if h.warnedMonitors == nil {
 		h.warnedMonitors = map[string]bool{}
@@ -356,10 +353,80 @@ func (h *hud) pinMonitor(want string) {
 	if !h.warnedMonitors[want] {
 		h.warnedMonitors[want] = true
 		log.Printf("hud: no monitor named %q (found: %s); letting the compositor choose",
-			want, strings.Join(names, ", "))
+			want, strings.Join(connectorNames(monitors), ", "))
 	}
 	h.monitorPinned = ""
 	SetMonitor(h.handle, 0)
+	return nil
+}
+
+// allMonitors is every output GDK knows about, in its order.
+func allMonitors() []*gdk.Monitor {
+	display := gdk.DisplayGetDefault()
+	if display == nil {
+		return nil
+	}
+	list := display.Monitors()
+	out := make([]*gdk.Monitor, 0, list.NItems())
+	for i := uint(0); i < list.NItems(); i++ {
+		object := list.Item(i)
+		if object == nil {
+			continue
+		}
+		if monitor, ok := object.Cast().(*gdk.Monitor); ok {
+			out = append(out, monitor)
+		}
+	}
+	return out
+}
+
+func monitorByConnector(monitors []*gdk.Monitor, want string) *gdk.Monitor {
+	if want == "" {
+		return nil
+	}
+	for _, monitor := range monitors {
+		if monitor.Connector() == want {
+			return monitor
+		}
+	}
+	return nil
+}
+
+// connectorNames is for the "no monitor named X" warning, where the list of what
+// GDK actually sees is the whole answer.
+func connectorNames(monitors []*gdk.Monitor) []string {
+	names := make([]string, 0, len(monitors))
+	for _, monitor := range monitors {
+		names = append(names, monitor.Connector())
+	}
+	return names
+}
+
+// sizeToMonitor sets the window's default size to the output it is about to appear
+// on, so the first frame after a remap is laid out at the size it will keep.
+//
+// With no output resolved - "compositor's choice", or a connector GDK does not
+// know - the first one is used as a guess. On a mismatched pair of monitors that
+// guess can be wrong, but wrong is no worse than the absent default it replaces:
+// either way the compositor's configure corrects it, and the guess is right
+// whenever the outputs match, which is most of the time.
+func (h *hud) sizeToMonitor(monitor *gdk.Monitor) {
+	if monitor == nil {
+		if monitors := allMonitors(); len(monitors) > 0 {
+			monitor = monitors[0]
+		}
+	}
+	if monitor == nil {
+		return
+	}
+	geometry := monitor.Geometry()
+	if geometry == nil {
+		return
+	}
+	width, height := geometry.Width(), geometry.Height()
+	if width > 0 && height > 0 {
+		h.window.SetDefaultSize(width, height)
+	}
 }
 
 // applyClickThrough installs an empty input region so every pointer event lands

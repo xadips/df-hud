@@ -218,16 +218,16 @@ func TestThreatLineMarksThePreviousCycle(t *testing.T) {
 		BlockEvents:     []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Charred Giant Spider"}}},
 		BlockEventsPast: []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Irradiated Wraith"}}},
 	}
-	text, show := threatLine(v)
-	if !show {
-		t.Fatal("expected a threat line")
+	rows := threatLines(v)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %v, want the current cycle and the previous one", rows)
 	}
-	if !strings.Contains(text, "3 x Charred Giant Spider") {
-		t.Errorf("threatLine = %q, want the current cycle", text)
+	if rows[0] != "3 x Charred Giant Spider" {
+		t.Errorf("rows = %v, want the current cycle first", rows)
 	}
 	// Prefixed, because "might still be there" is a different claim from "is".
-	if !strings.Contains(text, "last: 3 x Irradiated Wraith") {
-		t.Errorf("threatLine = %q, want the previous cycle marked as such", text)
+	if rows[1] != "last: 3 x Irradiated Wraith" {
+		t.Errorf("rows = %v, want the previous cycle marked as such", rows)
 	}
 }
 
@@ -299,20 +299,84 @@ func TestParseBossMapRejectsAnEmptyFeed(t *testing.T) {
 	}
 }
 
-func TestThreatLine(t *testing.T) {
+func TestThreatLines(t *testing.T) {
 	m := loadFixtureBossMap(t)
 	v := &View{HaveData: true, HasPosition: true, PositionX: 1058, PositionY: 1016}
 	v.BlockEvents = m.At(1058, 1016, fixtureNow(t, m))
 
-	text, show := threatLine(v)
-	if !show || !strings.Contains(text, "6 x Bandits") {
-		t.Errorf("threatLine = %q, %v", text, show)
+	rows := threatLines(v)
+	if len(rows) != 1 || rows[0] != "6 x Bandits" {
+		t.Errorf("rows = %v, want one row naming the bandits", rows)
 	}
 
 	// An empty block says nothing at all. "nothing here" on every block would
-	// train you to stop reading the line.
-	if _, show := threatLine(&View{HaveData: true, HasPosition: true}); show {
-		t.Error("an empty block must not take a row")
+	// train you to stop reading it.
+	if rows := threatLines(&View{HaveData: true, HasPosition: true}); len(rows) != 0 {
+		t.Errorf("rows = %v, want none on an empty block", rows)
+	}
+}
+
+// A boss nest gets a row per type. A live one carried seven at once, which as a
+// single line was about 140 characters - unreadable at a glance, and clipped at
+// the block group's position, so the tail naming the worst of it was exactly the
+// part that disappeared.
+func TestThreatLinesOneRowPerEnemyType(t *testing.T) {
+	nest := []string{
+		"1 x Evolved Longarms",
+		"1 x Irradiated Titan",
+		"1 x Irradiated Mother",
+		"1 x Irradiated Giant Spider",
+		"2 x Mega Wraith",
+		"1 x Charred Mother",
+		"1 x Charred Giant Spider",
+	}
+	v := &View{
+		HaveData: true, HasPosition: true,
+		BlockEvents: []CityEvent{{Kind: EventSpawn, Enemies: nest}},
+	}
+
+	rows := threatLines(v)
+	if len(rows) != len(nest) {
+		t.Fatalf("got %d rows for %d enemy types: %v", len(rows), len(nest), rows)
+	}
+	for i, want := range nest {
+		if rows[i] != want {
+			t.Errorf("row %d = %q, want %q", i, rows[i], want)
+		}
+	}
+	// A plain spawn is nothing but its enemies, so no row repeats them as a title.
+	for _, r := range rows {
+		if strings.Contains(r, " + ") {
+			t.Errorf("row %q still joins types together", r)
+		}
+	}
+}
+
+// A mission or a QRF has a name worth its own row, and its enemies go underneath:
+// a mission also carries a special_enemy_type, so those are not alternatives.
+func TestThreatLinesTitleThenEnemies(t *testing.T) {
+	v := &View{
+		HaveData: true, HasPosition: true,
+		BlockEvents: []CityEvent{{
+			Kind:       EventMission,
+			Title:      "Retrieve the Samples",
+			Enemies:    []string{"2 x Titan"},
+			Objectives: []string{"0/3 samples"},
+		}},
+	}
+
+	rows := threatLines(v)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %v, want the title, the enemies and the objectives", rows)
+	}
+	if !strings.Contains(rows[0], "Retrieve the Samples") {
+		t.Errorf("rows = %v, want the mission named first", rows)
+	}
+	if rows[1] != "2 x Titan" {
+		t.Errorf("rows = %v, want the mission's enemies on their own row", rows)
+	}
+	if !strings.Contains(rows[2], "0/3 samples") {
+		t.Errorf("rows = %v, want the objectives last", rows)
 	}
 }
 
@@ -330,12 +394,14 @@ func TestOutpostAttackIsItsOwnLine(t *testing.T) {
 		t.Errorf("outpostAttackLine = %q, %v", attack, show)
 	}
 
-	threat, show := threatLine(v)
-	if !show || !strings.Contains(threat, "6 x Bandits") {
-		t.Fatalf("threatLine = %q, %v", threat, show)
+	threats := threatLines(v)
+	if len(threats) == 0 || !strings.Contains(threats[0], "6 x Bandits") {
+		t.Fatalf("threatLines = %v", threats)
 	}
-	if strings.Contains(threat, "OUTPOST") {
-		t.Errorf("threatLine = %q, want the attack on its own row", threat)
+	for _, r := range threats {
+		if strings.Contains(r, "OUTPOST") {
+			t.Errorf("threatLines = %v, want the attack on its own row", threats)
+		}
 	}
 
 	// And with no attack the row is absent rather than empty.
