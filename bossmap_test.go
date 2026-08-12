@@ -526,15 +526,22 @@ func TestNearestEvent(t *testing.T) {
 	m := loadFixtureBossMap(t)
 	now := fixtureNow(t, m)
 
-	// The bandit pack in the capture is on 1058,1016. From two blocks away it should
-	// be what comes back, with the deltas pointing at it.
-	event, dx, dy, ok := m.NearestEvent(1058, 1018, now)
+	// The bandit pack in the capture is on 1058,1016. From two blocks up the same
+	// column it should be what comes back, with the deltas pointing at it.
+	//
+	// 1058,1014 rather than 1058,1018, which this test used to walk from: that is a
+	// gap, so it is not somewhere a player can be standing to ask the question.
+	event, walk, ok := m.NearestEvent(1058, 1014, now)
 	if !ok {
 		t.Fatal("expected an event somewhere on the map")
 	}
-	if dx != 0 || dy != -2 {
-		// dy negative means the target is at a smaller y, which is up the screen.
-		t.Errorf("deltas = %d, %d; want 0, -2 towards 1058,1016", dx, dy)
+	if walk.DX != 0 || walk.DY != 2 {
+		// dy positive means the target is at a larger y, which is down the screen.
+		t.Errorf("deltas = %d, %d; want 0, 2 towards 1058,1016", walk.DX, walk.DY)
+	}
+	if walk.Blocks != 2 || walk.Detour != 0 {
+		t.Errorf("walk = %d blocks, detour %d; that column is unbroken",
+			walk.Blocks, walk.Detour)
 	}
 	if !strings.Contains(event.Label(), "Bandits") {
 		t.Errorf("nearest = %q, want the bandit pack two blocks up", event.Label())
@@ -542,8 +549,45 @@ func TestNearestEvent(t *testing.T) {
 
 	// Something on your own block is not "nearest": the caller already has it from
 	// At, and reporting it as somewhere to walk would be nonsense.
-	if _, dx, dy, ok := m.NearestEvent(1058, 1016, now); ok && dx == 0 && dy == 0 {
+	if _, walk, ok := m.NearestEvent(1058, 1016, now); ok && walk.DX == 0 && walk.DY == 0 {
 		t.Error("an event on your own block must not be reported as the nearest one")
+	}
+}
+
+// The nearest event is the nearest to WALK to, which is not always the one with the
+// smallest coordinate difference. Precinct 13 sits at the mouth of the southern
+// strip: from inside the strip, a boss a few blocks west across the gap is a long
+// way round, and one further off in open ground is closer.
+func TestNearestEventPrefersTheShorterWalk(t *testing.T) {
+	m := loadFixtureBossMap(t)
+	now := fixtureNow(t, m)
+
+	from := [2]int{1013, 1024} // inside the southern strip
+	event, walk, ok := m.NearestEvent(from[0], from[1], now)
+	if !ok {
+		t.Skip("nothing active within reach of the strip in this capture")
+	}
+	straight := abs(walk.DX) + abs(walk.DY)
+	if walk.Blocks < straight {
+		t.Fatalf("walk of %d blocks beats the straight line of %d, which cannot happen",
+			walk.Blocks, straight)
+	}
+	// And nothing else on the map is a shorter walk than what was chosen.
+	dist := theCity.walkDistances(from[0], from[1])
+	for _, e := range m.Events {
+		if e.Onslaught || !e.ActiveAt(m.ServerNow(now)) {
+			continue
+		}
+		for _, loc := range e.Locations {
+			if loc[0] == from[0] && loc[1] == from[1] {
+				continue
+			}
+			other, reachable := theCity.routeFrom(dist, from[0], from[1], loc[0], loc[1])
+			if reachable && other.Blocks < walk.Blocks {
+				t.Errorf("chose %s at %d blocks, but %s is %d blocks away",
+					event.Label(), walk.Blocks, e.Label(), other.Blocks)
+			}
+		}
 	}
 }
 
@@ -554,15 +598,16 @@ func TestNearestEventIgnoresOnslaught(t *testing.T) {
 	m := loadFixtureBossMap(t)
 	now := fixtureNow(t, m)
 
-	event, dx, dy, ok := m.NearestEvent(1050, 1010, now)
+	// 1048,1010 is a block; 1050,1010, which this used to ask from, is a gap.
+	event, walk, ok := m.NearestEvent(1048, 1010, now)
 	if !ok {
 		t.Fatal("expected an event")
 	}
 	if event.Onslaught {
 		t.Error("an Onslaught cycle was reported as the nearest event")
 	}
-	if abs(dx) > 100 || abs(dy) > 100 {
-		t.Errorf("deltas = %d, %d; nothing on the city map is that far", dx, dy)
+	if abs(walk.DX) > 100 || abs(walk.DY) > 100 {
+		t.Errorf("deltas = %d, %d; nothing on the city map is that far", walk.DX, walk.DY)
 	}
 }
 

@@ -264,6 +264,18 @@ words are what you read at a glance, and the coordinates are the form the game
 itself shows you, so they are both the actionable version and the way to catch this
 being wrong.
 
+**Nearest means nearest to walk to.** The city is not a rectangle: 1716 of the 3245
+coordinates in its bounding box are blocks, and the rest are gaps you have to go
+around. So df-hud holds the city's shape ([citymap.txt](citymap.txt), and
+[knowledge/city-map.md](knowledge/city-map.md) for where it comes from and what was
+checked), searches outward from the block you are on, and picks the event with the
+shortest walk - which is not always the one with the smallest difference in
+coordinates. When the walk is longer than the directions add up to, the row says so:
+
+```
+nearest 3 up 1 left, 8 blocks  1015, 1024
+```
+
 Because **up is inferred, not verified.** DFProfiler's map is an HTML table whose
 rows are `y`, so the smallest `y` renders topmost, which means `y` decreasing is up
 the screen. That is the one claim here that could send someone the wrong way, and
@@ -406,6 +418,13 @@ server, the budget is set by what their own page already costs them:
   turns out not to be needed.
 
 Turning `bossmap.enabled` off costs that one line of the HUD and nothing else.
+
+The city's own shape comes from there too, and this one is **not** a runtime
+request. `citymap.txt` is generated once by `tools/citymapgen` from their bossmap
+stylesheet - the only published thing that knows which coordinates are blocks and
+which are the gaps between them - then committed and embedded. The map changes when
+the game changes, so re-deriving it from someone else's CSS on every start would be
+both fragile and rude. `knowledge/city-map.md` records what was checked against it.
 
 Two details worth knowing, both taken from their own `bossmap.js` rather than
 guessed: a mission also carries a `special_enemy_type`, so classifying on that

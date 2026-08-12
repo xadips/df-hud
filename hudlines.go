@@ -151,6 +151,11 @@ const nearestReportRange = 12
 // coordinates are what the game itself shows you, so they are both the actionable
 // form and the way to catch this being wrong.
 //
+// The distance is the WALK and can be longer than the directions add up to, because
+// the city has gaps you cannot cross. When it is longer the row says so - "5 up
+// 2 left, 9 blocks" - since that difference is the whole reason the direct line is
+// not the route, and hiding it would be the same lie as before, told more precisely.
+//
 // UP IS y DECREASING. That is inferred rather than verified - DFProfiler's map is
 // an HTML table whose rows are y, so the smallest y renders topmost (bossmap.js) -
 // and it is the one claim here that could send someone the wrong way. The
@@ -178,8 +183,11 @@ func nearestLine(v *View, cfg BossesWidgetConfig) (string, bool) {
 	if len(parts) == 0 {
 		return "", false
 	}
-	return "nearest " + strings.Join(parts, " ") + "  " +
-		strconv.Itoa(v.NearestX) + ", " + strconv.Itoa(v.NearestY), true
+	line := "nearest " + strings.Join(parts, " ")
+	if v.NearestDetour > 0 {
+		line += ", " + strconv.Itoa(v.NearestDistanceInBlocks) + " blocks"
+	}
+	return line + "  " + strconv.Itoa(v.NearestX) + ", " + strconv.Itoa(v.NearestY), true
 }
 
 // xpPending stands in for the rate until there are two samples to subtract, which

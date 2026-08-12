@@ -745,11 +745,17 @@ type View struct {
 	// empty block says which way to walk instead of nothing at all. Deltas are in
 	// blocks, and NearestX/Y are the block itself, which is the form the game's own
 	// coordinate readout is in.
+	//
+	// NearestDistanceInBlocks is the WALK, around the gaps in the city, and it is
+	// also what "nearest" was decided by. NearestDetour is how much longer that is
+	// than the deltas suggest, which is how the row can admit that the direct line
+	// is not walkable.
 	HasNearest              bool
 	NearestEvent            CityEvent
 	NearestDX, NearestDY    int
 	NearestX, NearestY      int
 	NearestDistanceInBlocks int
+	NearestDetour           int
 	// BossMapAge is how stale the event feed is, so a widget can decline to
 	// claim a block is clear on the strength of an hour-old fetch.
 	BossMapAge time.Duration
@@ -852,11 +858,12 @@ func (s *Store) Derive(now time.Time) *View {
 			// v.InOutpost rather than the snapshot, which is out of scope here: the
 			// view already carries it and they are the same value.
 			if len(v.BlockEvents) == 0 && !v.InOutpost {
-				if e, dx, dy, ok := s.bossMap.NearestEvent(v.PositionX, v.PositionY, now); ok {
+				if e, walk, ok := s.bossMap.NearestEvent(v.PositionX, v.PositionY, now); ok {
 					v.HasNearest, v.NearestEvent = true, e
-					v.NearestDX, v.NearestDY = dx, dy
-					v.NearestX, v.NearestY = v.PositionX+dx, v.PositionY+dy
-					v.NearestDistanceInBlocks = abs(dx) + abs(dy)
+					v.NearestDX, v.NearestDY = walk.DX, walk.DY
+					v.NearestX, v.NearestY = v.PositionX+walk.DX, v.PositionY+walk.DY
+					v.NearestDistanceInBlocks = walk.Blocks
+					v.NearestDetour = walk.Detour
 				}
 			}
 		}

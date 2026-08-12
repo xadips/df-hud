@@ -234,19 +234,23 @@ func (b *BossMap) AtEnded(x, y int, now time.Time) []CityEvent {
 // NearestEvent is the closest active event to a block, for when the block you are
 // standing on has nothing on it.
 //
-// Distance is counted in block moves - |dx| + |dy| - because that is how you cover
-// it: you walk north, south, east or west between adjacent blocks, so a diagonal
-// costs two.
+// Closest is measured by WALKING, not by subtracting coordinates. The city is not a
+// full rectangle - see citymap.go - so a boss five blocks up can be nine blocks
+// away around a gap while one seven blocks east is seven, and the nearer-looking one
+// is the wrong answer. The route is what df-hud reports, and it also decides which
+// event wins.
 //
 // Onslaught is excluded. Its cycles sit on 3000,3000, which is not a place you can
 // walk to from the city, so including it would report the nearest boss as being
 // roughly two thousand blocks away.
-func (b *BossMap) NearestEvent(x, y int, now time.Time) (event CityEvent, dx, dy int, ok bool) {
+func (b *BossMap) NearestEvent(x, y int, now time.Time) (event CityEvent, walk cityWalk, ok bool) {
 	if b == nil {
-		return CityEvent{}, 0, 0, false
+		return CityEvent{}, cityWalk{}, false
 	}
+	// One search from where you are stand serves every candidate, so the cost does
+	// not grow with the number of bosses on the map.
+	dist := theCity.walkDistances(x, y)
 	server := b.ServerNow(now)
-	best := -1
 	for _, e := range b.Events {
 		if e.Onslaught || !e.ActiveAt(server) {
 			continue
@@ -256,20 +260,22 @@ func (b *BossMap) NearestEvent(x, y int, now time.Time) (event CityEvent, dx, dy
 			if ex == onslaughtCoord && ey == onslaughtCoord {
 				continue
 			}
-			gx, gy := ex-x, ey-y
-			distance := abs(gx) + abs(gy)
-			if distance == 0 {
+			if ex == x && ey == y {
 				// Something on your own block, which the caller already has from At.
+				continue
+			}
+			w, reachable := theCity.routeFrom(dist, x, y, ex, ey)
+			if !reachable {
 				continue
 			}
 			// Ties broken by the first one seen, which is the feed's own order, so
 			// the row does not flicker between two equidistant bosses every poll.
-			if best == -1 || distance < best {
-				best, event, dx, dy, ok = distance, e, gx, gy, true
+			if !ok || w.Blocks < walk.Blocks {
+				event, walk, ok = e, w, true
 			}
 		}
 	}
-	return event, dx, dy, ok
+	return event, walk, ok
 }
 
 func abs(n int) int {
