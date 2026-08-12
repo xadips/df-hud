@@ -307,6 +307,7 @@ type TrayConfig struct {
 type WidgetConfig struct {
 	Status     StatusWidgetConfig     `toml:"status"`
 	Block      BlockWidgetConfig      `toml:"block"`
+	Bosses     BossesWidgetConfig     `toml:"bosses"`
 	Session    SessionWidgetConfig    `toml:"session"`
 	XP         XPWidgetConfig         `toml:"xp"`
 	Challenges ChallengesWidgetConfig `toml:"challenges"`
@@ -358,6 +359,23 @@ type BlockWidgetConfig struct {
 	// ShowCoords prints the raw df_positionx/y under the block name. Useful
 	// while calibrating the area grid, noise afterwards.
 	ShowCoords bool `toml:"show_coords"`
+}
+
+// BossesWidgetConfig is what the city event feed says is where you are: bosses,
+// bandit packs, missions, QRF events, and the map-wide outpost attack.
+//
+// Its own group rather than part of Block Info, because the two answer different
+// questions and want different amounts of room. Block Info is two short rows that
+// change when you walk; this is a list that can be seven rows long on a boss nest
+// and empty on most of the map, so anything placed under a combined group would
+// move up and down as you travelled.
+type BossesWidgetConfig struct {
+	Placement
+	Enabled bool `toml:"enabled"`
+
+	// Color is the normal colour for these rows. The amber that says "something is
+	// standing here" and the red of an outpost attack still win over it.
+	Color string `toml:"color"`
 }
 
 // SessionWidgetConfig is the run clock: time since you entered the inner city.
@@ -420,6 +438,15 @@ type ChallengesWidgetConfig struct {
 	// MaxShown caps the rows. 0 means no cap, which is the point of the window:
 	// the whole board, in the board's own order.
 	MaxShown int `toml:"max_shown"`
+
+	// UrgentWithin is how close a deadline has to be for an unfinished challenge to
+	// be drawn in the alarm colour. 0 turns that off.
+	//
+	// A display threshold, not a request interval, so it has no politeness floor -
+	// but it is a key rather than a constant because "soon" depends on how you play:
+	// two hours is plenty for a daily kill count and nowhere near enough for a
+	// weekly you have not started.
+	UrgentWithin duration `toml:"urgent_within"`
 }
 
 // EffectiveChallengeInterval is the board's cadence for the current state.
@@ -534,8 +561,12 @@ func defaultConfig() *Config {
 		// the right. Anything else on another resolution, which is why they are
 		// config keys.
 		Widget: WidgetConfig{
-			Status:  StatusWidgetConfig{Placement{X: 10, Y: 10}},
-			Block:   BlockWidgetConfig{Placement: Placement{X: 2340, Y: 300}, Enabled: true},
+			Status: StatusWidgetConfig{Placement{X: 10, Y: 10}},
+			Block:  BlockWidgetConfig{Placement: Placement{X: 2340, Y: 300}, Enabled: true},
+			// Directly under Block Info, same column: it is about the same place, and
+			// keeping the x aligned means the two read as one column even though a
+			// growing boss list cannot push the position line around.
+			Bosses:  BossesWidgetConfig{Placement: Placement{X: 2340, Y: 360}, Enabled: true},
 			Session: SessionWidgetConfig{Placement: Placement{X: 350, Y: 60}, Enabled: true, Prefix: "IC Time: "},
 			// Five minutes, not thirty seconds. XP arrives in lumps - a kill, a
 			// challenge - so a window short enough to contain no lump reads as a
@@ -550,6 +581,7 @@ func defaultConfig() *Config {
 			Challenges: ChallengesWidgetConfig{
 				Placement: Placement{X: 10, Y: 190}, Enabled: true,
 				ShowRepeatable: true, ShowClan: true, ShowPersonal: true, ShowCompleted: true,
+				UrgentWithin: duration{2 * time.Hour},
 			},
 		},
 		Console: ConsoleConfig{Width: 720, Height: 560},
@@ -761,6 +793,10 @@ func (c *Config) validate() error {
 		if c.Widget.XP.Window.Duration <= 0 {
 			errs = append(errs, fmt.Errorf("widget.xp.window %s must be positive", c.Widget.XP.Window))
 		}
+	}
+	if c.Widget.Challenges.UrgentWithin.Duration < 0 {
+		errs = append(errs, fmt.Errorf("widget.challenges.urgent_within %s cannot be negative (0 turns it off)",
+			c.Widget.Challenges.UrgentWithin))
 	}
 	if c.Widget.Challenges.MaxShown < 0 {
 		errs = append(errs, fmt.Errorf("widget.challenges.max_shown %d cannot be negative (0 means no cap)",

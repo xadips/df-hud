@@ -192,12 +192,13 @@ func TestChallengeLines(t *testing.T) {
 // long row.
 func TestChallengeRowsNameTheObjective(t *testing.T) {
 	now := time.Now()
+	cfg := allCategories()
 
 	first := Challenge{
 		Name: "First Strike", End: now.Add(20 * time.Hour),
 		Objectives: []Objective{{Name: "Kill Any Boss", Target: 7}},
 	}
-	rows := texts(challengeRows(first, now))
+	rows := texts(challengeRows(first, now, cfg))
 	// The objective lands UNDER the challenge, indented: a weekly with four of them
 	// and a daily with one should look like the same kind of thing, and an objective
 	// on the same line as its challenge reads as part of the name.
@@ -220,7 +221,7 @@ func TestChallengeRowsNameTheObjective(t *testing.T) {
 		Name: "Weekly Challenge - Kill Infected", Clan: true, End: now.Add(4 * 24 * time.Hour),
 		Objectives: []Objective{{Name: "Kill Infected", Target: 162401, Score: 162423, HasScore: true}},
 	}
-	rows = texts(challengeRows(clan, now))
+	rows = texts(challengeRows(clan, now, cfg))
 	// One row, not two: an objective row here would be the name again with a number
 	// on it, so the number joins the name instead.
 	if len(rows) != 1 {
@@ -241,6 +242,7 @@ func TestChallengeRowsNameTheObjective(t *testing.T) {
 // they get a row each under the challenge's name.
 func TestChallengeRowsSplitsMultipleObjectives(t *testing.T) {
 	now := time.Now()
+	cfg := allCategories()
 	c := Challenge{
 		Name: "Two Jobs", End: now.Add(3 * time.Hour),
 		Objectives: []Objective{
@@ -249,7 +251,7 @@ func TestChallengeRowsSplitsMultipleObjectives(t *testing.T) {
 		},
 	}
 
-	rows := texts(challengeRows(c, now))
+	rows := texts(challengeRows(c, now, cfg))
 	if len(rows) != 3 {
 		t.Fatalf("rows = %v, want the name and a row per objective", rows)
 	}
@@ -401,5 +403,60 @@ func TestChallengeRowSubIsIndented(t *testing.T) {
 	// With no name there is no separator to leave dangling.
 	if strings.Contains(sub.Text(), ": ") {
 		t.Errorf("text = %q, want no dangling separator", sub.Text())
+	}
+}
+
+// Green for finished, red for unfinished work that is nearly out of time. These are
+// state colours, so they are CSS classes rather than markup: the built-in sheet
+// scopes them to outrank a per-group color key, which is the whole point of them.
+func TestChallengeRowColours(t *testing.T) {
+	cfg := allCategories()
+	cfg.UrgentWithin = duration{2 * time.Hour}
+	now := time.Now()
+
+	done := Challenge{Name: "Summer Loot", End: now.Add(5 * 24 * time.Hour),
+		Objectives: []Objective{{Name: "Loot Anything", Target: 10, Score: 10, HasScore: true}}}
+	if got := challengeRows(done, now, cfg)[0].CSSClass(); got != "done" {
+		t.Errorf("a finished challenge = %q, want done", got)
+	}
+
+	soon := Challenge{Name: "Big Fancy Dinner", End: now.Add(90 * time.Minute),
+		Objectives: []Objective{{Name: "Loot Food", Target: 25, Score: 8, HasScore: true}}}
+	rows := challengeRows(soon, now, cfg)
+	if got := rows[0].CSSClass(); got != "expiring" {
+		t.Errorf("90 minutes left = %q, want expiring", got)
+	}
+	// The deadline belongs to the challenge, so it colours the objectives under it
+	// too - otherwise the group would be half red.
+	if got := rows[1].CSSClass(); got != "expiring" {
+		t.Errorf("the objective row = %q, want expiring with its challenge", got)
+	}
+
+	// Comfortably ahead of the deadline: the group's own colour.
+	later := Challenge{Name: "Who Let The Dogs Out?", End: now.Add(18 * time.Hour),
+		Objectives: []Objective{{Name: "Kill Dog Infected", Target: 1000, Score: 316, HasScore: true}}}
+	if got := challengeRows(later, now, cfg)[0].CSSClass(); got != "" {
+		t.Errorf("18 hours left = %q, want no state colour", got)
+	}
+
+	// A finished challenge does not care what time it is, so the two are never both
+	// set and green wins.
+	finishedAndLate := Challenge{Name: "Just In Time", End: now.Add(10 * time.Minute),
+		Objectives: []Objective{{Name: "Kill Anything", Target: 5, Score: 5, HasScore: true}}}
+	row := challengeRows(finishedAndLate, now, cfg)[0]
+	if row.Urgent {
+		t.Error("a completed challenge must not also be urgent")
+	}
+	if got := row.CSSClass(); got != "done" {
+		t.Errorf("class = %q, want done to win", got)
+	}
+
+	// Zero turns it off without touching the green.
+	cfg.UrgentWithin = duration{0}
+	if got := challengeRows(soon, now, cfg)[0].CSSClass(); got != "" {
+		t.Errorf("with urgent_within off, class = %q, want none", got)
+	}
+	if got := challengeRows(done, now, cfg)[0].CSSClass(); got != "done" {
+		t.Errorf("urgent_within must not affect completion, got %q", got)
 	}
 }

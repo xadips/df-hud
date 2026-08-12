@@ -52,6 +52,16 @@ window label.shaky {
 window label.unstable {
   color: #ff6b6b;
 }
+/* The challenge board. Green for finished, so a glance down the column separates
+   what is left from what is not; the alarm red for unfinished work whose deadline
+   is inside widget.challenges.urgent_within, where the row has stopped being
+   information and become a decision. */
+window label.done {
+  color: #9be564;
+}
+window label.expiring {
+  color: #ff6b6b;
+}
 /* What is on your block. Amber because it is a warning rather than a failure;
    an outpost attack is map-wide and gets the red. */
 window label.threat {
@@ -84,6 +94,7 @@ func groupStyles(cfg *Config) []groupStyle {
 	return []groupStyle{
 		{name: "status", place: cfg.Widget.Status.Placement},
 		{name: "block", place: cfg.Widget.Block.Placement, color: cfg.Widget.Block.Color},
+		{name: "bosses", place: cfg.Widget.Bosses.Placement, color: cfg.Widget.Bosses.Color},
 		{name: "session", place: cfg.Widget.Session.Placement, color: cfg.Widget.Session.Color},
 		{name: "xp", place: cfg.Widget.XP.Placement, color: cfg.Widget.XP.Color},
 		{name: "challenges", place: cfg.Widget.Challenges.Placement, color: cfg.Widget.Challenges.Color},

@@ -37,6 +37,10 @@ func buildWidgets(cfg *Config) []placedWidget {
 	if cfg.Widget.Block.Enabled {
 		out = append(out, placedWidget{"block", cfg.Widget.Block.Placement, newBlockWidget(cfg.Widget.Block)})
 	}
+	if cfg.Widget.Bosses.Enabled {
+		out = append(out, placedWidget{"bosses", cfg.Widget.Bosses.Placement,
+			newBossesWidget(cfg.Widget.Bosses)})
+	}
 	if cfg.Widget.Session.Enabled {
 		out = append(out, placedWidget{"session", cfg.Widget.Session.Placement,
 			newSessionWidget(cfg.Widget.Session)})

@@ -255,7 +255,7 @@ func challengeLines(v *View, cfg ChallengesWidgetConfig) []challengeRow {
 	}
 	rows := make([]challengeRow, 0, len(shown))
 	for _, c := range shown {
-		rows = append(rows, challengeRows(c, v.Now)...)
+		rows = append(rows, challengeRows(c, v.Now, cfg)...)
 	}
 	return rows
 }
@@ -275,10 +275,14 @@ type challengeRow struct {
 	Objective string
 	Progress  string
 	Countdown string
-	// Done draws the row struck through. A finished challenge is still worth a row -
-	// it is how you know not to chase it - but it should read as settled rather than
-	// competing with the ones that are not.
+	// Done draws the row struck through and green. A finished challenge is still
+	// worth a row - it is how you know not to chase it - but it should read as
+	// settled rather than competing with the ones that are not.
 	Done bool
+	// Urgent draws the row in the alarm colour: unfinished, and close enough to its
+	// deadline that it is now or never. Never set together with Done, since a
+	// finished challenge does not care what time it is.
+	Urgent bool
 	// Sub marks an objective belonging to the challenge above it, which is indented
 	// and dimmed so the grouping is visible without a blank line between challenges.
 	Sub bool
@@ -351,6 +355,21 @@ func (r challengeRow) Markup() string {
 	return b.String()
 }
 
+// CSSClass is the row's colour, or empty for the group's normal one.
+//
+// A class rather than a colour in the markup, for two reasons: the built-in sheet
+// scopes state colours so they outrank a per-group color key (which is exactly
+// what these are), and a class can be restyled from hud.css without touching Go.
+func (r challengeRow) CSSClass() string {
+	switch {
+	case r.Done:
+		return "done"
+	case r.Urgent:
+		return "expiring"
+	}
+	return ""
+}
+
 // escapeMarkup makes text safe to interpolate into Pango markup.
 //
 // Not optional. Pango refuses to parse a label whose markup is malformed, and GTK
@@ -381,12 +400,17 @@ var markupEscaper = strings.NewReplacer(
 // live board carries both "Summer Loot" and "Weekly Challenge - Loot Anything",
 // and the objective of each is "Loot Anything". Two identical rows with different
 // numbers is worse than one long row.
-func challengeRows(c Challenge, now time.Time) []challengeRow {
+func challengeRows(c Challenge, now time.Time, cfg ChallengesWidgetConfig) []challengeRow {
+	remaining := c.Remaining(now)
 	countdown := ""
-	if remaining := c.Remaining(now); remaining > 0 && remaining < 24*time.Hour {
+	if remaining > 0 && remaining < 24*time.Hour {
 		// Only when it is close enough to matter; "5d" on every row is noise.
 		countdown = formatCountdown(remaining)
 	}
+	// Not "complete AND close": a finished challenge does not care what time it is,
+	// so Done wins and the two flags are never both set.
+	urgent := !c.Complete() && cfg.UrgentWithin.Duration > 0 &&
+		remaining > 0 && remaining <= cfg.UrgentWithin.Duration
 
 	// One row for the challenge, then its objectives UNDER it, indented. Always,
 	// not only when there are several: a weekly with four objectives and a daily
@@ -405,17 +429,23 @@ func challengeRows(c Challenge, now time.Time) []challengeRow {
 			Progress:  formatInt(score) + "/" + formatInt(target),
 			Countdown: countdown,
 			Done:      c.Complete(),
+			Urgent:    urgent,
 		}}
 	}
 
 	rows := make([]challengeRow, 0, len(c.Objectives)+1)
-	rows = append(rows, challengeRow{Name: c.Name, Countdown: countdown, Done: c.Complete()})
+	rows = append(rows, challengeRow{
+		Name: c.Name, Countdown: countdown, Done: c.Complete(), Urgent: urgent,
+	})
 	for _, o := range c.Objectives {
 		rows = append(rows, challengeRow{
 			Objective: o.Name,
 			Progress:  formatInt(o.Score) + "/" + formatInt(o.Target),
 			Done:      o.Done(),
-			Sub:       true,
+			// The deadline belongs to the challenge, so it colours the whole group -
+			// except an objective already finished, which is green on its own account.
+			Urgent: urgent && !o.Done(),
+			Sub:    true,
 		})
 	}
 	return rows
@@ -471,14 +501,16 @@ func hudLines(v *View, cfg *Config) []string {
 			}
 			rows = append(rows, row{block, text})
 		}
-		// Both belong to the block group: they are information about where you are
-		// standing. The attack goes first because it is the one that ends your run
-		// if you ignore it.
+	}
+	if cfg.Widget.Bosses.Enabled {
+		// The attack goes first because it is the one that ends your run if you
+		// ignore it.
+		bosses := cfg.Widget.Bosses.Placement
 		if text, ok := outpostAttackLine(v); ok {
-			rows = append(rows, row{block, []string{text}})
+			rows = append(rows, row{bosses, []string{text}})
 		}
 		if threats := threatLines(v); len(threats) > 0 {
-			rows = append(rows, row{block, threats})
+			rows = append(rows, row{bosses, threats})
 		}
 	}
 	if cfg.Widget.Session.Enabled {

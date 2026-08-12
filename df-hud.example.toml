@@ -251,8 +251,8 @@ x = 10
 y = 10
 
 [widget.block]
-# Where you are, and what is standing on the block with you. Off to the right,
-# clear of the game's own left-hand panels.
+# Where you are: coordinates or outpost name, the region, and the block-support
+# countdown. Off to the right, clear of the game's own left-hand panels.
 enabled = true
 x = 2340
 y = 300
@@ -261,6 +261,22 @@ y = 300
 # Print the raw position coordinates under the block name. Useful while
 # calibrating the area grid, noise once that is done.
 show_coords = false
+
+[widget.bosses]
+# What the city event feed says is on your block - bosses, bandit packs, missions,
+# QRF events - one row per enemy type, plus the map-wide outpost attack.
+#
+# Its own group rather than part of block info, and directly under it by default:
+# this is a list that is empty on most of the map and seven rows long on a boss
+# nest, so anything sharing its group would move up and down as you travelled.
+#
+# The amber that says "something is standing here" and the red of an outpost attack
+# win over color, since those say what the words do not.
+enabled = true
+x = 2340
+y = 360
+# font_size = 14
+# color = "#ffd166"
 
 [widget.session]
 # Time in the inner city on this run: it starts when you press Start (see
@@ -334,6 +350,15 @@ show_completed = true
 # Cap on rows, or 0 for no cap. The group has its own place on screen, so the
 # whole board fits and there is nothing to crop around.
 max_shown = 0
+
+# How close a deadline has to be before an UNFINISHED challenge is drawn in the
+# alarm colour, 0 to turn that off. Finished ones are green and struck through
+# whatever this says.
+#
+# A display threshold rather than a request interval, so it has no minimum - but it
+# is a key because "soon" depends on how you play: two hours is plenty for a daily
+# kill count and nowhere near enough for a weekly you have not started.
+urgent_within = "2h"
 
 # The listener also exposes the two corrections the tray menu offers, so a key can
 # do them without taking a hand off the mouse:
