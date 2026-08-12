@@ -158,16 +158,18 @@ monitor = "auto"
 # which looks identical to df-hud being broken. The others exist for debugging.
 layer = "overlay"
 
-# Which screen edges to stick to. Anchoring opposite edges stretches the
-# surface between them.
-anchors = ["top", "left"]
-
-# Gap from each anchored edge, in pixels. The default top margin clears a
-# 36px waybar with room to spare.
-margin_top = 60
+# The surface covers the whole monitor and each group of rows carries its own
+# x/y under [widget.*], so a coordinate here means what it means in a
+# screenshot. These margins inset the surface from each edge, which moves that
+# origin: set margin_top if you want everything pushed below a bar, rather than
+# adding the same offset to every group.
+#
+# There used to be an anchors key here, from when the HUD was one stack of rows
+# in a corner. Per-group coordinates replaced it.
+margin_top = 0
 margin_right = 0
 margin_bottom = 0
-margin_left = 40
+margin_left = 0
 
 # Leave this on. The HUD sits on top of the game, so every pointer event it
 # keeps is one the game does not get. Turn it off only to poke at the surface
@@ -223,31 +225,56 @@ enabled = true
 # Widgets. Each has enabled and order; order is a sort key, not an index, so the
 # gaps are deliberate - reorder by editing one number.
 
+# --- widgets -----------------------------------------------------------------
+#
+# Each group has its own place on screen. x and y are pixels from the top-left,
+# measured the way you would measure them on a screenshot, and the defaults below
+# were set at 2560x1440 against the game's own interface - so on another
+# resolution they are the first thing to change.
+#
+# font_family and font_size are optional per group. Zero or absent means "use the
+# [hud] values", so a group only needs the keys it actually differs on.
+
+[widget.status]
+# df-hud's own error banner: stale credentials, a board it cannot fetch. There is
+# no enabled key, because this is how df-hud tells you it cannot do its job.
+x = 10
+y = 10
+
 [widget.block]
+# Where you are, and what is standing on the block with you. Off to the right,
+# clear of the game's own left-hand panels.
 enabled = true
-order = 10
+x = 2340
+y = 300
 # Print the raw position coordinates under the block name. Useful while
 # calibrating the area grid, noise once that is done.
 show_coords = false
 
 [widget.session]
-# Time in the inner city on this run: it starts when the server first reports you
-# out of an outpost, and the row disappears when you go back to one.
+# Time in the inner city on this run: it starts when you press Start (see
+# [run_start]) or when the server first reports you out of an outpost, and the row
+# disappears when you go back to one.
 #
 # Deliberately NOT the game client's uptime. Launching Dead Frontier means a
 # launcher, then Launch, then a loading screen, then Start - so process uptime can
 # be minutes ahead of any playing, and a clock counting that is timing a loading
-# screen. The trade is that the start is accurate to one poll interval, and always
-# late rather than early.
+# screen.
 #
 # The run survives a df-hud restart mid-session (it is persisted with the game's
 # process identity), so restarting the HUD does not reset your clock.
 enabled = true
-order = 20
+x = 350
+y = 60
+# Labels the clock. A bare number on an overlay over a game that has its own
+# clocks says nothing about what it is timing. Set it to "" for just the digits.
+prefix = "IC Time: "
 
 [widget.xp]
 enabled = true
-order = 30
+x = 160
+y = 100
+prefix = "Xp/Hr: "
 # Averaging window, and the number of usable samples below which the rate is
 # left blank rather than extrapolated from too little data. The window must be
 # long enough to hold min_samples at active_interval; if it is not, it widens
@@ -265,14 +292,30 @@ window = "5m"
 min_samples = 3
 
 [widget.challenges]
+# The whole board, in the board's own order.
 enabled = true
-order = 40
-# Pin by challenge NAME. Both the index and the end time rotate every cycle, so
-# neither one identifies a challenge across cycles. This seeds the list on first
-# boot; after that the pins you set in the console window win.
-pinned = []
+x = 10
+y = 190
+
+# Which parts of the board are worth a row. Each is a category rather than a
+# guess at what matters:
+#
+#   show_repeatable      limited-time event challenges, currently the Summer ones.
+#                   The wire marks these `repeatable`; they pay event currency
+#                   rather than XP, so turn this off if you are not collecting
+#                   tickets.
+#   show_clan       your clan's challenges. Progress that is not yours.
+#   show_personal   the ordinary dailies and weeklies.
+#   show_completed  cuts across all three: a finished challenge is a row that
+#                   will not change again this cycle.
+show_repeatable = true
 show_clan = true
-max_shown = 3
+show_personal = true
+show_completed = true
+
+# Cap on rows, or 0 for no cap. The group has its own place on screen, so the
+# whole board fits and there is nothing to crop around.
+max_shown = 0
 
 # The listener also exposes the two corrections the tray menu offers, so a key can
 # do them without taking a hand off the mouse:

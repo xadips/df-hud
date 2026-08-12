@@ -16,17 +16,18 @@ import "github.com/diamondburned/gotk4/pkg/gtk/v4"
 // current time on every 1s tick, the same way the game's own timeKeeper loop
 // moves its clocks.
 type sessionWidget struct {
+	cfg   SessionWidgetConfig
 	label *gtk.Label
 }
 
-func newSessionWidget() *sessionWidget {
-	return &sessionWidget{label: newHUDLabel()}
+func newSessionWidget(cfg SessionWidgetConfig) *sessionWidget {
+	return &sessionWidget{cfg: cfg, label: newHUDLabel()}
 }
 
 func (w *sessionWidget) Root() gtk.Widgetter { return w.label }
 
 func (w *sessionWidget) Update(v *View) {
-	text, show := sessionLine(v)
+	text, show := sessionLine(v, w.cfg)
 	w.label.SetVisible(show)
 	if show {
 		w.label.SetText(text)

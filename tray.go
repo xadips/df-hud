@@ -88,8 +88,12 @@ func trayTooltip(v *View, vis hudVisibility) string {
 		// before the last shutdown would be shown as if it were current, hours
 		// after the run that earned it. The HUD's own xp row gates on the same
 		// flag.
+		// The unit is spelled out here because, unlike the HUD's own row, there is
+		// no configured prefix saying what the number is per.
 		if v.HaveData && v.XPAvailable {
-			lines = append(lines, "xp "+formatRate(v.XPPerHour))
+			if rate := formatRate(v.XPPerHour); rate != "" {
+				lines = append(lines, "xp "+rate+"/hr")
+			}
 		}
 		if v.Status != "" {
 			lines = append(lines, v.Status)

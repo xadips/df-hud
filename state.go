@@ -51,17 +51,6 @@ type State struct {
 	// XPSamples is the rate window, oldest first.
 	XPSamples []XPSample `json:"xp_samples,omitempty"`
 
-	// Pins are challenge names shown on the HUD. By name, because both the
-	// index and the end time rotate every cycle, so neither identifies a
-	// challenge across cycles.
-	Pins []string `json:"pins,omitempty"`
-
-	// PinsSeeded records that the config's pin list has been applied once.
-	// Without it, unpinning everything would be indistinguishable from a first
-	// boot and the config would silently re-seed on the next start - quietly
-	// undoing a deliberate choice.
-	PinsSeeded bool `json:"pins_seeded,omitempty"`
-
 	// ChallengeDone is sticky per-cycle completion memory, keyed by
 	// name + cycle end. The game's own board can un-complete a finished
 	// challenge when targets recompute from clan size, so completion has to be
@@ -201,7 +190,6 @@ func (s *stateStore) Get() State {
 func (st State) clone() State {
 	out := st
 	out.XPSamples = append([]XPSample(nil), st.XPSamples...)
-	out.Pins = append([]string(nil), st.Pins...)
 	if st.ChallengeDone != nil {
 		out.ChallengeDone = make(map[string]bool, len(st.ChallengeDone))
 		for k, v := range st.ChallengeDone {

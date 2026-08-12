@@ -110,23 +110,35 @@ func TestBlockLinesShowsBlockSupport(t *testing.T) {
 }
 
 func TestSessionLine(t *testing.T) {
-	text, show := sessionLine(&View{GameRunning: true, HasSession: true, SessionTime: 90 * time.Minute})
-	if !show || text != "1:30:00" {
+	cfg := defaultConfig().Widget.Session
+	text, show := sessionLine(&View{GameRunning: true, HasSession: true, SessionTime: 90 * time.Minute}, cfg)
+	// The prefix is not decoration: a bare clock on an overlay over a game with
+	// its own clocks says nothing about what it is timing.
+	if !show || text != "IC Time: 1:30:00" {
 		t.Errorf("sessionLine = %q, %v", text, show)
 	}
 	// A frozen clock reads as a broken one, so the row disappears instead.
-	if _, show := sessionLine(&View{GameRunning: false, HasSession: true, SessionTime: time.Hour}); show {
+	if _, show := sessionLine(&View{GameRunning: false, HasSession: true, SessionTime: time.Hour}, cfg); show {
 		t.Error("the session row must be hidden when the game is closed")
 	}
 	// The client being up is not a session. Between pressing Launch and pressing
 	// Start there is nothing to time, and a clock counting the loading screen is
 	// the bug this replaced.
-	if _, show := sessionLine(&View{GameRunning: true, ClientUptime: 5 * time.Minute}); show {
+	if _, show := sessionLine(&View{GameRunning: true, ClientUptime: 5 * time.Minute}, cfg); show {
 		t.Error("the session row must be hidden until a run has actually started")
+	}
+	// An empty prefix is honoured rather than defaulted, so the label can be
+	// turned off without turning the clock off.
+	text, _ = sessionLine(&View{GameRunning: true, HasSession: true, SessionTime: time.Minute},
+		SessionWidgetConfig{})
+	if text != "0:01:00" {
+		t.Errorf("with no prefix, sessionLine = %q", text)
 	}
 }
 
-func TestHudLinesRespectsOrderAndStatus(t *testing.T) {
+// -print-hud reads groups down the screen and then across, so what it prints
+// tracks where things actually are rather than a sort key that no longer exists.
+func TestHudLinesOrdersByPositionAndLeadsWithStatus(t *testing.T) {
 	cfg := defaultConfig()
 	v := viewForBlock(false)
 	v.GameRunning = true
@@ -134,19 +146,19 @@ func TestHudLinesRespectsOrderAndStatus(t *testing.T) {
 	v.SessionTime = time.Hour
 
 	lines := hudLines(v, cfg)
-	// Defaults put block (10) above session (20).
+	// The defaults put the clock at y=60 and block info at y=300.
 	if len(lines) != 3 {
-		t.Fatalf("lines = %v, want block head, block sub, session", lines)
+		t.Fatalf("lines = %v, want the clock and the two block rows", lines)
 	}
-	if lines[0] != "1058, 1016" || lines[2] != "1:00:00" {
-		t.Errorf("lines = %v", lines)
+	if lines[0] != "IC Time: 1:00:00" || lines[1] != "1058, 1016" {
+		t.Errorf("lines = %v, want the clock first at y=60", lines)
 	}
 
-	// Reordering the config reorders the HUD.
-	cfg.Widget.Session.Order = 5
+	// Moving a group down the screen moves it down the printed list.
+	cfg.Widget.Session.Y = 900
 	lines = hudLines(v, cfg)
-	if lines[0] != "1:00:00" {
-		t.Errorf("after reordering, lines = %v; session should be first", lines)
+	if lines[2] != "IC Time: 1:00:00" {
+		t.Errorf("after moving the clock to y=900, lines = %v; it should be last", lines)
 	}
 
 	// A status always leads, because it explains everything below it.

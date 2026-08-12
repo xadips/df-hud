@@ -2,11 +2,7 @@
 
 package main
 
-import (
-	"sort"
-
-	"github.com/diamondburned/gotk4/pkg/gtk/v4"
-)
+import "github.com/diamondburned/gotk4/pkg/gtk/v4"
 
 // The widget seam. Adding a HUD element means one new widget_*.go implementing
 // this interface plus one entry in buildWidgets and one config table - nothing
@@ -24,38 +20,33 @@ type Widget interface {
 	Update(v *View)
 }
 
-// buildWidgets returns the enabled widgets in display order. Order is a sort
-// key rather than an index, so the config's gaps of ten are deliberate: a widget
-// can be moved by editing one number without renumbering the rest.
-func buildWidgets(cfg *Config) []Widget {
-	type entry struct {
-		order int
-		name  string
-		w     Widget
-	}
-	var entries []entry
+// placedWidget is a widget and where it goes.
+//
+// Position replaced a sort key when the HUD stopped being one stack of rows in a
+// corner. The name is not decoration: it becomes the group's CSS class, which is
+// how a per-group font override reaches the labels.
+type placedWidget struct {
+	name  string
+	place Placement
+	w     Widget
+}
 
+// buildWidgets returns the enabled widgets with their placement.
+func buildWidgets(cfg *Config) []placedWidget {
+	var out []placedWidget
 	if cfg.Widget.Block.Enabled {
-		entries = append(entries, entry{cfg.Widget.Block.Order, "block", newBlockWidget(cfg.Widget.Block)})
+		out = append(out, placedWidget{"block", cfg.Widget.Block.Placement, newBlockWidget(cfg.Widget.Block)})
 	}
 	if cfg.Widget.Session.Enabled {
-		entries = append(entries, entry{cfg.Widget.Session.Order, "session", newSessionWidget()})
+		out = append(out, placedWidget{"session", cfg.Widget.Session.Placement,
+			newSessionWidget(cfg.Widget.Session)})
 	}
 	if cfg.Widget.XP.Enabled {
-		entries = append(entries, entry{cfg.Widget.XP.Order, "xp", newXPWidget()})
+		out = append(out, placedWidget{"xp", cfg.Widget.XP.Placement, newXPWidget(cfg.Widget.XP)})
 	}
 	if cfg.Widget.Challenges.Enabled {
-		entries = append(entries, entry{cfg.Widget.Challenges.Order, "challenges",
+		out = append(out, placedWidget{"challenges", cfg.Widget.Challenges.Placement,
 			newChallengeWidget(cfg.Widget.Challenges)})
-	}
-
-	// Ties keep their declaration order, so an unset order does something
-	// predictable rather than arbitrary.
-	sort.SliceStable(entries, func(i, j int) bool { return entries[i].order < entries[j].order })
-
-	out := make([]Widget, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, e.w)
 	}
 	return out
 }

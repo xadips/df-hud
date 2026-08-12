@@ -11,6 +11,7 @@ import "github.com/diamondburned/gotk4/pkg/gtk/v4"
 // number, and it still looks authoritative, so the amber and red states are how
 // the widget admits it is on thin ice.
 type xpWidget struct {
+	cfg   XPWidgetConfig
 	label *gtk.Label
 	// applied is the CSS class currently on the label, tracked so the class is
 	// only swapped when it changes - GTK recomputes style on every add/remove,
@@ -18,14 +19,14 @@ type xpWidget struct {
 	applied string
 }
 
-func newXPWidget() *xpWidget {
-	return &xpWidget{label: newHUDLabel()}
+func newXPWidget(cfg XPWidgetConfig) *xpWidget {
+	return &xpWidget{cfg: cfg, label: newHUDLabel()}
 }
 
 func (w *xpWidget) Root() gtk.Widgetter { return w.label }
 
 func (w *xpWidget) Update(v *View) {
-	text, class, show := xpLine(v)
+	text, class, show := xpLine(v, w.cfg)
 	w.label.SetVisible(show)
 	if !show {
 		return

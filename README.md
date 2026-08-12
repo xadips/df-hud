@@ -21,8 +21,11 @@ Working today:
 - **XP/hr** — averaged over five minutes, with the colour carrying whether recent
   polls actually landed, and a tray menu item to start the average again after a
   challenge reward lands a lump of XP in it
-- **Challenge tracker** — personal and clan, with progress, completion and
-  deadlines. Pin by name, or let it show whatever you are closest to finishing
+- **Challenge tracker** — the whole board, with progress, completion and
+  deadlines, filtered by category: event challenges, clan challenges, ordinary
+  ones and completed ones are each their own switch
+- **Every group placed where you want it.** The clock, the rate, the board and
+  block info each carry their own screen coordinates and their own font
 - **It gets out of the way.** The overlay is hidden while the game is not
   running, and shown only on the workspace the game is actually on
 - **A tray icon** with hide, reset and quit, so a background process with no
@@ -31,7 +34,7 @@ Working today:
   `-dump-challenges`, `-check-config` and `-check-game` for looking at real data
   with no GUI
 
-Planned: a console window for pin toggles.
+Planned: a console window for the full board with per-objective detail.
 
 ## Keybinds
 
@@ -127,6 +130,69 @@ and Mono pointer chains break on every patch - on an account that has already
 been temp-banned once, for polling), and the process's memory or CPU footprint
 (measured live: **Start changes neither**, because the world is fully loaded
 before you press it).
+
+## Where each group sits
+
+Four groups, four positions. The clock, the XP rate, the challenge board and block
+info each carry their own `x`/`y` under `[widget.*]`, measured in pixels from the
+top-left of the screen - the same numbers you would read off a screenshot:
+
+```toml
+[widget.session]
+x = 350
+y = 60
+prefix = "IC Time: "
+
+[widget.block]
+x = 2340
+y = 300
+font_size = 14
+```
+
+This replaced one stack of rows in a corner with an `order` key on each. The stack
+was the wrong shape for an overlay on a game that has its own interface to fit
+around: the clock wants to be near the game's clock, block info wants the side you
+already glance at, and stacking them means at most one of them is where you would
+look. `order` and `hud.anchors` both went with it.
+
+The surface is anchored to all four edges of the monitor so that a coordinate means
+the same thing as it does in a screenshot, rather than depending on how wide the
+widest row happens to be. `hud.margin_*` insets it, which moves the origin every
+group is measured from - useful for pushing everything below a bar, and zero by
+default.
+
+`font_family` and `font_size` are per group and optional; absent means "use the
+`[hud]` values", so a group only carries the keys it differs on. The defaults were
+measured at 2560x1440, so another resolution wants its own numbers - and on a
+scaled monitor these are logical pixels, not device ones.
+
+Two things to know. A group placed near the right edge is **clipped, not wrapped**,
+because a HUD line that reflows makes everything below it jump as values change
+width - so leave room for the longest string a group can produce. And
+`click_through = false`, which exists only for debugging, now makes a full-screen
+surface swallow every click; df-hud says so at startup rather than leaving you
+wondering why the game stopped responding.
+
+## The challenge board, by category
+
+The board is shown in full, in the game's own order, and each category is a switch
+rather than a cap on rows:
+
+| key | what it covers |
+|---|---|
+| `show_repeatable` | limited-time event challenges - currently the Summer ones |
+| `show_clan` | your clan's challenges, which are the clan's progress and not yours |
+| `show_personal` | the ordinary dailies and weeklies |
+| `show_completed` | cuts across all three: rows that will not change again this cycle |
+
+`show_repeatable` is named after the wire, not the event. The board marks these
+`repeatable`, verified against a live fetch: `1` on exactly the three Summer
+challenges and `0` on every daily, weekly and clan entry. Matching on the name
+would break the moment the event changes; matching on the flag will not.
+
+There used to be pinning here, showing two or three challenges chosen by name. It
+existed because a dozen rows in a shared corner would bury everything else. With
+the board in its own place on screen there is nothing left to bury.
 
 ## When the overlay is on screen
 
@@ -301,8 +367,8 @@ Unknown keys are a **startup error** — a typo would otherwise look like a bug 
 df-hud rather than a bug in your config.
 
 **Editing the file while running reloads it, including the HUD's own appearance:**
-font, colour, size, margins, anchors, which widgets exist and in what order all
-change without a restart, as do every interval and both visibility rules. Only
+font, colour, size, margins, which groups exist and where each one sits all change
+without a restart, as do every interval and both visibility rules. Only
 three keys need a restart (`bridge.listen`, `bridge.enabled`, `paths.data_dir`),
 and they say so. An edit that fails validation keeps the running config rather
 than taking the HUD down mid-game.

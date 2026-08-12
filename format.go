@@ -11,8 +11,10 @@ import (
 // without a GUI, and so every widget renders numbers the same way.
 //
 // The house style follows the game's own HUD: thousands separators on money and
-// XP (the game uses Intl.NumberFormat), compact suffixes where a number would
-// otherwise eat the line, and clock-style elapsed time.
+// XP (the game uses Intl.NumberFormat), and clock-style elapsed time. There was a
+// compact form too (58.1M) for places where width was the constraint; it went
+// when the rate moved to its own position on screen, because the digits it was
+// rounding away were the ones worth reading.
 
 // formatInt writes thousands separators, matching the game's own number
 // formatting. XP at high level is ten digits, so this is not decoration.
@@ -33,47 +35,6 @@ func formatInt(n int64) string {
 		b.WriteRune(r)
 	}
 	return b.String()
-}
-
-// formatCompact shortens large numbers for places where width is the constraint:
-// 1.2K, 34.5M, 6.79B. Three significant figures, because "1.234M/hr" on a HUD is
-// precision nobody reads.
-func formatCompact(n int64) string {
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var out string
-	switch {
-	case n < 1000:
-		out = strconv.FormatInt(n, 10)
-	case n < 1_000_000:
-		out = trimZeros(float64(n)/1000) + "K"
-	case n < 1_000_000_000:
-		out = trimZeros(float64(n)/1_000_000) + "M"
-	default:
-		out = trimZeros(float64(n)/1_000_000_000) + "B"
-	}
-	if neg {
-		return "-" + out
-	}
-	return out
-}
-
-// trimZeros renders to three significant figures without trailing noise: 1.2
-// rather than 1.20, 12.3 rather than 12.30, 123 rather than 123.0.
-func trimZeros(v float64) string {
-	var s string
-	switch {
-	case v < 10:
-		s = fmt.Sprintf("%.2f", v)
-	case v < 100:
-		s = fmt.Sprintf("%.1f", v)
-	default:
-		return fmt.Sprintf("%.0f", v)
-	}
-	s = strings.TrimRight(s, "0")
-	return strings.TrimSuffix(s, ".")
 }
 
 // formatClock is the session clock: H:MM:SS, growing past 24h rather than
@@ -130,18 +91,23 @@ func formatAge(d time.Duration) string {
 	return formatCountdown(d) + " ago"
 }
 
-// formatRate renders XP per hour. Compact, because the number is in the millions
-// at high level and the HUD line is narrow.
+// formatRate renders XP per hour in full, grouped in threes.
 //
-// Zero renders as "0/hr" rather than as nothing. Returning "" for zero produced a
-// bare "xp" label on the live HUD, which reads as broken; a genuine zero is
+// Not compact. "58.1M/hr" is three significant figures on a number where the
+// digits are the point: at level 415 the difference between a good run and an
+// ordinary one lives in the millions place, and a rate that reads 58.1M for
+// several minutes while genuinely moving looks stuck. Grouping is what keeps
+// nine digits readable at a glance.
+//
+// Zero renders as "0" rather than as nothing. Returning "" for zero produced a
+// bare label on the live HUD, which reads as broken; a genuine zero is
 // information, and while playing it is information you want. Only a negative
 // rate renders as nothing, since that is never a real reading.
 func formatRate(perHour float64) string {
 	if perHour < 0 {
 		return ""
 	}
-	return formatCompact(int64(perHour)) + "/hr"
+	return formatInt(int64(perHour))
 }
 
 // formatCash puts the game's own dollar sign on money.

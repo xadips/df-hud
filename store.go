@@ -350,7 +350,6 @@ type Store struct {
 
 	bossMap     *BossMap
 	board       []Challenge
-	pinned      []Challenge
 	haveBoard   bool
 	boardAt     time.Time
 	boardStatus string
@@ -607,13 +606,6 @@ func (s *Store) SetChallenges(board []Challenge, at time.Time) {
 	s.mu.Unlock()
 }
 
-// SetPinned replaces the HUD's subset of the board.
-func (s *Store) SetPinned(pinned []Challenge) {
-	s.mu.Lock()
-	s.pinned = pinned
-	s.mu.Unlock()
-}
-
 // SetChallengeStatus records why the board is missing, so the widget can explain
 // itself rather than just being absent.
 func (s *Store) SetChallengeStatus(reason string) {
@@ -769,9 +761,10 @@ type View struct {
 	XPSamples   int
 	XPStability xpStability
 
-	// Challenges is the board, and Pinned is the subset the HUD shows.
+	// Challenges is the whole board. Which rows reach the HUD is decided at
+	// render time from the config, not here, so toggling a category takes effect
+	// on the next tick instead of on the next poll two minutes later.
 	Challenges      []Challenge
-	Pinned          []Challenge
 	ChallengeStatus string
 	ChallengesDone  int
 	ChallengesTotal int
@@ -844,7 +837,6 @@ func (s *Store) Derive(now time.Time) *View {
 		}
 	}
 
-	v.Pinned = s.pinned
 	if s.haveBoard {
 		v.Challenges = s.board
 		v.ChallengesTotal = len(s.board)

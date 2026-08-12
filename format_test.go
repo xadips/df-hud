@@ -20,30 +20,6 @@ func TestFormatInt(t *testing.T) {
 	}
 }
 
-func TestFormatCompact(t *testing.T) {
-	for in, want := range map[int64]string{
-		0: "0", 999: "999",
-		1000: "1", 1200: "1.2", 12_340: "12.3", 123_400: "123",
-		1_000_000: "1", 1_234_567: "1.23", 10_000_000: "23.5",
-		-1_500_000: "-1.5",
-	} {
-		got := formatCompact(in)
-		// Suffixes are appended by size, so check the numeric part with its unit.
-		var suffix string
-		switch {
-		case in >= 1_000_000_000 || in <= -1_000_000_000:
-			suffix = "B"
-		case in >= 1_000_000 || in <= -1_000_000:
-			suffix = "M"
-		case in >= 1000 || in <= -1000:
-			suffix = "K"
-		}
-		if got != want+suffix {
-			t.Errorf("formatCompact(%d) = %q, want %q", in, got, want+suffix)
-		}
-	}
-}
-
 func TestFormatClock(t *testing.T) {
 	for _, tc := range []struct {
 		in   time.Duration
@@ -97,16 +73,21 @@ func TestFormatAgeStaysQuietWhenFresh(t *testing.T) {
 }
 
 func TestFormatRate(t *testing.T) {
-	// Zero is a real reading, and rendering it as nothing left a bare "xp" on the
+	// Zero is a real reading, and rendering it as nothing left a bare label on the
 	// live HUD - which reads as broken rather than as idle.
-	if got := formatRate(0); got != "0/hr" {
-		t.Errorf("formatRate(0) = %q, want 0/hr", got)
+	if got := formatRate(0); got != "0" {
+		t.Errorf("formatRate(0) = %q, want 0", got)
 	}
 	if got := formatRate(-5); got != "" {
 		t.Errorf("a negative rate is never real and should render as nothing, got %q", got)
 	}
-	if got := formatRate(1_234_567); got != "1.23M/hr" {
-		t.Errorf("formatRate(1234567) = %q", got)
+	// Every digit, grouped. The compact form rounded 58,143,000 to "58.1M", which
+	// hid exactly the movement the number exists to show.
+	if got := formatRate(58_143_000); got != "58,143,000" {
+		t.Errorf("formatRate(58143000) = %q", got)
+	}
+	if got := formatRate(1_234_567.9); got != "1,234,567" {
+		t.Errorf("formatRate truncates rather than rounding, got %q", got)
 	}
 }
 

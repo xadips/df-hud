@@ -35,59 +35,23 @@ import (
 // running in its own goroutine by the time this is called, and they communicate
 // only through the store, so nothing here needs a lock.
 
-// hudCSS is the base stylesheet. The window is made fully transparent because a
-// layer surface is alpha-capable and the theme's background would otherwise
-// render as a dark box over the game. The text then has to carry its own
-// contrast, since it can sit over anything from bright pavement to a dark
-// interior: a layered text-shadow outline is what the game's own HUD does, and it
-// stays legible on both without a backing panel.
-const hudCSS = `
-window, window.background {
-  background-color: transparent;
-  background-image: none;
-  box-shadow: none;
-}
-label {
-  color: %s;
-  font-family: %s;
-  font-size: %.1fpt;
-  font-weight: bold;
-  text-shadow: 0 0 4px #000, 1px 1px 0 #000, -1px -1px 0 #000;
-}
-label.status {
-  color: #ff6b6b;
-}
-label.fixable {
-  color: #ffd166;
-}
-/* Rate stability. Amber for one missed poll, red for two or more: the number
-   still looks authoritative when the window has a hole in it, so the colour is
-   how the HUD says so. */
-label.shaky {
-  color: #ffd166;
-}
-label.unstable {
-  color: #ff6b6b;
-}
-/* What is on your block. Amber because it is a warning rather than a failure;
-   an outpost attack is map-wide and gets the red. */
-label.threat {
-  color: #ffd166;
-}
-label.threat.urgent {
-  color: #ff6b6b;
-}
-`
-
 type hud struct {
 	app    *app
 	window *gtk.ApplicationWindow
 	handle uintptr
-	box    *gtk.Box
+	// fixed places each group at its own coordinates. The surface spans the whole
+	// monitor, so those coordinates are screen coordinates.
+	//
+	// This was a single vertical GtkBox in one corner, which is why every group
+	// needed an `order`. Four unrelated readings in one column is the wrong shape
+	// for a HUD over a game that has its own interface to fit around: the clock
+	// wants to be near the game's clock, block info wants the side you glance at,
+	// and stacking them means at most one of them is where you would look.
+	fixed  *gtk.Fixed
 	status *gtk.Label
 	css    *gtk.CSSProvider
 
-	widgets []Widget
+	widgets []placedWidget
 	// widgetSig is the widget configuration the current widget tree was built
 	// from, so a reload only rebuilds it when it actually changed.
 	widgetSig string
@@ -165,7 +129,7 @@ func (h *hud) build(gtkApp *gtk.Application) {
 	// registered with the display re-styles every widget when its data changes,
 	// which is what makes font and colour changes take effect without a restart.
 	h.css = gtk.NewCSSProvider()
-	h.css.LoadFromData(fmt.Sprintf(hudCSS, cfg.HUD.TextColor, cfg.HUD.FontFamily, cfg.HUD.FontSize))
+	h.css.LoadFromData(styleSheet(cfg))
 	gtk.StyleContextAddProviderForDisplay(gdk.DisplayGetDefault(), h.css,
 		gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 	if cfg.HUD.CSS != "" {
@@ -192,12 +156,13 @@ func (h *hud) build(gtkApp *gtk.Application) {
 	SetKeyboardMode(h.handle, KeyboardNone) // the game keeps every keypress
 	h.applyPlacement(cfg)
 
-	h.box = gtk.NewBox(gtk.OrientationVertical, 2)
+	h.fixed = gtk.NewFixed()
 	h.status = newHUDLabel()
 	h.status.AddCSSClass("status")
-	h.box.Append(h.status)
+	h.status.AddCSSClass(groupClass("status"))
+	h.fixed.Put(h.status, float64(cfg.Widget.Status.X), float64(cfg.Widget.Status.Y))
 	h.rebuildWidgets(cfg)
-	h.window.SetChild(h.box)
+	h.window.SetChild(h.fixed)
 	if cfg.HUD.ClickThrough {
 		// Re-applied on every map, not just the first: GTK owns the input region
 		// and replaces ours whenever it recreates the surface, which now happens
@@ -245,15 +210,15 @@ func (h *hud) build(gtkApp *gtk.Application) {
 }
 
 // applyPlacement sets the layer-shell geometry. Every one of these can be set on
-// a live surface, which is what lets margins and anchors be edited while playing.
+// a live surface, which is what lets the margins be edited while playing.
+//
+// All four edges are anchored, so the surface covers the monitor and the origin
+// every widget position is measured from is the top-left of the screen (inset by
+// the margins). A surface sized to its content could not do that: a group at
+// x=2340 would stretch it, and one group's text growing would move the others.
 func (h *hud) applyPlacement(cfg *Config) {
 	SetLayer(h.handle, cfg.HUD.LayerValue())
-	// Cleared first: a reload that removes an anchor has to unset it, or the
-	// surface stays stretched between edges that are no longer configured.
 	for _, edge := range []Edge{EdgeTop, EdgeRight, EdgeBottom, EdgeLeft} {
-		SetAnchor(h.handle, edge, false)
-	}
-	for _, edge := range cfg.HUD.AnchorEdges() {
 		SetAnchor(h.handle, edge, true)
 	}
 	SetMargin(h.handle, EdgeTop, cfg.HUD.MarginTop)
@@ -267,30 +232,34 @@ func (h *hud) applyPlacement(cfg *Config) {
 // HUD's own, not a widget, and it is where a reload failure would be reported.
 func (h *hud) rebuildWidgets(cfg *Config) {
 	for _, w := range h.widgets {
-		h.box.Remove(w.Root())
+		h.fixed.Remove(w.w.Root())
 	}
 	h.widgets = buildWidgets(cfg)
 	for _, w := range h.widgets {
-		h.box.Append(w.Root())
+		root := w.w.Root()
+		// The group class carries the font overrides. Added to the group's root so
+		// one rule covers a bare label and a box of rows alike.
+		if styled, ok := root.(interface{ AddCSSClass(string) }); ok {
+			styled.AddCSSClass(groupClass(w.name))
+		}
+		h.fixed.Put(root, float64(w.place.X), float64(w.place.Y))
 	}
 	h.widgetSig = widgetSignature(cfg)
 }
-
-// widgetSignature is everything the widget tree is built from. Comparing it means
-// a reload that only changed a poll interval does not tear down and rebuild every
-// label for nothing.
-func widgetSignature(cfg *Config) string { return fmt.Sprintf("%+v", cfg.Widget) }
 
 // applyConfig re-applies everything the HUD can change without a restart.
 func (h *hud) applyConfig(cfg *Config) {
 	if h.window == nil {
 		return
 	}
-	h.css.LoadFromData(fmt.Sprintf(hudCSS, cfg.HUD.TextColor, cfg.HUD.FontFamily, cfg.HUD.FontSize))
+	h.css.LoadFromData(styleSheet(cfg))
 	h.applyPlacement(cfg)
 	if widgetSignature(cfg) != h.widgetSig {
 		h.rebuildWidgets(cfg)
 	}
+	// The status label is the HUD's own rather than a widget, so a rebuild does not
+	// reposition it.
+	h.fixed.Move(h.status, float64(cfg.Widget.Status.X), float64(cfg.Widget.Status.Y))
 	if h.visible {
 		h.update()
 	}
@@ -431,6 +400,6 @@ func (h *hud) update() {
 	}
 
 	for _, w := range h.widgets {
-		w.Update(view)
+		w.w.Update(view)
 	}
 }

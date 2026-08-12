@@ -47,11 +47,6 @@ func TestExampleConfigMatchesDefaults(t *testing.T) {
 	}
 	cfg.path = ""
 	want := defaultConfig()
-	// The example leaves pinned = [] explicit; defaultConfig leaves it nil.
-	// Same meaning, so normalise rather than pretend they differ.
-	if len(cfg.Widget.Challenges.Pinned) == 0 {
-		cfg.Widget.Challenges.Pinned = nil
-	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Errorf("df-hud.example.toml has drifted from defaultConfig()\n got: %+v\nwant: %+v", cfg, want)
 	}
@@ -85,8 +80,12 @@ jitter = 0.25
 
 [hud]
 layer = "top"
-anchors = ["bottom", "right"]
 margin_bottom = 12
+
+[widget.session]
+x = 900
+y = 40
+font_size = 18
 
 [widget.xp]
 min_samples = 5
@@ -112,9 +111,20 @@ window = "2m"
 	if !cfg.HUD.HidesUnderFullscreen() {
 		t.Error(`layer = "top" hides under a fullscreen game and must be reported as such`)
 	}
-	edges := cfg.HUD.AnchorEdges()
-	if !reflect.DeepEqual(edges, []Edge{EdgeBottom, EdgeRight}) {
-		t.Errorf("anchors resolved to %v, want [bottom right]", edges)
+	// Placement overrides land, and the ones not mentioned keep their defaults -
+	// the whole point of a group only needing the keys it differs on.
+	if cfg.Widget.Session.X != 900 || cfg.Widget.Session.Y != 40 {
+		t.Errorf("session placement = %d, %d; want 900, 40", cfg.Widget.Session.X, cfg.Widget.Session.Y)
+	}
+	if cfg.Widget.Session.FontSize != 18 {
+		t.Errorf("session font_size = %v, want 18", cfg.Widget.Session.FontSize)
+	}
+	if cfg.Widget.Session.Prefix != defaultConfig().Widget.Session.Prefix {
+		t.Errorf("session prefix = %q, want the default to survive a partial config",
+			cfg.Widget.Session.Prefix)
+	}
+	if cfg.Widget.XP.X != defaultConfig().Widget.XP.X {
+		t.Error("another group's placement must not be disturbed")
 	}
 }
 
@@ -160,9 +170,17 @@ func TestConfigCrossFieldRules(t *testing.T) {
 			body: "[poll]\njitter = 0.9\n",
 			want: "jitter",
 		},
-		"challenges max_shown zero": {
-			body: "[widget.challenges]\nmax_shown = 0\n",
+		"challenges max_shown negative": {
+			body: "[widget.challenges]\nmax_shown = -1\n",
 			want: "max_shown",
+		},
+		"widget position negative": {
+			body: "[widget.xp]\nx = -10\n",
+			want: "cannot be negative",
+		},
+		"widget font size negative": {
+			body: "[widget.block]\nfont_size = -2\n",
+			want: "font_size",
 		},
 		"console too small": {
 			body: "[console]\nwidth = 100\nheight = 100\n",
@@ -295,22 +313,6 @@ func TestParseLayer(t *testing.T) {
 	}
 	if _, err := parseLayer("above"); err == nil {
 		t.Error("an unknown layer name must be rejected")
-	}
-}
-
-func TestParseAnchors(t *testing.T) {
-	if _, err := parseAnchors([]string{"top", "top"}); err == nil {
-		t.Error("a duplicated anchor must be rejected")
-	}
-	if _, err := parseAnchors([]string{"middle"}); err == nil {
-		t.Error("an unknown edge must be rejected")
-	}
-	if _, err := parseAnchors(nil); err == nil {
-		t.Error("no anchors must be rejected: the surface would have no fixed position")
-	}
-	// Opposite edges are legal - that stretches the surface between them.
-	if _, err := parseAnchors([]string{"top", "bottom", "left"}); err != nil {
-		t.Errorf("anchoring opposite edges is legal: %v", err)
 	}
 }
 

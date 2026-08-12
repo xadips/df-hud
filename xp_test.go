@@ -122,9 +122,9 @@ func TestComputeXPRateZeroIsAValidRate(t *testing.T) {
 	if rate.PerHour != 0 {
 		t.Errorf("PerHour = %.0f, want 0", rate.PerHour)
 	}
-	// And it renders as an explicit zero: a bare "xp" label reads as broken.
-	if got := formatRate(0); got != "0/hr" {
-		t.Errorf("formatRate(0) = %q, want 0/hr", got)
+	// And it renders as an explicit zero: a bare label reads as broken.
+	if got := formatRate(0); got != "0" {
+		t.Errorf("formatRate(0) = %q, want 0", got)
 	}
 }
 
@@ -262,10 +262,13 @@ func TestStoreDeriveIncludesTheRate(t *testing.T) {
 }
 
 func TestXPLine(t *testing.T) {
-	// A real rate, with the stability colour.
+	cfg := defaultConfig().Widget.XP
+	// A real rate, with the stability colour. Grouped in full rather than compact:
+	// at high level the digits below the millions are where the difference between
+	// a good run and an ordinary one lives.
 	v := &View{HaveData: true, XPAvailable: true, XPPerHour: 1_234_567, XPStability: xpShaky}
-	text, class, show := xpLine(v)
-	if !show || text != "xp 1.23M/hr" {
+	text, class, show := xpLine(v, cfg)
+	if !show || text != "Xp/Hr: 1,234,567" {
 		t.Errorf("xpLine text = %q", text)
 	}
 	if class != "shaky" {
@@ -276,12 +279,12 @@ func TestXPLine(t *testing.T) {
 	// "collecting samples" on screen for the first thirty seconds of every run and
 	// after every reset - a progress report on df-hud's internals, on a HUD whose
 	// job is to be glanceable. It stays in View.XPWhy for -print-view and the tray.
-	if _, _, show := xpLine(&View{HaveData: true, XPWhy: "collecting samples"}); show {
+	if _, _, show := xpLine(&View{HaveData: true, XPWhy: "collecting samples"}, cfg); show {
 		t.Error("a rate that is not available yet must not take a row")
 	}
 
 	// No data at all: no row.
-	if _, _, show := xpLine(&View{}); show {
+	if _, _, show := xpLine(&View{}, cfg); show {
 		t.Error("without data the xp row must be hidden")
 	}
 }

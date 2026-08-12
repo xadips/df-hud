@@ -13,7 +13,6 @@ func TestStateRoundTrip(t *testing.T) {
 	base := time.Now().Truncate(time.Second)
 
 	s.Update(func(st *State) {
-		st.Pins = []string{"Kill 500 zombies", "Scavenge 100 items"}
 		st.ChallengeDone = map[string]bool{"Kill 500 zombies|2026-08-14": true}
 		st.Grid = &GridTransform{OffsetX: 981, OffsetY: 981, Scale: 2, SolvedAt: base, Method: "helicopter"}
 	})
@@ -27,9 +26,6 @@ func TestStateRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := loaded.Get()
-	if len(got.Pins) != 2 || got.Pins[0] != "Kill 500 zombies" {
-		t.Errorf("Pins = %v", got.Pins)
-	}
 	if !got.ChallengeDone["Kill 500 zombies|2026-08-14"] {
 		t.Error("completion memory did not survive")
 	}
@@ -70,15 +66,15 @@ func TestStateCorruptFileIsQuarantined(t *testing.T) {
 	}
 
 	// An old schema is handled the same way.
-	if err := os.WriteFile(path, []byte(`{"schema_version":0,"pins":["x"]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schema_version":0,"challenge_done":{"x|1":true}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s2 := newStateStore(path)
 	if err := s2.Load(); err != nil {
 		t.Fatal(err)
 	}
-	if got := s2.Get(); len(got.Pins) != 0 {
-		t.Errorf("old-schema state should be discarded, got %v", got.Pins)
+	if got := s2.Get(); len(got.ChallengeDone) != 0 {
+		t.Errorf("old-schema state should be discarded, got %v", got.ChallengeDone)
 	}
 }
 
@@ -166,7 +162,7 @@ func TestStateSaveIsDebounced(t *testing.T) {
 	now := time.Now()
 	s.now = func() time.Time { return now }
 
-	s.Update(func(st *State) { st.Pins = []string{"a"} })
+	s.Update(func(st *State) { st.ChallengeDone = map[string]bool{"a|2026-08-14": true} })
 	if err := s.MaybeSave(); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +174,7 @@ func TestStateSaveIsDebounced(t *testing.T) {
 
 	// A change straight afterwards must not write again: the XP ring changes on
 	// every poll, and this is what stops a disk write every ten seconds forever.
-	s.Update(func(st *State) { st.Pins = []string{"a", "b"} })
+	s.Update(func(st *State) { st.ChallengeDone["b|2026-08-14"] = true })
 	if err := s.MaybeSave(); err != nil {
 		t.Fatal(err)
 	}
@@ -211,20 +207,20 @@ func TestStateSaveIsDebounced(t *testing.T) {
 func TestStateGetReturnsACopy(t *testing.T) {
 	s := newStateStore("")
 	s.Update(func(st *State) {
-		st.Pins = []string{"original"}
+		st.XPSamples = []XPSample{{Cumulative: 1000, Source: "original"}}
 		st.ChallengeDone = map[string]bool{"x": true}
 		st.Grid = &GridTransform{Scale: 1}
 	})
 
 	got := s.Get()
-	got.Pins[0] = "mutated"
+	got.XPSamples[0].Source = "mutated"
 	got.ChallengeDone["x"] = false
 	got.Grid.Scale = 99
 
 	// The UI thread holds one of these while the poller writes; aliasing would
 	// be a data race that only shows up under load.
 	inside := s.Get()
-	if inside.Pins[0] != "original" {
+	if inside.XPSamples[0].Source != "original" {
 		t.Error("mutating the returned copy changed the store's slice")
 	}
 	if !inside.ChallengeDone["x"] {

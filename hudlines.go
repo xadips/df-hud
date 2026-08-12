@@ -113,32 +113,94 @@ func threatLine(v *View) (text string, show bool) {
 // on a HUD whose whole job is to be glanceable. The reason still exists in
 // View.XPWhy, where -print-view and the tray tooltip can show it to whoever is
 // actually debugging.
-func xpLine(v *View) (text, cssClass string, show bool) {
+func xpLine(v *View, cfg XPWidgetConfig) (text, cssClass string, show bool) {
 	if !v.HaveData || !v.XPAvailable {
 		return "", "", false
 	}
-	return "xp " + formatRate(v.XPPerHour), v.XPStability.CSSClass(), true
+	return cfg.Prefix + formatRate(v.XPPerHour), v.XPStability.CSSClass(), true
 }
 
-// challengeLines is the pinned challenges, one row each.
+// challengeCategory is which switch in the config decides whether a challenge is
+// shown. Three sources, plus completion as a filter that cuts across all of them.
+type challengeCategory int
+
+const (
+	// categoryRepeatable is a limited-time event challenge. The wire marks these
+	// `repeatable`, verified against a live board: 1 on exactly the three Summer
+	// ones and 0 on every daily, weekly and clan entry. The name is not used -
+	// "Summer" is this event, not the concept.
+	categoryRepeatable challengeCategory = iota
+	categoryClan
+	categoryPersonal
+)
+
+func categoryOf(c Challenge) challengeCategory {
+	switch {
+	case c.Clan:
+		// Checked before Repeatable, because a repeatable clan challenge is still
+		// the clan's business and belongs under the switch that says so.
+		return categoryClan
+	case c.Repeatable:
+		return categoryRepeatable
+	default:
+		return categoryPersonal
+	}
+}
+
+// showChallenge applies the config's switches to one challenge.
+func showChallenge(c Challenge, cfg ChallengesWidgetConfig) bool {
+	if c.Complete() && !cfg.ShowCompleted {
+		return false
+	}
+	switch categoryOf(c) {
+	case categoryRepeatable:
+		return cfg.ShowRepeatable
+	case categoryClan:
+		return cfg.ShowClan
+	default:
+		return cfg.ShowPersonal
+	}
+}
+
+// filterChallenges is the board, minus the categories that are switched off.
 //
-// The HUD shows only pinned ones: a board of a dozen would bury everything else,
-// and the console window exists for the full list. Pins are matched by NAME
-// because both the index and the end time rotate every cycle - a pin stored by
-// either would silently follow a different challenge next week.
+// The board's own order is kept. It arrives grouped - event, then weeklies, then
+// dailies, then clan - and sorting it by progress or by deadline would reshuffle
+// the rows under you as scores change, which on a HUD you read at a glance is
+// worse than an order that is merely arbitrary but fixed.
+func filterChallenges(board []Challenge, cfg ChallengesWidgetConfig) []Challenge {
+	out := make([]Challenge, 0, len(board))
+	for _, c := range board {
+		if !showChallenge(c, cfg) {
+			continue
+		}
+		out = append(out, c)
+		if cfg.MaxShown > 0 && len(out) >= cfg.MaxShown {
+			break
+		}
+	}
+	return out
+}
+
+// challengeLines is the board, one row each.
 //
-// When nothing is pinned it falls back to whatever is closest to completion among
-// the ones you have actually started. That is the useful default: it answers
-// "what can I finish right now?" without anyone configuring anything.
+// This used to show only pinned challenges, on the theory that a dozen rows would
+// bury everything else. That was a consequence of every group sharing one corner:
+// with the board in its own place on screen there is nothing to bury, so the whole
+// thing is shown and the category switches decide what is worth a row.
 func challengeLines(v *View, cfg ChallengesWidgetConfig) []string {
-	if len(v.Pinned) == 0 {
-		if v.ChallengeStatus != "" {
+	shown := filterChallenges(v.Challenges, cfg)
+	if len(shown) == 0 {
+		// The status only replaces the board when there is no board at all. With
+		// rows on screen it would be a second explanation of something already
+		// visible, and with everything filtered out it would read as an error.
+		if len(v.Challenges) == 0 && v.ChallengeStatus != "" {
 			return []string{"challenges: " + v.ChallengeStatus}
 		}
 		return nil
 	}
-	lines := make([]string, 0, len(v.Pinned))
-	for _, c := range v.Pinned {
+	lines := make([]string, 0, len(shown))
+	for _, c := range shown {
 		score, target := c.Progress()
 		mark := ""
 		if c.Complete() {
@@ -155,80 +217,17 @@ func challengeLines(v *View, cfg ChallengesWidgetConfig) []string {
 	return lines
 }
 
-// pickPinned resolves which challenges the HUD shows.
-func pickPinned(board []Challenge, pins []string, cfg ChallengesWidgetConfig) []Challenge {
-	if len(board) == 0 {
-		return nil
-	}
-	max := cfg.MaxShown
-	if max < 1 {
-		max = 1
-	}
-
-	var out []Challenge
-	if len(pins) > 0 {
-		// Pinned order follows the pin list, not the board, so the HUD layout is
-		// stable and under the user's control.
-		for _, name := range pins {
-			for _, c := range board {
-				if c.Name == name {
-					if !cfg.ShowClan && c.Clan {
-						continue
-					}
-					out = append(out, c)
-					break
-				}
-			}
-			if len(out) >= max {
-				break
-			}
-		}
-		return out
-	}
-
-	// Nothing pinned: the ones closest to done, among those already started.
-	// Complete ones are dropped - they need no attention.
-	var started []Challenge
-	for _, c := range board {
-		if !cfg.ShowClan && c.Clan {
-			continue
-		}
-		if c.Started() && !c.Complete() {
-			started = append(started, c)
-		}
-	}
-	sort.SliceStable(started, func(i, j int) bool {
-		return challengeFraction(started[i]) > challengeFraction(started[j])
-	})
-	if len(started) > max {
-		started = started[:max]
-	}
-	return started
-}
-
-// challengeFraction is overall progress across every objective, for ranking.
-func challengeFraction(c Challenge) float64 {
-	score, target := c.Progress()
-	if target <= 0 {
-		return 0
-	}
-	if f := float64(score) / float64(target); f < 1 {
-		return f
-	}
-	return 1
-}
-
 // sessionLine is the run clock: time in the inner city.
 //
 // show is false whenever there is no run - the game closed, or you are standing
 // in an outpost. A clock that keeps counting while you shop reads as a broken
 // clock, and one that counts the launcher's loading screen is worse: it is
 // confidently wrong about the only thing it claims to measure.
-func sessionLine(v *View) (string, bool) {
+func sessionLine(v *View, cfg SessionWidgetConfig) (string, bool) {
 	if !v.GameRunning || !v.HasSession {
 		return "", false
 	}
-	return formatClock(v.SessionTime), true
+	return cfg.Prefix + formatClock(v.SessionTime), true
 }
 
 // hudLines is everything the HUD would render, in order. Used by -print-hud and
@@ -239,55 +238,59 @@ func hudLines(v *View, cfg *Config) []string {
 		lines = append(lines, v.Status)
 	}
 
+	// Groups now carry a position rather than a sort key, so "in order" means
+	// reading order: down the screen, then across. That is only an approximation of
+	// what the eye does with four groups in four corners, but it is a deterministic
+	// one, and this exists so -print-hud and the tests see what is drawn.
 	type row struct {
-		order int
+		place Placement
 		text  []string
 	}
 	var rows []row
 
 	if cfg.Widget.Block.Enabled {
+		block := cfg.Widget.Block.Placement
 		if head, sub, ok := blockLines(v, cfg.Widget.Block); ok {
 			text := []string{head}
 			if sub != "" {
 				text = append(text, sub)
 			}
-			rows = append(rows, row{cfg.Widget.Block.Order, text})
+			rows = append(rows, row{block, text})
 		}
-	}
-	if cfg.Widget.Block.Enabled {
-		// Both share the block widget's order: they are information about where you
-		// are standing, and they belong next to the block's name. The attack goes
-		// first because it is the one that ends your run if you ignore it.
+		// Both belong to the block group: they are information about where you are
+		// standing. The attack goes first because it is the one that ends your run
+		// if you ignore it.
 		if text, ok := outpostAttackLine(v); ok {
-			rows = append(rows, row{cfg.Widget.Block.Order, []string{text}})
+			rows = append(rows, row{block, []string{text}})
 		}
 		if text, ok := threatLine(v); ok {
-			rows = append(rows, row{cfg.Widget.Block.Order, []string{text}})
+			rows = append(rows, row{block, []string{text}})
 		}
 	}
 	if cfg.Widget.Session.Enabled {
-		if text, ok := sessionLine(v); ok {
-			rows = append(rows, row{cfg.Widget.Session.Order, []string{text}})
+		if text, ok := sessionLine(v, cfg.Widget.Session); ok {
+			rows = append(rows, row{cfg.Widget.Session.Placement, []string{text}})
 		}
 	}
 	if cfg.Widget.XP.Enabled {
-		if text, _, ok := xpLine(v); ok {
-			rows = append(rows, row{cfg.Widget.XP.Order, []string{text}})
+		if text, _, ok := xpLine(v, cfg.Widget.XP); ok {
+			rows = append(rows, row{cfg.Widget.XP.Placement, []string{text}})
 		}
 	}
 	if cfg.Widget.Challenges.Enabled {
 		if text := challengeLines(v, cfg.Widget.Challenges); len(text) > 0 {
-			rows = append(rows, row{cfg.Widget.Challenges.Order, text})
+			rows = append(rows, row{cfg.Widget.Challenges.Placement, text})
 		}
 	}
 
-	// Same ordering rule as buildWidgets, so the printed form matches the drawn
-	// one even after someone reorders the config.
-	for i := 1; i < len(rows); i++ {
-		for j := i; j > 0 && rows[j].order < rows[j-1].order; j-- {
-			rows[j], rows[j-1] = rows[j-1], rows[j]
+	// Stable, so the several rows that share the block group's position keep the
+	// order they were added in rather than being shuffled against each other.
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].place.Y != rows[j].place.Y {
+			return rows[i].place.Y < rows[j].place.Y
 		}
-	}
+		return rows[i].place.X < rows[j].place.X
+	})
 	for _, r := range rows {
 		lines = append(lines, r.text...)
 	}

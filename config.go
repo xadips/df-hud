@@ -209,9 +209,16 @@ type HUDConfig struct {
 	// Layer must be "overlay" for the HUD to be visible over a fullscreen
 	// game: "top" sits BELOW fullscreen surfaces. The other values are
 	// accepted for debugging and warned about.
-	Layer   string   `toml:"layer"`
-	Anchors []string `toml:"anchors"`
+	Layer string `toml:"layer"`
 
+	// The margins inset the surface from each edge of the monitor, which makes
+	// the top-left one the ORIGIN every widget.*.x/y is measured from.
+	//
+	// There used to be an anchors key here, deciding which corner a single stack
+	// of rows grew from. It went when each group gained its own coordinates: the
+	// surface is now anchored to all four edges so that it covers the monitor and
+	// a coordinate means the same thing as it does in a screenshot. Keep these at
+	// zero unless you want everything shifted at once.
 	MarginTop    int `toml:"margin_top"`
 	MarginRight  int `toml:"margin_right"`
 	MarginBottom int `toml:"margin_bottom"`
@@ -298,17 +305,50 @@ type TrayConfig struct {
 }
 
 type WidgetConfig struct {
+	Status     StatusWidgetConfig     `toml:"status"`
 	Block      BlockWidgetConfig      `toml:"block"`
 	Session    SessionWidgetConfig    `toml:"session"`
 	XP         XPWidgetConfig         `toml:"xp"`
 	Challenges ChallengesWidgetConfig `toml:"challenges"`
 }
 
-// Every widget carries Enabled and Order. Order is a sort key, not an index,
-// so widgets can be reordered by editing one number and gaps are deliberate.
+// Placement is where one group of rows sits, and how its text is drawn.
+//
+// x and y are in pixels from the top-left of the HUD surface, which spans the
+// whole monitor, so they are screen coordinates - the same numbers you would read
+// off a screenshot. (The hud.margin_* keys move that origin if you want
+// everything shifted, e.g. clear of a bar.)
+//
+// This replaced a single stack of rows in one corner with an `order` key. That
+// was the wrong model: the four groups answer unrelated questions and want to
+// live in different parts of the screen, near whatever they relate to. The clock
+// belongs next to the game's own clock, block info belongs on the side you look
+// at for it, and neither wants to be third in a list.
+//
+// A zero font_size or empty font_family means "inherit from [hud]", so a group
+// only needs the keys it actually differs on.
+//
+// Coordinates are logical pixels. On a scaled monitor they are not device pixels,
+// so a HiDPI setup wants the numbers you see rather than the panel's own.
+type Placement struct {
+	X int `toml:"x"`
+	Y int `toml:"y"`
+
+	FontFamily string  `toml:"font_family"`
+	FontSize   float64 `toml:"font_size"`
+}
+
+// StatusWidgetConfig places the HUD's own error banner - stale credentials, a
+// board that cannot be fetched. It has no enabled key on purpose: it is how
+// df-hud reports that it cannot do its job, and a hidden one would leave the HUD
+// simply looking broken.
+type StatusWidgetConfig struct {
+	Placement
+}
+
 type BlockWidgetConfig struct {
+	Placement
 	Enabled bool `toml:"enabled"`
-	Order   int  `toml:"order"`
 
 	// ShowCoords prints the raw df_positionx/y under the block name. Useful
 	// while calibrating the area grid, noise afterwards.
@@ -318,13 +358,19 @@ type BlockWidgetConfig struct {
 // SessionWidgetConfig is the run clock: time since you entered the inner city.
 // See Store.updateRunLocked for why it is not the client's uptime.
 type SessionWidgetConfig struct {
+	Placement
 	Enabled bool `toml:"enabled"`
-	Order   int  `toml:"order"`
+
+	// Prefix labels the number. A bare clock on an overlay is ambiguous - the
+	// game has its own clocks - so it says what it is timing.
+	Prefix string `toml:"prefix"`
 }
 
 type XPWidgetConfig struct {
+	Placement
 	Enabled bool `toml:"enabled"`
-	Order   int  `toml:"order"`
+
+	Prefix string `toml:"prefix"`
 
 	// Window is the averaging span. MinSamples is the number of usable
 	// samples below which the rate is blanked rather than guessed at - two
@@ -333,16 +379,33 @@ type XPWidgetConfig struct {
 	MinSamples int      `toml:"min_samples"`
 }
 
+// ChallengesWidgetConfig is the whole board, filtered.
+//
+// The board splits into three sources that are worth different amounts to
+// different people, so each is its own switch rather than a "max_shown" that
+// crops arbitrarily:
+//
+//   - event challenges, which the wire marks `repeatable` (verified live: it is 1
+//     on exactly the three Summer ones and 0 on everything else). They pay event
+//     currency rather than XP, so they are the first thing someone not chasing
+//     tickets wants gone.
+//   - clan challenges, which are the clan's progress and not yours.
+//   - everything else: the ordinary daily and weekly ones.
+//
+// ShowCompleted cuts across all three: a finished challenge is a row that will
+// not change again this cycle.
 type ChallengesWidgetConfig struct {
+	Placement
 	Enabled bool `toml:"enabled"`
-	Order   int  `toml:"order"`
 
-	// Pinned seeds the pin list on first boot, by challenge NAME: both the
-	// index and the end_time rotate each cycle, so neither identifies a
-	// challenge across cycles. Live pin state wins after that.
-	Pinned   []string `toml:"pinned"`
-	ShowClan bool     `toml:"show_clan"`
-	MaxShown int      `toml:"max_shown"`
+	ShowRepeatable bool `toml:"show_repeatable"`
+	ShowClan       bool `toml:"show_clan"`
+	ShowPersonal   bool `toml:"show_personal"`
+	ShowCompleted  bool `toml:"show_completed"`
+
+	// MaxShown caps the rows. 0 means no cap, which is the point of the window:
+	// the whole board, in the board's own order.
+	MaxShown int `toml:"max_shown"`
 }
 
 // EffectiveChallengeInterval is the board's cadence for the current state.
@@ -427,14 +490,13 @@ func defaultConfig() *Config {
 			FollowGameWorkspace: true,
 			Monitor:             "auto",
 			Layer:               "overlay",
-			Anchors:             []string{"top", "left"},
-			MarginTop:           60, // clears waybar's 36px exclusive zone with room to spare
-			MarginLeft:          40,
-			ClickThrough:        true,
-			FontFamily:          "Courier New, monospace",
-			FontSize:            12,
-			TextColor:           "#e6cc4d", // the game's own HUD yellow
-			Opacity:             1.0,
+			// Zero: each group carries its own coordinates now, so the surface
+			// covers the monitor and a margin would only shift every group at once.
+			ClickThrough: true,
+			FontFamily:   "Courier New, monospace",
+			FontSize:     12,
+			TextColor:    "#e6cc4d", // the game's own HUD yellow
+			Opacity:      1.0,
 		},
 		BossMap: BossMapConfig{
 			Enabled: true,
@@ -452,17 +514,29 @@ func defaultConfig() *Config {
 			ButtonX: 1230, ButtonY: 660, ButtonWidth: 100, ButtonHeight: 40,
 		},
 		Tray: TrayConfig{Enabled: true},
+		// The default positions are measured at 2560x1440 against the game's own
+		// interface: the clock beside the game's clock, the rate under it, the
+		// board down the left where there is nothing to cover, and block info on
+		// the right. Anything else on another resolution, which is why they are
+		// config keys.
 		Widget: WidgetConfig{
-			Block:   BlockWidgetConfig{Enabled: true, Order: 10},
-			Session: SessionWidgetConfig{Enabled: true, Order: 20},
+			Status:  StatusWidgetConfig{Placement{X: 10, Y: 10}},
+			Block:   BlockWidgetConfig{Placement: Placement{X: 2340, Y: 300}, Enabled: true},
+			Session: SessionWidgetConfig{Placement: Placement{X: 350, Y: 60}, Enabled: true, Prefix: "IC Time: "},
 			// Five minutes, not thirty seconds. XP arrives in lumps - a kill, a
 			// challenge - so a window short enough to contain no lump reads as a
 			// rate of zero, and a HUD that flips between 20M/hr and nothing is
 			// worse than useless: it is actively misleading about how the run is
 			// going. Five minutes is long enough to smooth the gaps between kills
 			// and short enough to still respond when you change what you are doing.
-			XP:         XPWidgetConfig{Enabled: true, Order: 30, Window: duration{5 * time.Minute}, MinSamples: 3},
-			Challenges: ChallengesWidgetConfig{Enabled: true, Order: 40, ShowClan: true, MaxShown: 3},
+			XP: XPWidgetConfig{
+				Placement: Placement{X: 160, Y: 100}, Enabled: true, Prefix: "Xp/Hr: ",
+				Window: duration{5 * time.Minute}, MinSamples: 3,
+			},
+			Challenges: ChallengesWidgetConfig{
+				Placement: Placement{X: 10, Y: 190}, Enabled: true,
+				ShowRepeatable: true, ShowClan: true, ShowPersonal: true, ShowCompleted: true,
+			},
 		},
 		Console: ConsoleConfig{Width: 720, Height: 560},
 	}
@@ -647,9 +721,6 @@ func (c *Config) validate() error {
 		if _, err := parseLayer(c.HUD.Layer); err != nil {
 			errs = append(errs, fmt.Errorf("hud.layer: %w", err))
 		}
-		if _, err := parseAnchors(c.HUD.Anchors); err != nil {
-			errs = append(errs, fmt.Errorf("hud.anchors: %w", err))
-		}
 		if c.HUD.FontSize <= 0 {
 			errs = append(errs, fmt.Errorf("hud.font_size %.1f must be positive", c.HUD.FontSize))
 		}
@@ -677,13 +748,30 @@ func (c *Config) validate() error {
 			errs = append(errs, fmt.Errorf("widget.xp.window %s must be positive", c.Widget.XP.Window))
 		}
 	}
-	if c.Widget.Challenges.Enabled && c.Widget.Challenges.MaxShown < 1 {
-		errs = append(errs, fmt.Errorf("widget.challenges.max_shown %d must be at least 1 (disable the widget instead)",
+	if c.Widget.Challenges.MaxShown < 0 {
+		errs = append(errs, fmt.Errorf("widget.challenges.max_shown %d cannot be negative (0 means no cap)",
 			c.Widget.Challenges.MaxShown))
 	}
-	for i, name := range c.Widget.Challenges.Pinned {
-		if strings.TrimSpace(name) == "" {
-			errs = append(errs, fmt.Errorf("widget.challenges.pinned[%d] is empty", i))
+	// Placement, for every group. Negative coordinates would put a group off the
+	// top or left of its own surface, where it is not clipped so much as simply
+	// absent - which looks like the group being broken rather than misplaced.
+	for _, g := range []struct {
+		key   string
+		place Placement
+	}{
+		{"status", c.Widget.Status.Placement},
+		{"block", c.Widget.Block.Placement},
+		{"session", c.Widget.Session.Placement},
+		{"xp", c.Widget.XP.Placement},
+		{"challenges", c.Widget.Challenges.Placement},
+	} {
+		if g.place.X < 0 || g.place.Y < 0 {
+			errs = append(errs, fmt.Errorf("widget.%s position %d, %d cannot be negative: "+
+				"it is measured from the top-left of the screen", g.key, g.place.X, g.place.Y))
+		}
+		if g.place.FontSize < 0 {
+			errs = append(errs, fmt.Errorf("widget.%s.font_size %g cannot be negative (0 inherits from [hud])",
+				g.key, g.place.FontSize))
 		}
 	}
 
@@ -738,45 +826,6 @@ func parseLayer(s string) (Layer, error) {
 func (h HUDConfig) HidesUnderFullscreen() bool {
 	l, err := parseLayer(h.Layer)
 	return err == nil && l != LayerOverlay
-}
-
-var anchorEdges = map[string]Edge{
-	"top":    EdgeTop,
-	"bottom": EdgeBottom,
-	"left":   EdgeLeft,
-	"right":  EdgeRight,
-}
-
-// parseAnchors resolves edge names, rejecting duplicates. Anchoring opposite
-// edges is legal - it stretches the surface - so it is allowed.
-func parseAnchors(names []string) ([]Edge, error) {
-	out := make([]Edge, 0, len(names))
-	seen := map[string]bool{}
-	for _, raw := range names {
-		name := strings.ToLower(strings.TrimSpace(raw))
-		edge, ok := anchorEdges[name]
-		if !ok {
-			return nil, fmt.Errorf("%q is not an edge: use top, bottom, left or right", raw)
-		}
-		if seen[name] {
-			return nil, fmt.Errorf("%q is listed twice", name)
-		}
-		seen[name] = true
-		out = append(out, edge)
-	}
-	if len(out) == 0 {
-		return nil, errors.New("at least one anchor is required, or the surface is centred with no fixed position")
-	}
-	return out, nil
-}
-
-// Anchors resolves the configured edges. Only call after validate has passed.
-func (h HUDConfig) AnchorEdges() []Edge {
-	edges, err := parseAnchors(h.Anchors)
-	if err != nil {
-		return []Edge{EdgeTop, EdgeLeft}
-	}
-	return edges
 }
 
 // LayerValue resolves the configured layer. Only call after validate has passed.

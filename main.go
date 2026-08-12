@@ -73,6 +73,16 @@ func main() {
 		log.Printf("config: hud.layer = %q sits BELOW fullscreen windows, so the HUD will be "+
 			"invisible while the game is fullscreen; use \"overlay\"", cfg.HUD.Layer)
 	}
+	if cfg.HUD.Enabled && !cfg.HUD.ClickThrough {
+		// This got worse when each group gained its own coordinates: the surface
+		// now covers the whole monitor so that a coordinate means what it means in a
+		// screenshot, which means an input-consuming surface eats every click on the
+		// screen rather than the few over a small stack of text. The symptom is the
+		// game not responding at all, which nobody would trace to a HUD setting.
+		log.Print("config: hud.click_through is off and the HUD surface covers the whole " +
+			"monitor, so it will swallow EVERY pointer event - the game will not respond " +
+			"to the mouse. Turn it back on unless you are debugging the surface.")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -359,7 +369,6 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 	a.challenges.SetOnBoard(func(board []Challenge) {
 		a.store.SetChallenges(board, time.Now())
 		a.store.SetChallengeStatus("")
-		a.applyPins(board)
 	})
 
 	// The game starting or stopping changes the cadence, so tell the poller
@@ -639,22 +648,6 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 			}
 		}
 	}
-}
-
-// applyPins resolves which challenges the HUD shows and seeds the pin list from
-// config on first boot. Live pins win afterwards, so editing the config does not
-// silently override a choice made in the console window.
-func (a *app) applyPins(board []Challenge) {
-	st := a.state.Get()
-	pins := st.Pins
-	if len(pins) == 0 && !st.PinsSeeded {
-		pins = a.Config().Widget.Challenges.Pinned
-		a.state.Update(func(s *State) {
-			s.Pins = append([]string(nil), pins...)
-			s.PinsSeeded = true
-		})
-	}
-	a.store.SetPinned(pickPinned(board, pins, a.Config().Widget.Challenges))
 }
 
 // reportChallengeStatus keeps the widget's explanation current: a pause reason is

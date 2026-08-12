@@ -26,7 +26,7 @@ func TestTrayTooltip(t *testing.T) {
 		HaveData: true, XPAvailable: true, XPPerHour: 19_500_000,
 	}
 	got := trayTooltip(playing, visible)
-	if !strings.Contains(got, "in the city 0:12:34") || !strings.Contains(got, "xp 19.5M/hr") {
+	if !strings.Contains(got, "in the city 0:12:34") || !strings.Contains(got, "xp 19,500,000/hr") {
 		t.Errorf("tooltip = %q, want the run clock and the rate", got)
 	}
 	// One fact per line: a single line grows into a stripe across the screen and

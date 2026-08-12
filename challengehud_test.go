@@ -6,12 +6,19 @@ import (
 	"time"
 )
 
+// board mirrors the shape of a real one, verified against a live fetch: three
+// event challenges the wire marks repeatable, ordinary dailies and weeklies, and
+// the clan's own set. The completion states are spread so the filters have
+// something to bite on.
 func board() []Challenge {
 	end := time.Now().Add(5 * 24 * time.Hour)
 	soon := time.Now().Add(20 * time.Minute)
 	return []Challenge{
-		{Name: "Summer Death", End: end, Objectives: []Objective{
+		{Name: "Summer Death", Repeatable: true, End: end, Objectives: []Objective{
 			{Name: "Kill Regular Infected", Target: 100, Score: 55, HasScore: true},
+		}},
+		{Name: "Summer Loot", Repeatable: true, End: end, Objectives: []Objective{
+			{Name: "Loot Anything", Target: 10, Score: 10, HasScore: true},
 		}},
 		{Name: "Untouched", End: end, Objectives: []Objective{
 			{Name: "Do Nothing", Target: 10},
@@ -28,98 +35,114 @@ func board() []Challenge {
 	}
 }
 
-// Pins are matched by NAME because the index and the end time both rotate every
-// cycle - a pin stored by either would silently follow a different challenge next
-// week.
-func TestPickPinnedFollowsTheNames(t *testing.T) {
-	cfg := ChallengesWidgetConfig{MaxShown: 3, ShowClan: true}
-	got := pickPinned(board(), []string{"Nearly There", "Summer Death"}, cfg)
-
-	if len(got) != 2 {
-		t.Fatalf("got %d pinned, want 2", len(got))
-	}
-	// Pin order wins over board order, so the HUD layout stays where it was put.
-	if got[0].Name != "Nearly There" || got[1].Name != "Summer Death" {
-		t.Errorf("order = %q, %q; want the pin list's order", got[0].Name, got[1].Name)
-	}
-
-	// A pin naming something no longer on the board is skipped, not an error: a
-	// cycle can retire a challenge while the pin remains.
-	got = pickPinned(board(), []string{"Long Gone", "Summer Death"}, cfg)
-	if len(got) != 1 || got[0].Name != "Summer Death" {
-		t.Errorf("a stale pin should be skipped, got %+v", got)
+func allCategories() ChallengesWidgetConfig {
+	return ChallengesWidgetConfig{
+		Enabled: true, ShowRepeatable: true, ShowClan: true, ShowPersonal: true, ShowCompleted: true,
 	}
 }
 
-func TestPickPinnedRespectsMaxShown(t *testing.T) {
-	cfg := ChallengesWidgetConfig{MaxShown: 2, ShowClan: true}
-	got := pickPinned(board(), []string{"Summer Death", "Nearly There", "Already Done"}, cfg)
-	if len(got) != 2 {
-		t.Errorf("got %d rows, want max_shown of 2", len(got))
+func names(cs []Challenge) string {
+	var out []string
+	for _, c := range cs {
+		out = append(out, c.Name)
 	}
-	// A max of zero is nonsense; one row is the floor rather than a panic.
-	got = pickPinned(board(), []string{"Summer Death"}, ChallengesWidgetConfig{MaxShown: 0})
-	if len(got) != 1 {
-		t.Errorf("got %d rows, want 1", len(got))
+	return strings.Join(out, " | ")
+}
+
+// The whole board, in the board's own order. Sorting by progress or deadline would
+// reshuffle rows as scores change, which is worse on a glanceable HUD than an
+// order that is merely arbitrary but fixed.
+func TestFilterChallengesShowsEverythingByDefault(t *testing.T) {
+	got := filterChallenges(board(), allCategories())
+	if len(got) != 6 {
+		t.Fatalf("got %d rows, want the whole board: %s", len(got), names(got))
+	}
+	if got[0].Name != "Summer Death" || got[5].Name != "Weekly Challenge - Kill Infected" {
+		t.Errorf("order = %s, want the board's own", names(got))
 	}
 }
 
-// The default with nothing pinned answers "what can I finish right now?" without
-// anyone configuring anything.
-func TestPickPinnedFallsBackToClosestToDone(t *testing.T) {
-	cfg := ChallengesWidgetConfig{MaxShown: 2, ShowClan: true}
-	got := pickPinned(board(), nil, cfg)
-
-	if len(got) != 2 {
-		t.Fatalf("got %d rows, want 2", len(got))
+// Each category is its own switch. The event one keys off the wire's `repeatable`
+// flag rather than the name: "Summer" is this event, not the concept.
+func TestFilterChallengesByCategory(t *testing.T) {
+	cfg := allCategories()
+	cfg.ShowRepeatable = false
+	got := filterChallenges(board(), cfg)
+	if strings.Contains(names(got), "Summer") {
+		t.Errorf("show_repeatable=false left event challenges in: %s", names(got))
 	}
-	// Nearly There (95%) then the clan challenge (98%)... ranked by fraction, so
-	// the clan one leads.
-	if got[0].Name != "Weekly Challenge - Kill Infected" {
-		t.Errorf("first row = %q, want the highest fraction", got[0].Name)
-	}
-	if got[1].Name != "Nearly There" {
-		t.Errorf("second row = %q", got[1].Name)
+	if len(got) != 4 {
+		t.Errorf("got %d rows, want the four non-event ones: %s", len(got), names(got))
 	}
 
-	names := got[0].Name + " " + got[1].Name
-	// Untouched challenges are noise on a HUD, and completed ones need no
-	// attention.
-	if strings.Contains(names, "Untouched") {
-		t.Error("an unstarted challenge should not be auto-shown")
+	cfg = allCategories()
+	cfg.ShowClan = false
+	if got := filterChallenges(board(), cfg); strings.Contains(names(got), "Weekly Challenge") {
+		t.Errorf("show_clan=false left clan challenges in: %s", names(got))
 	}
-	if strings.Contains(names, "Already Done") {
-		t.Error("a completed challenge should not be auto-shown")
+
+	cfg = allCategories()
+	cfg.ShowPersonal = false
+	got = filterChallenges(board(), cfg)
+	if strings.Contains(names(got), "Nearly There") || strings.Contains(names(got), "Untouched") {
+		t.Errorf("show_personal=false left ordinary challenges in: %s", names(got))
+	}
+	// The event and clan ones are untouched by it, which is the point of them being
+	// separate switches.
+	if !strings.Contains(names(got), "Summer Death") || !strings.Contains(names(got), "Weekly Challenge") {
+		t.Errorf("show_personal=false took too much: %s", names(got))
 	}
 }
 
-func TestPickPinnedCanHideClanChallenges(t *testing.T) {
-	cfg := ChallengesWidgetConfig{MaxShown: 5, ShowClan: false}
+// Completion cuts across the three sources rather than being a fourth one.
+func TestFilterChallengesCanHideCompleted(t *testing.T) {
+	cfg := allCategories()
+	cfg.ShowCompleted = false
+	got := filterChallenges(board(), cfg)
 
-	if got := pickPinned(board(), nil, cfg); len(got) > 0 {
-		for _, c := range got {
-			if c.Clan {
-				t.Error("show_clan=false must exclude clan challenges from the fallback")
-			}
-		}
-	}
-	// And from explicit pins too, otherwise the setting only half works.
-	got := pickPinned(board(), []string{"Weekly Challenge - Kill Infected", "Summer Death"}, cfg)
 	for _, c := range got {
-		if c.Clan {
-			t.Error("show_clan=false must exclude a clan challenge even when pinned")
+		if c.Complete() {
+			t.Errorf("show_completed=false left %q in", c.Name)
 		}
+	}
+	// Summer Loot is complete AND an event challenge, so this also pins down that
+	// completion is checked independently of the category.
+	if strings.Contains(names(got), "Summer Loot") || strings.Contains(names(got), "Already Done") {
+		t.Errorf("got %s", names(got))
+	}
+	if !strings.Contains(names(got), "Summer Death") {
+		t.Error("an unfinished event challenge must survive show_completed=false")
+	}
+}
+
+// Every switch off is an empty group rather than a fallback to something. A HUD
+// that ignores the config and shows rows anyway is worse than an empty corner.
+func TestFilterChallengesCanHideEverything(t *testing.T) {
+	if got := filterChallenges(board(), ChallengesWidgetConfig{Enabled: true}); len(got) != 0 {
+		t.Errorf("got %s, want nothing", names(got))
+	}
+}
+
+// MaxShown is a cap, and 0 means no cap: the point of the group having its own
+// place on screen is that the whole board fits.
+func TestFilterChallengesMaxShown(t *testing.T) {
+	cfg := allCategories()
+	cfg.MaxShown = 2
+	if got := filterChallenges(board(), cfg); len(got) != 2 {
+		t.Errorf("got %d rows, want 2: %s", len(got), names(got))
+	}
+	cfg.MaxShown = 0
+	if got := filterChallenges(board(), cfg); len(got) != 6 {
+		t.Errorf("got %d rows, want no cap: %s", len(got), names(got))
 	}
 }
 
 func TestChallengeLines(t *testing.T) {
-	cfg := ChallengesWidgetConfig{MaxShown: 3, ShowClan: true}
-	v := &View{
-		Now:    time.Now(),
-		Pinned: pickPinned(board(), []string{"Summer Death", "Nearly There", "Already Done"}, cfg),
-	}
+	cfg := allCategories()
+	v := &View{Now: time.Now(), Challenges: board()}
+
 	lines := challengeLines(v, cfg)
-	if len(lines) != 3 {
+	if len(lines) != 6 {
 		t.Fatalf("lines = %v", lines)
 	}
 	if !strings.Contains(lines[0], "Summer Death") || !strings.Contains(lines[0], "55/100") {
@@ -130,18 +153,18 @@ func TestChallengeLines(t *testing.T) {
 	if strings.Contains(lines[0], "5d") {
 		t.Errorf("a far-off deadline should not be shown: %q", lines[0])
 	}
-	if !strings.Contains(lines[1], "m") {
-		t.Errorf("a deadline within the day should be shown: %q", lines[1])
+	if !strings.Contains(lines[3], "m") {
+		t.Errorf("a deadline within the day should be shown: %q", lines[3])
 	}
-	if !strings.Contains(lines[2], "done") {
-		t.Errorf("a completed challenge should say so: %q", lines[2])
+	if !strings.Contains(lines[1], "done") {
+		t.Errorf("a completed challenge should say so: %q", lines[1])
 	}
 }
 
 // An empty board with a reason must explain itself: "no challenges" alone would
 // never point anyone at the missing salt or cookie.
 func TestChallengeLinesExplainsAnEmptyBoard(t *testing.T) {
-	cfg := ChallengesWidgetConfig{MaxShown: 3, ShowClan: true}
+	cfg := allCategories()
 
 	lines := challengeLines(&View{Now: time.Now(), ChallengeStatus: "no signing salt yet"}, cfg)
 	if len(lines) != 1 || !strings.Contains(lines[0], "no signing salt") {
@@ -152,15 +175,11 @@ func TestChallengeLinesExplainsAnEmptyBoard(t *testing.T) {
 	if lines := challengeLines(&View{Now: time.Now()}, cfg); len(lines) != 0 {
 		t.Errorf("lines = %v, want none", lines)
 	}
-}
-
-func TestChallengeFractionCaps(t *testing.T) {
-	over := Challenge{Objectives: []Objective{{Target: 100, Score: 250, HasScore: true}}}
-	if f := challengeFraction(over); f != 1 {
-		t.Errorf("fraction = %v, want it capped at 1", f)
-	}
-	if f := challengeFraction(Challenge{}); f != 0 {
-		t.Errorf("fraction = %v for an empty challenge, want 0", f)
+	// A board that exists but is entirely filtered out is NOT an error, so the
+	// status must not appear: the rows are missing because they were asked to be.
+	hidden := &View{Now: time.Now(), Challenges: board(), ChallengeStatus: "stale"}
+	if lines := challengeLines(hidden, ChallengesWidgetConfig{Enabled: true}); len(lines) != 0 {
+		t.Errorf("lines = %v, want silence rather than a status", lines)
 	}
 }
 
@@ -174,17 +193,17 @@ func TestStoreHoldsTheBoard(t *testing.T) {
 
 	b := board()
 	s.SetChallenges(b, now)
-	s.SetPinned(pickPinned(b, []string{"Summer Death"}, ChallengesWidgetConfig{MaxShown: 3, ShowClan: true}))
 
 	v := s.Derive(now)
 	if v.ChallengesTotal != len(b) {
 		t.Errorf("ChallengesTotal = %d, want %d", v.ChallengesTotal, len(b))
 	}
-	if v.ChallengesDone != 1 {
-		t.Errorf("ChallengesDone = %d, want 1", v.ChallengesDone)
+	// Summer Loot and Already Done.
+	if v.ChallengesDone != 2 {
+		t.Errorf("ChallengesDone = %d, want 2", v.ChallengesDone)
 	}
-	if len(v.Pinned) != 1 || v.Pinned[0].Name != "Summer Death" {
-		t.Errorf("Pinned = %+v", v.Pinned)
+	if len(v.Challenges) != len(b) {
+		t.Errorf("Challenges = %d rows, want the whole board", len(v.Challenges))
 	}
 	if got, ok := s.Challenges(); !ok || len(got) != len(b) {
 		t.Error("the full board should be available for the console window")
