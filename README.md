@@ -18,10 +18,15 @@ Working today:
 - **Session clock** — time since the game client launched, read from the game
   process's own start time, so it stays correct if df-hud starts late or is
   restarted mid-run
-- A headless core with `-once`, `-print-view`, `-print-hud` and `-dump-fields`
-  for looking at real data with no GUI
+- **XP/hr** — averaged over a window, with the colour carrying whether recent
+  polls actually landed
+- **Challenge tracker** — personal and clan, with progress, completion and
+  deadlines. Pin by name, or let it show whatever you are closest to finishing
+- A headless core with `-once`, `-print-view`, `-print-hud`, `-dump-fields`,
+  `-dump-challenges`, `-check-config` and `-check-game` for looking at real data
+  with no GUI
 
-Planned: challenge tracker with pinning, XP/hr, and a boss map for Block Info.
+Planned: a console window for pin toggles, and a boss map for Block Info.
 
 ## How it gets your session
 
@@ -57,12 +62,20 @@ The payload is account-equivalent, so:
 
 The game server is not ours, and bursty request patterns get accounts temp-banned.
 
-- **One poller.** Nothing else in the program makes a request, so the traffic
-  budget is a single number rather than an emergent property. `-check-config`
-  prints it: about **372 requests/hour while playing, 42 idle** at the defaults.
-- **Two requests are never sent less than 5s apart**, whatever wakes the loop.
+- **Two schedulers, one budget.** Nothing outside them makes a request, so the
+  traffic budget is a single number rather than an emergent property.
+  `-check-config` prints it: about **480 requests/hour while playing, 60 idle**
+  at the defaults (the player record every 10s, the challenge board every 30s).
+- **Two requests are never sent less than 5s apart**, whatever wakes them.
   Credentials arriving, the game launching and compositor events can all fire at
-  once; without that floor an event storm becomes a request burst.
+  once; without that floor an event storm becomes a request burst. The floor is
+  a single shared gate rather than one per scheduler — otherwise adding the
+  second poller would quietly have turned the guarantee into "per endpoint"
+  while the documented number stayed the same.
+- **The board slows down when you stop playing.** `challenge_interval` is the
+  cadence while the game runs; with it closed the board stretches to
+  `idle_interval`, so a short value chosen for play cannot become an all-night
+  poll.
 - **Rejected credentials stop polling outright.** They are not retried — retrying
   a rejected login is exactly the pattern that earns a ban. A fresh bridge
   payload resumes it with no restart.

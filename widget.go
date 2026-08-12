@@ -44,6 +44,10 @@ func buildWidgets(cfg *Config) []Widget {
 	if cfg.Widget.XP.Enabled {
 		entries = append(entries, entry{cfg.Widget.XP.Order, "xp", newXPWidget()})
 	}
+	if cfg.Widget.Challenges.Enabled {
+		entries = append(entries, entry{cfg.Widget.Challenges.Order, "challenges",
+			newChallengeWidget(cfg.Widget.Challenges)})
+	}
 
 	// Ties keep their declaration order, so an unset order does something
 	// predictable rather than arbitrary.

@@ -41,9 +41,12 @@ const (
 // The active floor is set so that at worst we look like a busy human playing
 // the game, which is roughly what one get_values every few seconds is.
 const (
-	floorActiveInterval    = 5 * time.Second
-	floorIdleInterval      = 30 * time.Second
-	floorChallengeInterval = 60 * time.Second
+	floorActiveInterval = 5 * time.Second
+	floorIdleInterval   = 30 * time.Second
+	// 30s while playing is ~120 requests/hour for the board, which is a small
+	// fraction of what the game client itself sends during normal play. Below
+	// that the board is not changing fast enough to be worth asking.
+	floorChallengeInterval = 30 * time.Second
 	floorCatalogInterval   = time.Hour
 	floorRequestTimeout    = 2 * time.Second
 	ceilRequestTimeout     = 60 * time.Second
@@ -109,8 +112,13 @@ type PollConfig struct {
 	// refined further by df_inoutpost: it would be one poll stale by
 	// construction, and would delay the outpost-to-city transition by a whole
 	// idle interval at exactly the moment the HUD matters.
-	ActiveInterval    duration `toml:"active_interval"`
-	IdleInterval      duration `toml:"idle_interval"`
+	ActiveInterval duration `toml:"active_interval"`
+	IdleInterval   duration `toml:"idle_interval"`
+
+	// ChallengeInterval is the challenge board's cadence WHILE PLAYING. With the
+	// game closed it stretches to at least IdleInterval - see
+	// EffectiveChallengeInterval - so turning only_when_game_running off cannot
+	// leave a 30s poll running all night.
 	ChallengeInterval duration `toml:"challenge_interval"`
 	CatalogInterval   duration `toml:"catalog_interval"`
 
@@ -231,6 +239,22 @@ type ChallengesWidgetConfig struct {
 	MaxShown int      `toml:"max_shown"`
 }
 
+// EffectiveChallengeInterval is the board's cadence for the current state.
+//
+// The configured value is the playing cadence. With the game closed there is
+// nothing generating challenge progress, so it stretches to the idle cadence:
+// a short interval chosen for play must not become an all-night poll for someone
+// who has turned only_when_game_running off.
+func (p PollConfig) EffectiveChallengeInterval(gameRunning bool) time.Duration {
+	if gameRunning {
+		return p.ChallengeInterval.Duration
+	}
+	if p.IdleInterval.Duration > p.ChallengeInterval.Duration {
+		return p.IdleInterval.Duration
+	}
+	return p.ChallengeInterval.Duration
+}
+
 // EffectiveWindow widens the averaging window when it is too short to ever hold
 // min_samples at the current poll cadence - otherwise the rate would sit on
 // "not enough data" forever and look broken.
@@ -280,7 +304,7 @@ func defaultConfig() *Config {
 		Poll: PollConfig{
 			ActiveInterval:      duration{10 * time.Second},
 			IdleInterval:        duration{2 * time.Minute},
-			ChallengeInterval:   duration{5 * time.Minute},
+			ChallengeInterval:   duration{30 * time.Second},
 			CatalogInterval:     duration{24 * time.Hour},
 			Jitter:              0.10,
 			OnlyWhenGameRunning: true,
@@ -686,7 +710,8 @@ func (c *Config) RequestsPerHour(activeFraction float64) float64 {
 	total := activeFraction*perHour(c.Poll.ActiveInterval.Duration) +
 		(1-activeFraction)*perHour(c.Poll.IdleInterval.Duration)
 	if c.Widget.Challenges.Enabled {
-		total += perHour(c.Poll.ChallengeInterval.Duration)
+		total += activeFraction*perHour(c.Poll.EffectiveChallengeInterval(true)) +
+			(1-activeFraction)*perHour(c.Poll.EffectiveChallengeInterval(false))
 	}
 	total += perHour(c.Poll.CatalogInterval.Duration)
 	return total

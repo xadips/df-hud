@@ -196,13 +196,15 @@ type app struct {
 	cfg     *Config
 	cfgPath string
 
-	creds   *credStore
-	catalog *Catalog
-	client  *Client
-	game    *GameWatcher
-	poller  *Poller
-	store   *Store
-	state   *stateStore
+	creds      *credStore
+	catalog    *Catalog
+	client     *Client
+	game       *GameWatcher
+	poller     *Poller
+	challenges *ChallengePoller
+	gate       *rateGate
+	store      *Store
+	state      *stateStore
 
 	bridge    *bridgeServer
 	bridgeSrv *http.Server
@@ -249,13 +251,30 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 		UserAgent: cfg.DF.UserAgent,
 	}
 	a.game = newGameWatcher(cfg.Game.Process, cfg.Game.ScanInterval.Duration)
+	// One gate for every scheduler, so the minimum spacing is a property of
+	// df-hud's traffic rather than of any one poller's.
+	a.gate = newRateGate(minRequestGap)
 	a.poller = newPoller(a.client, a.creds, a.game, a.Config)
+	a.poller.gate = a.gate
+	a.challenges = newChallengePoller(a.client, a.creds, a.game, a.gate, a.Config,
+		func() (int, bool) {
+			if snap, ok := a.store.Snapshot(); ok {
+				return snap.Level, snap.GoldMember
+			}
+			return 0, false
+		})
+	a.challenges.SetOnBoard(func(board []Challenge) {
+		a.store.SetChallenges(board, time.Now())
+		a.store.SetChallengeStatus("")
+		a.applyPins(board)
+	})
 
 	// The game starting or stopping changes the cadence, so tell the poller
 	// rather than making it discover the change on its next tick.
 	a.game.SetOnChange(func(g GameState) {
 		a.store.SetGame(g)
 		a.poller.Wake()
+		a.challenges.Wake()
 	})
 	a.poller.SetOnTick(func(tick Tick) {
 		a.store.ApplyTick(tick)
@@ -269,6 +288,7 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 			// request gap allows.
 			a.store.SetCredentialsAt(a.creds.UpdatedAt())
 			a.poller.Resume()
+			a.challenges.Resume()
 		})
 		if err != nil {
 			return nil, err
@@ -422,6 +442,8 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 	go a.game.Run(ctx)
 	go watchHyprWindowEvents(ctx, a.game.Poke)
 	go a.poller.Run(ctx)
+	go a.challenges.Run(ctx)
+	go a.reportChallengeStatus(ctx)
 	if a.watcher != nil {
 		go a.watcher.Run(ctx, a.Config, a.applyReload)
 	}
@@ -454,6 +476,47 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 		case <-ticker.C:
 			if err := a.state.MaybeSave(); err != nil {
 				log.Printf("state: could not save: %v", err)
+			}
+		}
+	}
+}
+
+// applyPins resolves which challenges the HUD shows and seeds the pin list from
+// config on first boot. Live pins win afterwards, so editing the config does not
+// silently override a choice made in the console window.
+func (a *app) applyPins(board []Challenge) {
+	st := a.state.Get()
+	pins := st.Pins
+	if len(pins) == 0 && !st.PinsSeeded {
+		pins = a.cfg.Widget.Challenges.Pinned
+		a.state.Update(func(s *State) {
+			s.Pins = append([]string(nil), pins...)
+			s.PinsSeeded = true
+		})
+	}
+	a.store.SetPinned(pickPinned(board, pins, a.cfg.Widget.Challenges))
+}
+
+// reportChallengeStatus keeps the widget's explanation current: a pause reason is
+// only useful if it reaches the screen.
+func (a *app) reportChallengeStatus(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, ok := a.store.Challenges(); ok {
+				continue // a board is showing; nothing to explain
+			}
+			if reason := a.challenges.pauseReason(); reason != "" {
+				a.store.SetChallengeStatus(reason)
+				continue
+			}
+			if failures, _, lastErr := a.challenges.Status(); failures > 0 {
+				_ = lastErr
+				a.store.SetChallengeStatus("board unavailable (retrying)")
 			}
 		}
 	}

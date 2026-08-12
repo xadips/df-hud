@@ -392,20 +392,44 @@ func TestSigningSaltPrefersTheBridge(t *testing.T) {
 
 func TestRequestsPerHour(t *testing.T) {
 	cfg := defaultConfig()
-	// Idle all hour: one get_values per 2m, plus challenges per 5m, plus the
-	// daily catalog refresh.
+
+	// Idle all hour: get_values every 2m (30/h), and the challenge board
+	// stretched to the same 2m rather than its 30s playing cadence (30/h), plus
+	// the daily catalog refresh. With only_when_game_running on - the default -
+	// this is hypothetical anyway, since closing the game stops everything.
 	idle := cfg.RequestsPerHour(0)
-	if idle < 40 || idle > 50 {
-		t.Errorf("idle budget = %.1f/h, expected ~42 (30 + 12 + 1/24)", idle)
+	if idle < 55 || idle > 65 {
+		t.Errorf("idle budget = %.1f/h, expected ~60 (30 + 30 + 1/24)", idle)
 	}
-	// Playing all hour at 10s. This is the number the README quotes, so a
-	// change to the defaults should show up here.
+
+	// Playing all hour: get_values every 10s (360/h) plus the board every 30s
+	// (120/h). This is the number the README quotes, so a change to the defaults
+	// shows up here first.
 	active := cfg.RequestsPerHour(1)
-	if active < 360 || active > 400 {
-		t.Errorf("active budget = %.1f/h, expected ~372 (360 + 12 + 1/24)", active)
+	if active < 470 || active > 490 {
+		t.Errorf("active budget = %.1f/h, expected ~480 (360 + 120 + 1/24)", active)
 	}
 	if active <= idle {
 		t.Error("playing must cost more requests than idling")
+	}
+}
+
+// The board polls fast while playing and no faster than the general idle cadence
+// when the game is closed, so a short interval chosen for play cannot become an
+// all-night poll for someone who has turned only_when_game_running off.
+func TestEffectiveChallengeInterval(t *testing.T) {
+	cfg := defaultConfig()
+	if got := cfg.Poll.EffectiveChallengeInterval(true); got != 30*time.Second {
+		t.Errorf("playing = %s, want the configured 30s", got)
+	}
+	if got := cfg.Poll.EffectiveChallengeInterval(false); got != 2*time.Minute {
+		t.Errorf("game closed = %s, want it stretched to the 2m idle cadence", got)
+	}
+
+	// A challenge interval already slower than idle is left alone.
+	cfg.Poll.ChallengeInterval = duration{10 * time.Minute}
+	if got := cfg.Poll.EffectiveChallengeInterval(false); got != 10*time.Minute {
+		t.Errorf("game closed = %s, want the configured 10m untouched", got)
 	}
 }
 

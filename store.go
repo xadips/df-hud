@@ -315,6 +315,12 @@ type Store struct {
 	credsAt     time.Time
 	loggedXPSrc bool
 
+	board       []Challenge
+	pinned      []Challenge
+	haveBoard   bool
+	boardAt     time.Time
+	boardStatus string
+
 	// xpSamples supplies the rate window. A function rather than a field because
 	// the window is owned by the persistent state store, and copying it into here
 	// on every poll would be two sources of truth for the same ring.
@@ -413,6 +419,35 @@ func (s *Store) stabilityLocked() xpStability {
 	}
 }
 
+// SetChallenges replaces the board.
+func (s *Store) SetChallenges(board []Challenge, at time.Time) {
+	s.mu.Lock()
+	s.board, s.haveBoard, s.boardAt = board, true, at
+	s.mu.Unlock()
+}
+
+// SetPinned replaces the HUD's subset of the board.
+func (s *Store) SetPinned(pinned []Challenge) {
+	s.mu.Lock()
+	s.pinned = pinned
+	s.mu.Unlock()
+}
+
+// SetChallengeStatus records why the board is missing, so the widget can explain
+// itself rather than just being absent.
+func (s *Store) SetChallengeStatus(reason string) {
+	s.mu.Lock()
+	s.boardStatus = reason
+	s.mu.Unlock()
+}
+
+// Challenges returns the board, for the console window's full list.
+func (s *Store) Challenges() ([]Challenge, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.board, s.haveBoard
+}
+
 func (s *Store) SetGame(g GameState) {
 	s.mu.Lock()
 	s.game = g
@@ -500,6 +535,13 @@ type View struct {
 	XPSamples   int
 	XPStability xpStability
 
+	// Challenges is the board, and Pinned is the subset the HUD shows.
+	Challenges      []Challenge
+	Pinned          []Challenge
+	ChallengeStatus string
+	ChallengesDone  int
+	ChallengesTotal int
+
 	// Status is what to show when something is wrong, empty when it is not.
 	Status      string
 	StatusIsFix bool // true when the user can act on it (stale credentials)
@@ -546,6 +588,18 @@ func (s *Store) Derive(now time.Time) *View {
 		v.BoostExpForever = snap.BoostExp.Forever
 		v.Dead = snap.Dead
 	}
+
+	v.Pinned = s.pinned
+	if s.haveBoard {
+		v.Challenges = s.board
+		v.ChallengesTotal = len(s.board)
+		for _, c := range s.board {
+			if c.Complete() {
+				v.ChallengesDone++
+			}
+		}
+	}
+	v.ChallengeStatus = s.boardStatus
 
 	if s.xpSamples != nil {
 		rate := computeXPRate(s.xpSamples(), s.xpMinSamps, s.stabilityLocked())

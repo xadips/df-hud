@@ -56,6 +56,12 @@ type State struct {
 	// challenge across cycles.
 	Pins []string `json:"pins,omitempty"`
 
+	// PinsSeeded records that the config's pin list has been applied once.
+	// Without it, unpinning everything would be indistinguishable from a first
+	// boot and the config would silently re-seed on the next start - quietly
+	// undoing a deliberate choice.
+	PinsSeeded bool `json:"pins_seeded,omitempty"`
+
 	// ChallengeDone is sticky per-cycle completion memory, keyed by
 	// name + cycle end. The game's own board can un-complete a finished
 	// challenge when targets recompute from clan size, so completion has to be

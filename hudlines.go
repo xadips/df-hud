@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"sort"
+	"strings"
+	"time"
+)
 
 // What each widget says, as pure functions of the View.
 //
@@ -68,6 +72,104 @@ func xpLine(v *View) (text, cssClass string, show bool) {
 	return "xp " + formatRate(v.XPPerHour), v.XPStability.CSSClass(), true
 }
 
+// challengeLines is the pinned challenges, one row each.
+//
+// The HUD shows only pinned ones: a board of a dozen would bury everything else,
+// and the console window exists for the full list. Pins are matched by NAME
+// because both the index and the end time rotate every cycle - a pin stored by
+// either would silently follow a different challenge next week.
+//
+// When nothing is pinned it falls back to whatever is closest to completion among
+// the ones you have actually started. That is the useful default: it answers
+// "what can I finish right now?" without anyone configuring anything.
+func challengeLines(v *View, cfg ChallengesWidgetConfig) []string {
+	if len(v.Pinned) == 0 {
+		if v.ChallengeStatus != "" {
+			return []string{"challenges: " + v.ChallengeStatus}
+		}
+		return nil
+	}
+	lines := make([]string, 0, len(v.Pinned))
+	for _, c := range v.Pinned {
+		score, target := c.Progress()
+		mark := ""
+		if c.Complete() {
+			mark = " done"
+		}
+		row := c.Name + "  " + formatInt(score) + "/" + formatInt(target) + mark
+		if remaining := c.Remaining(v.Now); remaining > 0 && remaining < 24*time.Hour {
+			// Only show the countdown when it is close enough to matter; "5d"
+			// on every row is noise.
+			row += "  " + formatCountdown(remaining)
+		}
+		lines = append(lines, row)
+	}
+	return lines
+}
+
+// pickPinned resolves which challenges the HUD shows.
+func pickPinned(board []Challenge, pins []string, cfg ChallengesWidgetConfig) []Challenge {
+	if len(board) == 0 {
+		return nil
+	}
+	max := cfg.MaxShown
+	if max < 1 {
+		max = 1
+	}
+
+	var out []Challenge
+	if len(pins) > 0 {
+		// Pinned order follows the pin list, not the board, so the HUD layout is
+		// stable and under the user's control.
+		for _, name := range pins {
+			for _, c := range board {
+				if c.Name == name {
+					if !cfg.ShowClan && c.Clan {
+						continue
+					}
+					out = append(out, c)
+					break
+				}
+			}
+			if len(out) >= max {
+				break
+			}
+		}
+		return out
+	}
+
+	// Nothing pinned: the ones closest to done, among those already started.
+	// Complete ones are dropped - they need no attention.
+	var started []Challenge
+	for _, c := range board {
+		if !cfg.ShowClan && c.Clan {
+			continue
+		}
+		if c.Started() && !c.Complete() {
+			started = append(started, c)
+		}
+	}
+	sort.SliceStable(started, func(i, j int) bool {
+		return challengeFraction(started[i]) > challengeFraction(started[j])
+	})
+	if len(started) > max {
+		started = started[:max]
+	}
+	return started
+}
+
+// challengeFraction is overall progress across every objective, for ranking.
+func challengeFraction(c Challenge) float64 {
+	score, target := c.Progress()
+	if target <= 0 {
+		return 0
+	}
+	if f := float64(score) / float64(target); f < 1 {
+		return f
+	}
+	return 1
+}
+
 // sessionLine is the game-client clock. show is false when the game is not
 // running, since a frozen clock reads as a broken one.
 func sessionLine(v *View) (string, bool) {
@@ -108,6 +210,11 @@ func hudLines(v *View, cfg *Config) []string {
 	if cfg.Widget.XP.Enabled {
 		if text, _, ok := xpLine(v); ok {
 			rows = append(rows, row{cfg.Widget.XP.Order, []string{text}})
+		}
+	}
+	if cfg.Widget.Challenges.Enabled {
+		if text := challengeLines(v, cfg.Widget.Challenges); len(text) > 0 {
+			rows = append(rows, row{cfg.Widget.Challenges.Order, text})
 		}
 	}
 

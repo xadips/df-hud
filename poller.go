@@ -88,6 +88,11 @@ type Poller struct {
 	// the production value, since that is the one that matters.
 	minGap time.Duration
 
+	// gate, when set, is the process-wide spacing floor shared with every other
+	// scheduler. Without it the minimum gap would only ever be per-poller, which
+	// is a weaker property than the one documented.
+	gate *rateGate
+
 	wake chan struct{}
 
 	mu       sync.RWMutex
@@ -297,6 +302,11 @@ func (p *Poller) pollOnce(ctx context.Context, scheduled bool) Tick {
 	p.status.TotalPolls++
 	p.mu.Unlock()
 
+	if p.gate != nil {
+		if err := p.gate.Wait(reqCtx); err != nil {
+			return Tick{At: p.now(), Err: err, Scheduled: scheduled}
+		}
+	}
 	vars, err := p.client.GetValues(reqCtx, cr)
 	tick := Tick{At: p.now(), Vars: vars, Err: err, Scheduled: scheduled}
 
