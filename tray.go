@@ -35,9 +35,11 @@ type trayActions struct {
 	SetOverlayEnabled func(bool)
 	OverlayEnabled    func() bool
 	// ResetXPRate throws away the rate window and starts a fresh average.
-	ResetXPRate  func()
-	ReloadConfig func()
-	Quit         func()
+	ResetXPRate func()
+	// RestartRunClock starts the run clock from now.
+	RestartRunClock func()
+	ReloadConfig    func()
+	Quit            func()
 
 	// View and Visibility supply the icon state and the tooltip.
 	View       func() *View
@@ -171,6 +173,12 @@ func (t *trayItem) buildMenu() {
 	// because df-hud cannot see where a lump came from.
 	resetXP := systray.AddMenuItem("Reset xp/hr",
 		"Start the average again from now, after a challenge reward or a lull")
+	// Paired with the xp reset: both are "that number is not measuring what I am
+	// doing, start again". The run clock needs one because nothing in the player
+	// record marks the moment the client takes control, so its start is inferred
+	// from activity and can be late.
+	restartRun := systray.AddMenuItem("Restart run clock",
+		"Time this run from now, when it started before you did")
 	systray.AddSeparator()
 	reload := systray.AddMenuItem("Reload config", "Re-read config.toml")
 	quit := systray.AddMenuItem("Quit df-hud", "Stop df-hud")
@@ -196,6 +204,14 @@ func (t *trayItem) buildMenu() {
 			log.Print("tray: xp/hr window reset")
 			if t.actions.ResetXPRate != nil {
 				t.actions.ResetXPRate()
+			}
+		}
+	}()
+	go func() {
+		for range restartRun.ClickedCh {
+			log.Print("tray: run clock restarted")
+			if t.actions.RestartRunClock != nil {
+				t.actions.RestartRunClock()
 			}
 		}
 	}()

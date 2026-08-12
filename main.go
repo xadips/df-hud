@@ -592,6 +592,7 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 			SetOverlayEnabled: a.visibility.SetEnabled,
 			OverlayEnabled:    a.visibility.Enabled,
 			ResetXPRate:       a.resetXPRate,
+			RestartRunClock:   func() { a.store.RestartRun(time.Now()) },
 			ReloadConfig:      a.reloadConfig,
 			Quit:              opts.quit,
 			View:              func() *View { return a.store.Derive(time.Now()) },

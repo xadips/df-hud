@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"strconv"
@@ -90,6 +92,19 @@ type Snapshot struct {
 	// The XP widget resets its window on a change here, since the rate either
 	// side of a boost is not comparable.
 	BoostExp dfDeadline
+
+	// Session3D is a FINGERPRINT of df_session3d, never the value.
+	//
+	// That field is the last untried candidate for "the client just took control",
+	// which is the one thing no other field in the record marks: position, zone and
+	// df_inoutpost all persist unchanged across a client exit and relaunch, as
+	// observed live. If it turns out to change when the 3D client connects, it is
+	// exactly the run-start signal.
+	//
+	// Hashed because a field with "session" in its name gets the benefit of the
+	// doubt: a fingerprint answers "did it change" without the value ever reaching
+	// a log, a state file or a crash dump.
+	Session3D string
 
 	// GoldMember doubles challenge XP rewards (challenge.js:279-283), so it is
 	// needed to render a reward honestly rather than at half value.
@@ -213,6 +228,7 @@ func parseSnapshot(vars map[string]string, at time.Time, catalog *Catalog) Snaps
 	s.GoldMember = boolVar(vars, "df_goldmember")
 	s.Dead = boolVar(vars, "df_dead")
 	s.ServerTime = dfCompactTimeVar(vars, "df_servertime")
+	s.Session3D = fingerprint(vars["df_session3d"])
 
 	return s
 }
@@ -232,6 +248,16 @@ func pendingLevels(c *Catalog, level int, exp int64) int {
 			return levels
 		}
 	}
+}
+
+// fingerprint is a short, one-way digest, for comparing a value we deliberately
+// refuse to keep.
+func fingerprint(v string) string {
+	if v == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(sum[:4])
 }
 
 func intVar(vars map[string]string, key string) (int, bool) {
@@ -409,20 +435,27 @@ func (s *Store) ApplyTick(tick Tick) bool {
 // be minutes ahead of any playing, and a clock counting that is timing a loading
 // screen.
 //
-// The signal is EVIDENCE OF PLAY, of which there are two independent kinds and
-// either will do:
+// Three signals start it, in the order they are trusted:
 //
-//   - the position changed, or
-//   - cumulative XP went up.
+//  1. LEAVING AN OUTPOST: df_inoutpost going from 1 to 0. This is the EDGE, not
+//     the value, and that distinction is the whole thing. An earlier version
+//     started the clock whenever the field read 0, which is why it began at the
+//     launcher: the field was already 0 there and stayed 0, so there was no edge
+//     to fire on. The edge means the server has just taken you out of an outpost,
+//     which is the only one of the three that fires AT the start of a run rather
+//     than at the first sign of activity within it.
+//  2. THE POSITION CHANGING, and
+//  3. CUMULATIVE XP GOING UP.
 //
-// Neither can happen while a launcher sits on screen: nothing on the server moves
-// your character or awards XP while you are looking at a Launch button. Two
-// signals rather than one because each covers the other's blind spot - XP catches
-// a player killing things without leaving the block, and movement catches one
-// walking to somewhere worth killing. It also insures the clock against
-// df_positionx/y turning out to be updated less often than it appears to be,
-// which is an open question: 1623 consecutive polls of an unchanged position were
-// observed in one session.
+// Neither 2 nor 3 is any good as a primary signal, which is worth writing down
+// because both look convincing: a whole loot run can happen inside one block, and
+// killing is not what you do first when you arrive. They are the fallback for when
+// df-hud was not watching at the moment of the edge - started mid-run, or a
+// previous session that ended out in the city, leaving the record already at 0.
+//
+// None of the three can happen while a launcher sits on screen: nothing on the
+// server moves your character, awards you XP, or takes you out of an outpost while
+// you are looking at a Launch button.
 //
 // Two rejected alternatives, both tried:
 //
@@ -447,6 +480,8 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 	// so a tier change would look like earning hundreds of thousands of XP.
 	earned := s.havePrev && snap.XPSource == s.prevSnap.XPSource &&
 		snap.CumulativeXP > s.prevSnap.CumulativeXP
+	// The EDGE, not the value. The value is what started the clock at the launcher.
+	leftOutpost := s.havePrev && s.prevSnap.InOutpost && !snap.InOutpost
 
 	switch {
 	case snap.InOutpost:
@@ -455,13 +490,18 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 				snap.At.Sub(s.runStart).Round(time.Second))
 		}
 		s.runStart = time.Time{}
-	case s.runStart.IsZero() && (moved || earned):
+	case s.runStart.IsZero() && (leftOutpost || moved || earned):
 		// Timed from the observation that proves it, not from the one before it:
 		// never claim to have been playing for longer than there is evidence for.
 		s.runStart = snap.At
-		why := "earned xp"
-		if moved {
+		var why string
+		switch {
+		case leftOutpost:
+			why = "left the outpost"
+		case moved:
 			why = fmt.Sprintf("moved to %d, %d", snap.PositionX, snap.PositionY)
+		default:
+			why = "earned xp"
 		}
 		log.Printf("session: run started (%s)", why)
 	}
@@ -478,10 +518,32 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 				nextStart-prevStart, snap.InOutpost)
 		}
 	}
-	if s.havePrev && s.prevSnap.InOutpost != snap.InOutpost {
-		log.Printf("session: df_inoutpost changed to %v at position %d, %d",
-			snap.InOutpost, snap.PositionX, snap.PositionY)
+	if s.havePrev && s.prevSnap.Session3D != snap.Session3D && s.prevSnap.Session3D != "" {
+		log.Print("session: df_session3d changed (a new client session, if that is what it means)")
 	}
+	if s.havePrev && (s.prevSnap.InOutpost != snap.InOutpost || s.prevSnap.TradeZone != snap.TradeZone) {
+		// Logged together because they are two views of the same thing and it is
+		// not yet known whether they move at the same moment - or whether that
+		// moment is pressing Launch or pressing Start. One launch with this in
+		// place settles it.
+		log.Printf("session: outpost=%v tradezone=%d position=%d,%d (was outpost=%v tradezone=%d)",
+			snap.InOutpost, snap.TradeZone, snap.PositionX, snap.PositionY,
+			s.prevSnap.InOutpost, s.prevSnap.TradeZone)
+	}
+}
+
+// RestartRun starts the clock from now, by hand.
+//
+// It exists because none of the automatic signals is certain: the server's record
+// does not mark the client taking control at all, so the clock can only be started
+// from evidence of activity, which for a loot run inside a single block can arrive
+// a long way into it. A one-click correction beats a number you cannot trust and
+// cannot fix.
+func (s *Store) RestartRun(at time.Time) {
+	s.mu.Lock()
+	s.runStart, s.runSeed = at, nil
+	s.mu.Unlock()
+	log.Print("session: run clock restarted by hand")
 }
 
 // SetRunSeed offers a persisted run to restore, so restarting df-hud mid-run

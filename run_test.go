@@ -326,3 +326,58 @@ func TestRunClockIgnoresXPGoingBackwards(t *testing.T) {
 		t.Error("cumulative XP falling is a death or a correction, not a run starting")
 	}
 }
+
+// The signal that actually fires at the START of a run, rather than at the first
+// sign of activity within one. Both of the other two arrive late: a whole loot run
+// can happen inside one block, and killing is not what you do first.
+//
+// It is the EDGE of df_inoutpost, never its value. The value is what started the
+// clock at the launcher, where the field was already 0 and stayed 0.
+func TestRunClockStartsOnLeavingAnOutpost(t *testing.T) {
+	s := newStore(nil)
+	launch := time.Now().Add(-5 * time.Minute)
+	s.SetGame(runningGame(launch))
+
+	// In an outpost, banking. Several polls, no clock.
+	for i := 0; i < 3; i++ {
+		s.ApplyTick(Tick{At: launch.Add(time.Duration(i) * 10 * time.Second),
+			Vars: realPlayerRecord(), Scheduled: true})
+	}
+	if v := s.Derive(launch.Add(30 * time.Second)); v.HasSession {
+		t.Fatal("an outpost is not a run")
+	}
+
+	// Start pressed: the server takes you out of the outpost. Same block, no XP
+	// earned yet - neither of the other two signals could fire here.
+	out := launch.Add(40 * time.Second)
+	sameBlock := cityRecord()
+	sameBlock["df_positionx"] = realPlayerRecord()["df_positionx"]
+	sameBlock["df_positiony"] = realPlayerRecord()["df_positiony"]
+	s.ApplyTick(Tick{At: out, Vars: sameBlock, Scheduled: true})
+
+	v := s.Derive(out.Add(3 * time.Second))
+	if !v.HasSession {
+		t.Fatal("leaving the outpost is the start of the run")
+	}
+	if v.SessionTime != 3*time.Second {
+		t.Errorf("SessionTime = %s, want 3s from the transition", v.SessionTime)
+	}
+}
+
+// The launcher case, which is what the value-based version got wrong: the record
+// already reads 0 and never changes, so there is no edge and nothing else moves.
+func TestRunClockIgnoresAnAlreadyZeroOutpostFlag(t *testing.T) {
+	s := newStore(nil)
+	launch := time.Now().Add(-3 * time.Minute)
+	s.SetGame(runningGame(launch))
+
+	// Four polls of a launcher sitting there: out of an outpost as far as the
+	// record is concerned, but nothing moving and no XP.
+	for i := 0; i < 4; i++ {
+		s.ApplyTick(Tick{At: launch.Add(time.Duration(i) * 20 * time.Second),
+			Vars: movedTo(1058, 1019), Scheduled: true})
+	}
+	if v := s.Derive(launch.Add(80 * time.Second)); v.HasSession {
+		t.Errorf("the clock started at the launcher again, at %s", v.SessionTime)
+	}
+}
