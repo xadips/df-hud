@@ -496,8 +496,12 @@ windows, so a `top` HUD vanishes exactly when you play.
 `knowledge/` records what was measured rather than assumed, with the evidence:
 
 - [allstats-map-and-xp.md](knowledge/allstats-map-and-xp.md) — the public feed's
-  XP table and city grids, why cumulative XP needs care, and the
-  position-to-grid transform that is still unsolved
+  XP table, why cumulative XP needs care, and the two map grids in that feed that
+  turned out not to describe this city at all
+- [city-map.md](knowledge/city-map.md) — where the city's shape comes from, and
+  the three independent checks it passed before anything was routed with it
+- [bossmap.md](knowledge/bossmap.md) — the event feed: its cycles, the
+  changeover that arrives before it happens, and what Onslaught's 3000,3000 means
 - [player-record-and-signing.md](knowledge/player-record-and-signing.md) — the
   342-field player record, the two different time encodings (mixing them up is
   worth 38 years), and how requests are signed

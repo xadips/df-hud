@@ -14,7 +14,6 @@ func TestStateRoundTrip(t *testing.T) {
 
 	s.Update(func(st *State) {
 		st.ChallengeDone = map[string]bool{"Kill 500 zombies|2026-08-14": true}
-		st.Grid = &GridTransform{OffsetX: 981, OffsetY: 981, Scale: 2, SolvedAt: base, Method: "helicopter"}
 	})
 	s.AppendXPSample(XPSample{At: base, Cumulative: 1000, Source: "df_exptotal"}, time.Minute)
 	if err := s.Save(); err != nil {
@@ -29,9 +28,6 @@ func TestStateRoundTrip(t *testing.T) {
 	if !got.ChallengeDone["Kill 500 zombies|2026-08-14"] {
 		t.Error("completion memory did not survive")
 	}
-	if got.Grid == nil || got.Grid.Scale != 2 || got.Grid.Method != "helicopter" {
-		t.Errorf("Grid = %+v", got.Grid)
-	}
 	if len(got.XPSamples) != 1 || got.XPSamples[0].Cumulative != 1000 {
 		t.Errorf("XPSamples = %v", got.XPSamples)
 	}
@@ -42,7 +38,7 @@ func TestStateMissingFileIsAFreshStart(t *testing.T) {
 	if err := s.Load(); err != nil {
 		t.Errorf("a missing state file must not be an error: %v", err)
 	}
-	if got := s.Get(); len(got.XPSamples) != 0 || got.Grid != nil {
+	if got := s.Get(); len(got.XPSamples) != 0 || got.Run != nil {
 		t.Errorf("fresh state should be empty, got %+v", got)
 	}
 }
@@ -209,13 +205,13 @@ func TestStateGetReturnsACopy(t *testing.T) {
 	s.Update(func(st *State) {
 		st.XPSamples = []XPSample{{Cumulative: 1000, Source: "original"}}
 		st.ChallengeDone = map[string]bool{"x": true}
-		st.Grid = &GridTransform{Scale: 1}
+		st.Run = &RunState{GamePID: 42}
 	})
 
 	got := s.Get()
 	got.XPSamples[0].Source = "mutated"
 	got.ChallengeDone["x"] = false
-	got.Grid.Scale = 99
+	got.Run.GamePID = 99
 
 	// The UI thread holds one of these while the poller writes; aliasing would
 	// be a data race that only shows up under load.
@@ -226,34 +222,7 @@ func TestStateGetReturnsACopy(t *testing.T) {
 	if !inside.ChallengeDone["x"] {
 		t.Error("mutating the returned copy changed the store's map")
 	}
-	if inside.Grid.Scale != 1 {
-		t.Error("mutating the returned copy changed the store's grid")
-	}
-}
-
-func TestGridTransformApply(t *testing.T) {
-	// Nil is the normal state: the transform is unsolved, and a nil pointer says
-	// so where a zero offset would be a false claim.
-	var unsolved *GridTransform
-	if _, _, ok := unsolved.Apply(1054, 1016, 39, 39); ok {
-		t.Error("a nil transform must not resolve")
-	}
-
-	g := &GridTransform{OffsetX: 1000, OffsetY: 1000, Scale: 2}
-	gx, gy, ok := g.Apply(1004, 1006, 39, 39)
-	if !ok || gx != 3 || gy != 4 {
-		t.Errorf("Apply = (%d,%d,%v), want (3,4,true)", gx, gy, ok)
-	}
-	// Off the grid must fail rather than clamp to an edge block that would then
-	// be reported as your location.
-	for _, xy := range [][2]int{{999, 1000}, {1000, 999}, {1100, 1000}, {1000, 1100}} {
-		if _, _, ok := g.Apply(xy[0], xy[1], 39, 39); ok {
-			t.Errorf("Apply%v should be off the grid", xy)
-		}
-	}
-	// A zero scale is a broken transform, not a divide by zero.
-	broken := &GridTransform{OffsetX: 1000, OffsetY: 1000, Scale: 0}
-	if _, _, ok := broken.Apply(1004, 1006, 39, 39); ok {
-		t.Error("a zero scale must not resolve")
+	if inside.Run.GamePID != 42 {
+		t.Error("mutating the returned copy changed the store's run")
 	}
 }

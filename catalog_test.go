@@ -49,82 +49,6 @@ func TestCatalogParsesTheRealFeed(t *testing.T) {
 		t.Errorf("ExpToReach length = %d, want 416 (index = level)", len(c.ExpToReach))
 	}
 
-	if c.ZoneCols != 13 || c.ZoneRows != 13 {
-		t.Errorf("neighbourhood grid = %dx%d, want 13x13", c.ZoneCols, c.ZoneRows)
-	}
-	if name, ok := c.ZoneName(1, 1); !ok || name != "Staleston" {
-		t.Errorf("ZoneName(1,1) = %q, %v; want Staleston", name, ok)
-	}
-	if c.AreaCols != 39 || c.AreaRows != 39 {
-		t.Errorf("block grid = %dx%d, want 39x39", c.AreaCols, c.AreaRows)
-	}
-
-	streets, buildings, known := 0, 0, 0
-	for _, a := range c.Areas {
-		if a.Street {
-			streets++
-		}
-		if a.Building != "" {
-			buildings++
-		}
-		if a.Known() {
-			known++
-		}
-	}
-	if streets != 958 {
-		t.Errorf("streets = %d, want 958", streets)
-	}
-	if buildings != 1014 {
-		t.Errorf("buildings = %d, want 1014", buildings)
-	}
-	// 1521 cells minus the 507 the feed says nothing about.
-	if known != 1014 {
-		t.Errorf("described blocks = %d, want 1014", known)
-	}
-	if shape := c.UnexpectedShape(); shape != "" {
-		t.Errorf("the fixture should match the expected geometry, got: %s", shape)
-	}
-}
-
-func TestCatalogAreaLookup(t *testing.T) {
-	c := loadFixtureCatalog(t)
-
-	// A block the feed describes fully.
-	a, ok := c.AreaAt(1, 1)
-	if !ok {
-		t.Fatal("AreaAt(1,1) should be known")
-	}
-	if !a.Street || a.Building != "apartments" || a.Direction != "south" {
-		t.Errorf("AreaAt(1,1) = %+v, want a south-facing apartments street", a)
-	}
-	// A blank one: "no data" is a normal answer for 507 of 1521 cells.
-	if _, ok := c.AreaAt(20, 20); ok {
-		t.Error("AreaAt(20,20) is blank in the feed and should report unknown")
-	}
-	// Out of range in every direction.
-	for _, xy := range [][2]int{{0, 1}, {1, 0}, {40, 1}, {1, 40}, {-5, -5}} {
-		if _, ok := c.AreaAt(xy[0], xy[1]); ok {
-			t.Errorf("AreaAt%v should be out of range", xy)
-		}
-	}
-	// building_size is "0" for every cell, so it is not stored at all; this is
-	// here so that dropping it stays a deliberate decision.
-	if a.Known() && strings.Contains(a.Building, "0") {
-		t.Error("building should be a name, not a size")
-	}
-}
-
-// The crash site is the feed's only unique landmark and the best anchor for
-// eventually solving the position-to-grid transform, so pin where it is.
-func TestCatalogHelicopterLandmark(t *testing.T) {
-	c := loadFixtureCatalog(t)
-	x, y, ok := c.Helicopter()
-	if !ok {
-		t.Fatal("the feed has areas_25_26_helicopter=1; it should be found")
-	}
-	if x != 25 || y != 26 {
-		t.Errorf("helicopter at (%d,%d), want (25,26)", x, y)
-	}
 }
 
 // TestCumulativeXPIsContinuousAcrossLevelUp is the property XP/hr depends on.
@@ -261,40 +185,22 @@ func TestParseCatalogRejectsBadInput(t *testing.T) {
 	}
 }
 
-// A game update that adds map keys must not break parsing: an unknown subkey in
-// somebody else's feed is not our error to raise.
-func TestParseCatalogIgnoresUnknownAreaSubkeys(t *testing.T) {
+// The feed carries far more than the XP table - two map grids among the rest -
+// and everything df-hud does not use must pass through without complaint.
+func TestParseCatalogIgnoresTheRestOfTheFeed(t *testing.T) {
 	vars := map[string]string{
 		"exp_lvl2":             "125",
 		"areas_1_1_type":       "street",
 		"areas_1_1_flamingoes": "7",
-		"areas_1_1_building":   "hotel",
+		"zones_1_1_name":       "Staleston",
+		"ammo1_name":           "9mm",
 	}
 	c, err := parseCatalog(vars, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, ok := c.AreaAt(1, 1)
-	if !ok || !a.Street || a.Building != "hotel" {
-		t.Errorf("AreaAt(1,1) = %+v, %v; the known subkeys should still parse", a, ok)
-	}
-}
-
-func TestCatalogUnexpectedShapeIsInformativeNotFatal(t *testing.T) {
-	// A feed with no grids at all: the XP table still works, so this is a note,
-	// not a failure.
-	c, err := parseCatalog(map[string]string{"exp_lvl2": "125"}, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if shape := c.UnexpectedShape(); shape == "" {
-		t.Error("a feed with no map grids should be reported")
-	}
-	if _, ok := c.ZoneName(1, 1); ok {
-		t.Error("no grid means no lookups resolve")
-	}
 	if got, _ := c.CumulativeXP(2, 10); got != 135 {
-		t.Errorf("the XP table must still work without map data, got %d", got)
+		t.Errorf("the XP table must parse whatever else is in the feed, got %d", got)
 	}
 }
 
@@ -311,7 +217,7 @@ func TestCatalogDiskRoundTrip(t *testing.T) {
 	if got == nil {
 		t.Fatal("the saved catalog should load back")
 	}
-	if got.MaxLevel != c.MaxLevel || got.AreaCols != c.AreaCols {
+	if got.MaxLevel != c.MaxLevel {
 		t.Errorf("round trip changed the shape: %s vs %s", got.Summary(), c.Summary())
 	}
 	// cumExp is derived and not persisted, so finish() must run on load. If it
@@ -321,9 +227,6 @@ func TestCatalogDiskRoundTrip(t *testing.T) {
 	if !ok || after != want {
 		t.Errorf("CumulativeXP after reload = %d (ok=%v), want %d: finish() was not called on load",
 			after, ok, want)
-	}
-	if name, ok := got.ZoneName(1, 1); !ok || name != "Staleston" {
-		t.Errorf("neighbourhood names did not survive the round trip: %q", name)
 	}
 }
 

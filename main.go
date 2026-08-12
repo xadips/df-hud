@@ -322,15 +322,12 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 	catalog, err := ensureCatalog(catalogCtx, &http.Client{Timeout: cfg.DF.Timeout.Duration},
 		cfg.CatalogPath(), cfg.DF.AllstatsURL, cfg.DF.UserAgent, cfg.Poll.CatalogInterval.Duration)
 	if err != nil {
-		// Without it there is no XP table and no map grids, but df_exptotal and
-		// the position still work, so this is a degradation rather than a stop.
-		log.Printf("catalog: unavailable (%v); level thresholds and neighbourhood names will be missing", err)
+		// Without it there is no XP table, but df_exptotal and the position still
+		// work, so this is a degradation rather than a stop.
+		log.Printf("catalog: unavailable (%v); level thresholds will be missing", err)
 	} else {
 		a.catalog = catalog
 		log.Printf("catalog: %s", catalog.Summary())
-		if shape := catalog.UnexpectedShape(); shape != "" {
-			log.Printf("catalog: %s", shape)
-		}
 	}
 
 	a.store = newStore(a.catalog)

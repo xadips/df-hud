@@ -57,11 +57,6 @@ type State struct {
 	// remembered rather than re-derived.
 	ChallengeDone map[string]bool `json:"challenge_done,omitempty"`
 
-	// Grid is the solved position-to-block-grid transform, nil until
-	// calibrated. Nil is the normal state today: see
-	// knowledge/allstats-map-and-xp.md.
-	Grid *GridTransform `json:"grid,omitempty"`
-
 	// Run is the trip into the city the session clock is counting, nil when
 	// there is none.
 	Run *RunState `json:"run,omitempty"`
@@ -84,43 +79,6 @@ func (r *RunState) Matches(g GameState) bool {
 		return false
 	}
 	return r.GamePID == g.PID && r.GameStartedAt.Equal(g.StartedAt)
-}
-
-// GridTransform maps a player position onto the catalog's 1-based block grid.
-// Unsolved as of writing, which is why it is a nil pointer rather than a zero
-// value: a zero offset would silently mean "the grid starts at position 0",
-// which is a claim, not an absence.
-type GridTransform struct {
-	OffsetX int `json:"offset_x"`
-	OffsetY int `json:"offset_y"`
-	// Scale is position units per grid cell, at least 1.
-	Scale int `json:"scale"`
-	// SolvedAt and Method record where this came from, so a bad calibration can
-	// be told apart from a good one later.
-	SolvedAt time.Time `json:"solved_at"`
-	Method   string    `json:"method"`
-}
-
-// Apply converts a position to grid indices. ok is false when there is no
-// transform or the result falls outside the grid.
-func (g *GridTransform) Apply(x, y, cols, rows int) (gx, gy int, ok bool) {
-	if g == nil || g.Scale < 1 {
-		return 0, 0, false
-	}
-	// The negative case has to be rejected BEFORE dividing. Go truncates integer
-	// division toward zero, so a position one unit before the origin gives
-	// -1/2 == 0 and lands on cell 1 - reporting the grid's corner as your
-	// location instead of admitting you are off the map.
-	dx, dy := x-g.OffsetX, y-g.OffsetY
-	if dx < 0 || dy < 0 {
-		return 0, 0, false
-	}
-	gx = dx/g.Scale + 1
-	gy = dy/g.Scale + 1
-	if gx > cols || gy > rows {
-		return 0, 0, false
-	}
-	return gx, gy, true
 }
 
 // stateStore owns the file. Concurrency-safe, and saves are debounced.
@@ -195,10 +153,6 @@ func (st State) clone() State {
 		for k, v := range st.ChallengeDone {
 			out.ChallengeDone[k] = v
 		}
-	}
-	if st.Grid != nil {
-		grid := *st.Grid
-		out.Grid = &grid
 	}
 	if st.Run != nil {
 		run := *st.Run

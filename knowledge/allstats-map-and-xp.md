@@ -166,34 +166,36 @@ hotel 86, restaurant 82, public_toilet 81, fancyrestaurant 78, warehouse 64,
 electronic_boutique 45, hardware_boutique 36, clothes_boutique 36,
 misc_boutique 35, sports_boutique 34, warehouse_small 33, gun_boutique 17.
 
-## The unsolved part: positions do not map onto this grid yet
+## These two grids are not the city, and df-hud no longer parses them
 
-`df_positionx/y` are ~1000-centred. The seven outposts (`newoutpost.js:13-36`)
-are at (1000,1000), (1005,985), (1012,1019), (1029,1003), (1054,987),
-(1032,985), (1058,1019) — an x spread of 58 and a y spread of 34, and observed
-live positions sit in the same range.
+Both were parsed and cached against the day the transform from `df_positionx/y`
+onto them was solved. That day is not coming, and the code is gone. Written down
+so nobody spends an evening on it again:
 
-That does not fit a 39-wide grid directly, so there is an **offset and probably
-also a scale**. One suggestive arithmetic: 13 neighbourhoods x 3 areas = 39 cells
-over what looks like a ~78-unit span would be 2 position units per cell. That is
-numerology until it is measured, so nothing in df-hud relies on it.
+**The city is 59 x 55, with 1716 blocks in it.** That is measured, not inferred —
+see [city-map.md](city-map.md). `areas_` is 39 x 39 = 1521 cells. A 39-wide grid
+cannot describe a 59-wide city at 1 cell per block, and no integer scale fits
+either: 59/39 is 1.51 and 55/39 is 1.41, so a "2 position units per cell" reading
+of 13 x 3 = 39 was numerology, which is what it was labelled as at the time.
 
-Why there is no shortcut: **the saved web client never references `zones_` or
-`areas_` at all.** Only the standalone client uses them, so there is no
-JavaScript to port. `grep -rn "zones_\|areas_" dfsource/*.js` returns nothing.
+**There is no landmark on both sides.** `areas_25_26_helicopter` was the intended
+anchor, and it is still the only unique cell in the grid — but nothing in the
+event feed, the outpost table or the player record names a helicopter crash site,
+so there is nothing to match it against. The `building` values are generic
+(`apartments`, `supermarket`), none of them an outpost name, so those cannot pin
+it either.
 
-Therefore:
+**The saved web client never references `zones_` or `areas_`.**
+`grep -rn "zones_\|areas_" dfsource/*.js` returns nothing: only the standalone
+client uses them, so there was never any JavaScript to port.
 
-- `catalog.go` exposes lookups by **grid index only**, never by position.
-- Block Info v1 works from `df_positionx/y`, `df_tradezone` and
-  `df_dangerlevel`, which need no transform at all.
-- The neighbourhood name and building are a bonus that unlocks once the
-  transform is known.
+The most likely explanation is that these grids describe a different map, or an
+older one, or the standalone client's own tiling of it. Either way it is not the
+city df-hud draws, and what it draws instead is known to be right: every event
+location in a recorded feed lands on a block, and all seven outposts do.
 
-**Best anchor for solving it:** `areas_25_26_helicopter`. A single uniquely
-identifiable landmark on both sides of the mapping is worth more than any amount
-of street-hit-rate fitting — stand on the crash site, read `df_positionx/y`, and
-the offset falls out. Two such points would also give the scale.
+What Block Info actually uses, all of which needs no transform: `df_positionx/y`,
+`df_tradezone`, `df_dangerlevel`, and the embedded city map.
 
 ## Tradezones are a different, coarser thing
 

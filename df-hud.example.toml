@@ -17,9 +17,8 @@
 # be https.
 base_url = "https://fairview.deadfrontier.com/onlinezombiemmo"
 
-# The public, unauthenticated stats feed. df-hud reads the XP table and the
-# block/neighbourhood grids from here, which is why Block Info needs no login
-# beyond what the bridge already provides.
+# The public, unauthenticated stats feed. df-hud reads the level XP table from
+# here - it is what makes an XP rate immune to the reset at every level-up.
 allstats_url = "https://fairview.deadfrontier.com/onlinezombiemmo/dfdata/get_allstats.php?printvars=1"
 
 # Sent on every request. Defaults to "df-hud/<version> (+local overlay; contact
@@ -269,7 +268,8 @@ color = "#9ecbff"
 # readouts an inch apart is not information. With it off the city head becomes the
 # region name, which the game shows nowhere - and the group is one row shorter.
 #
-# Turn it on while calibrating the area grid.
+# Turn it on to check df-hud against the game: the coordinates are the one thing
+# on the overlay you can compare with the game's own readout at a glance.
 show_position = false
 
 [widget.bosses]
