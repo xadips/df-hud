@@ -48,7 +48,7 @@ is yours:
 | `POST /api/xp/reset` | start the xp/hr average again from now |
 | `POST /api/overlay/toggle` | show or hide the overlay by hand |
 | `POST /api/widget/<group>/toggle` | show or hide one group: `block`, `bosses`, `session`, `xp`, `challenges` |
-| `POST /api/console/toggle` | the console window |
+| `POST /api/console/toggle` | the console window - **not built yet**, answers 503 |
 | `POST /api/run/click` | a click that *might* be the game's Start button |
 
 Ready-made, with the layer rules: [contrib/df-hud.lua](contrib/df-hud.lua) for

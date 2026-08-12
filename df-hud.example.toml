@@ -422,10 +422,12 @@ urgent_within = "2h"
 # problem.
 
 [console]
-# The console is an ordinary window (not an overlay), for the things a
-# click-through HUD cannot do: the full challenge list, pin checkboxes,
-# diagnostics. Bind a key to toggle it:
+# NOT BUILT YET. /api/console/toggle answers 503 and the key does nothing; these
+# two settings are read and validated so that the size is yours when it lands.
 #
-#   bind = SUPER, F1, exec, curl -fsS -X POST http://127.0.0.1:9275/api/console/toggle
+# The console is to be an ordinary window (not an overlay), for the things a
+# click-through HUD cannot do: the full challenge list with every objective, the
+# whole boss map, diagnostics. The keybind is already in contrib/df-hud.lua
+# (SUPER + ALT + C) - not a function key, since the game uses those itself.
 width = 720
 height = 560
