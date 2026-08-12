@@ -2,6 +2,7 @@ package main
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -31,12 +32,18 @@ func blockLines(v *View, cfg BlockWidgetConfig) (head, sub string, show bool) {
 		// In an outpost the coordinates match one of the seven, so an unnamed
 		// outpost means the table has gone out of date. Say the honest thing.
 		head = "Outpost"
-	default:
+	case cfg.ShowPosition:
 		head = formatPosition(v.PositionX, v.PositionY, v.PositionZ)
+	default:
+		// The game prints your coordinates under its own minimap, so repeating them
+		// an inch away is not information. The region is not shown anywhere in the
+		// game, so with the coordinates off it takes the head instead of the row
+		// below - which also saves a row.
+		head = v.ZoneName
 	}
 
 	var parts []string
-	if v.InOutpost && cfg.ShowCoords {
+	if v.InOutpost && cfg.ShowPosition {
 		parts = append(parts, formatPosition(v.PositionX, v.PositionY, v.PositionZ))
 	}
 	if !v.InOutpost {
@@ -44,7 +51,7 @@ func blockLines(v *View, cfg BlockWidgetConfig) (head, sub string, show bool) {
 		// neighbourhood name and the building would come from the catalog's grids,
 		// but the position-to-grid transform is unsolved, so those lines are
 		// simply absent rather than guessed at.
-		if v.ZoneName != "" {
+		if v.ZoneName != "" && head != v.ZoneName {
 			parts = append(parts, v.ZoneName)
 		}
 		// df_dangerlevel is deliberately NOT shown. It is in the record, but the
@@ -130,6 +137,49 @@ func eventRows(e CityEvent, prefix string) []string {
 		rows = append(rows, prefix+"("+strings.Join(e.Objectives, ", ")+")")
 	}
 	return rows
+}
+
+// nearestReportRange caps how far away an event is still worth reporting, in block
+// moves. Past a dozen blocks it is not somewhere you are about to walk, and the row
+// would be permanent furniture rather than information.
+const nearestReportRange = 12
+
+// nearestLine is which way to walk when your own block is empty.
+//
+// The direction is given in blocks and then repeated as the target block's own
+// coordinates. Both, on purpose: the words are what you read at a glance, and the
+// coordinates are what the game itself shows you, so they are both the actionable
+// form and the way to catch this being wrong.
+//
+// UP IS y DECREASING. That is inferred rather than verified - DFProfiler's map is
+// an HTML table whose rows are y, so the smallest y renders topmost (bossmap.js) -
+// and it is the one claim here that could send someone the wrong way. The
+// coordinates beside it are the check: walk one block and see which number moves.
+func nearestLine(v *View, cfg BossesWidgetConfig) (string, bool) {
+	if !cfg.ShowNearest || !v.HaveData || !v.HasNearest {
+		return "", false
+	}
+	if v.NearestDistanceInBlocks > nearestReportRange {
+		return "", false
+	}
+	var parts []string
+	switch {
+	case v.NearestDY < 0:
+		parts = append(parts, strconv.Itoa(-v.NearestDY)+" up")
+	case v.NearestDY > 0:
+		parts = append(parts, strconv.Itoa(v.NearestDY)+" down")
+	}
+	switch {
+	case v.NearestDX < 0:
+		parts = append(parts, strconv.Itoa(-v.NearestDX)+" left")
+	case v.NearestDX > 0:
+		parts = append(parts, strconv.Itoa(v.NearestDX)+" right")
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	return "nearest " + strings.Join(parts, " ") + "  " +
+		strconv.Itoa(v.NearestX) + ", " + strconv.Itoa(v.NearestY), true
 }
 
 // xpPending stands in for the rate until there are two samples to subtract, which
@@ -595,6 +645,9 @@ func hudLines(v *View, cfg *Config) []string {
 		}
 		if threats := threatLines(v); len(threats) > 0 {
 			rows = append(rows, row{bosses, threats})
+		}
+		if text, ok := nearestLine(v, cfg.Widget.Bosses); ok {
+			rows = append(rows, row{bosses, []string{text}})
 		}
 	}
 	if cfg.Widget.Session.Enabled {

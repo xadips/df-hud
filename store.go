@@ -740,6 +740,16 @@ type View struct {
 	BlockEventsPast []CityEvent
 	// OutpostAttack is map-wide rather than about your block.
 	OutpostAttack bool
+
+	// Nearest* is the closest active event when your own block has none, so an
+	// empty block says which way to walk instead of nothing at all. Deltas are in
+	// blocks, and NearestX/Y are the block itself, which is the form the game's own
+	// coordinate readout is in.
+	HasNearest              bool
+	NearestEvent            CityEvent
+	NearestDX, NearestDY    int
+	NearestX, NearestY      int
+	NearestDistanceInBlocks int
 	// BossMapAge is how stale the event feed is, so a widget can decline to
 	// claim a block is clear on the strength of an hour-old fetch.
 	BossMapAge time.Duration
@@ -836,6 +846,18 @@ func (s *Store) Derive(now time.Time) *View {
 				// so last cycle's boss is often still in front of you. Out in the
 				// city the cycle is an hour and the previous boss is gone.
 				v.BlockEventsPast = s.bossMap.AtEnded(v.PositionX, v.PositionY, now)
+			}
+			// Only when your own block is empty. With something in front of you, the
+			// nearest OTHER thing is a distraction.
+			// v.InOutpost rather than the snapshot, which is out of scope here: the
+			// view already carries it and they are the same value.
+			if len(v.BlockEvents) == 0 && !v.InOutpost {
+				if e, dx, dy, ok := s.bossMap.NearestEvent(v.PositionX, v.PositionY, now); ok {
+					v.HasNearest, v.NearestEvent = true, e
+					v.NearestDX, v.NearestDY = dx, dy
+					v.NearestX, v.NearestY = v.PositionX+dx, v.PositionY+dy
+					v.NearestDistanceInBlocks = abs(dx) + abs(dy)
+				}
 			}
 		}
 	}

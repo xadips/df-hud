@@ -231,6 +231,54 @@ func (b *BossMap) AtEnded(x, y int, now time.Time) []CityEvent {
 	return b.eventsAt(x, y, func(e CityEvent) bool { return e.EndedRecentlyAt(server) })
 }
 
+// NearestEvent is the closest active event to a block, for when the block you are
+// standing on has nothing on it.
+//
+// Distance is counted in block moves - |dx| + |dy| - because that is how you cover
+// it: you walk north, south, east or west between adjacent blocks, so a diagonal
+// costs two.
+//
+// Onslaught is excluded. Its cycles sit on 3000,3000, which is not a place you can
+// walk to from the city, so including it would report the nearest boss as being
+// roughly two thousand blocks away.
+func (b *BossMap) NearestEvent(x, y int, now time.Time) (event CityEvent, dx, dy int, ok bool) {
+	if b == nil {
+		return CityEvent{}, 0, 0, false
+	}
+	server := b.ServerNow(now)
+	best := -1
+	for _, e := range b.Events {
+		if e.Onslaught || !e.ActiveAt(server) {
+			continue
+		}
+		for _, loc := range e.Locations {
+			ex, ey := loc[0], loc[1]
+			if ex == onslaughtCoord && ey == onslaughtCoord {
+				continue
+			}
+			gx, gy := ex-x, ey-y
+			distance := abs(gx) + abs(gy)
+			if distance == 0 {
+				// Something on your own block, which the caller already has from At.
+				continue
+			}
+			// Ties broken by the first one seen, which is the feed's own order, so
+			// the row does not flicker between two equidistant bosses every poll.
+			if best == -1 || distance < best {
+				best, event, dx, dy, ok = distance, e, gx, gy, true
+			}
+		}
+	}
+	return event, dx, dy, ok
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
 func (b *BossMap) eventsAt(x, y int, keep func(CityEvent) bool) []CityEvent {
 	if b == nil {
 		return nil

@@ -520,3 +520,88 @@ func TestBossPollerNextDelayClamps(t *testing.T) {
 		t.Errorf("delay = %s, want at least the %s minimum", got, cfg.BossMap.Interval)
 	}
 }
+
+// Which way to walk when your own block is empty, which is most blocks.
+func TestNearestEvent(t *testing.T) {
+	m := loadFixtureBossMap(t)
+	now := fixtureNow(t, m)
+
+	// The bandit pack in the capture is on 1058,1016. From two blocks away it should
+	// be what comes back, with the deltas pointing at it.
+	event, dx, dy, ok := m.NearestEvent(1058, 1018, now)
+	if !ok {
+		t.Fatal("expected an event somewhere on the map")
+	}
+	if dx != 0 || dy != -2 {
+		// dy negative means the target is at a smaller y, which is up the screen.
+		t.Errorf("deltas = %d, %d; want 0, -2 towards 1058,1016", dx, dy)
+	}
+	if !strings.Contains(event.Label(), "Bandits") {
+		t.Errorf("nearest = %q, want the bandit pack two blocks up", event.Label())
+	}
+
+	// Something on your own block is not "nearest": the caller already has it from
+	// At, and reporting it as somewhere to walk would be nonsense.
+	if _, dx, dy, ok := m.NearestEvent(1058, 1016, now); ok && dx == 0 && dy == 0 {
+		t.Error("an event on your own block must not be reported as the nearest one")
+	}
+}
+
+// Onslaught's cycles sit on 3000,3000, which is not a place you can walk to from
+// the city. Included, they would report the nearest boss as two thousand blocks
+// away - and the capture contains them, so this is not hypothetical.
+func TestNearestEventIgnoresOnslaught(t *testing.T) {
+	m := loadFixtureBossMap(t)
+	now := fixtureNow(t, m)
+
+	event, dx, dy, ok := m.NearestEvent(1050, 1010, now)
+	if !ok {
+		t.Fatal("expected an event")
+	}
+	if event.Onslaught {
+		t.Error("an Onslaught cycle was reported as the nearest event")
+	}
+	if abs(dx) > 100 || abs(dy) > 100 {
+		t.Errorf("deltas = %d, %d; nothing on the city map is that far", dx, dy)
+	}
+}
+
+func TestNearestLine(t *testing.T) {
+	cfg := defaultConfig().Widget.Bosses
+	v := &View{
+		HaveData: true, HasPosition: true, PositionX: 1058, PositionY: 1020,
+		HasNearest: true, NearestDX: -1, NearestDY: -4,
+		NearestX: 1057, NearestY: 1016, NearestDistanceInBlocks: 5,
+	}
+
+	text, ok := nearestLine(v, cfg)
+	if !ok {
+		t.Fatal("expected a nearest row")
+	}
+	// Vertical first, then horizontal, then the block itself - the words for
+	// glancing at and the coordinates for acting on, since the game shows yours in
+	// the same form.
+	if text != "nearest 4 up 1 left  1057, 1016" {
+		t.Errorf("nearestLine = %q", text)
+	}
+
+	// The other quadrant.
+	v.NearestDX, v.NearestDY = 3, 2
+	v.NearestX, v.NearestY = 1061, 1022
+	if text, _ := nearestLine(v, cfg); text != "nearest 2 down 3 right  1061, 1022" {
+		t.Errorf("nearestLine = %q", text)
+	}
+
+	// Too far to be somewhere you are about to walk.
+	v.NearestDistanceInBlocks = nearestReportRange + 1
+	if _, ok := nearestLine(v, cfg); ok {
+		t.Error("an event a long way off must not take a permanent row")
+	}
+
+	// And it is a switch.
+	v.NearestDistanceInBlocks = 5
+	cfg.ShowNearest = false
+	if _, ok := nearestLine(v, cfg); ok {
+		t.Error("show_nearest = false must silence it")
+	}
+}

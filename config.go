@@ -352,13 +352,19 @@ type BlockWidgetConfig struct {
 	Enabled bool `toml:"enabled"`
 
 	// Color is this group's normal text colour, empty to follow hud.text_color.
-	// The threat rows keep their own amber and red on top of it: those say
-	// something the words do not.
 	Color string `toml:"color"`
 
-	// ShowCoords prints the raw df_positionx/y under the block name. Useful
-	// while calibrating the area grid, noise afterwards.
-	ShowCoords bool `toml:"show_coords"`
+	// ShowPosition prints the raw coordinates: as the head out in the city, and
+	// under the name of an outpost.
+	//
+	// Off by default because the game already shows them, under its own minimap -
+	// two identical coordinate readouts an inch apart is not information. With it
+	// off, the city head becomes the region name instead, which the game does not
+	// show anywhere.
+	//
+	// It replaced show_coords, which did this for outposts only and left the city
+	// head with no way to turn it off at all.
+	ShowPosition bool `toml:"show_position"`
 }
 
 // BossesWidgetConfig is what the city event feed says is where you are: bosses,
@@ -376,6 +382,11 @@ type BossesWidgetConfig struct {
 	// Color is the normal colour for these rows. The amber that says "something is
 	// standing here" and the red of an outpost attack still win over it.
 	Color string `toml:"color"`
+
+	// ShowNearest reports which way to walk when your own block is empty, which is
+	// most blocks. Without it the group is simply absent there - honest, but it
+	// wastes the one thing the feed knows that you cannot see for yourself.
+	ShowNearest bool `toml:"show_nearest"`
 }
 
 // SessionWidgetConfig is the run clock: time since you entered the inner city.
@@ -562,11 +573,18 @@ func defaultConfig() *Config {
 		// config keys.
 		Widget: WidgetConfig{
 			Status: StatusWidgetConfig{Placement{X: 10, Y: 10}},
-			Block:  BlockWidgetConfig{Placement: Placement{X: 2340, Y: 300}, Enabled: true},
-			// Directly under Block Info, same column: it is about the same place, and
-			// keeping the x aligned means the two read as one column even though a
-			// growing boss list cannot push the position line around.
-			Bosses: BossesWidgetConfig{Placement: Placement{X: 2300, Y: 360}, Enabled: true},
+			// Cool blue, because the amber below it means "something here can kill
+			// you". Where you are standing is not a warning and should not borrow the
+			// colour of one.
+			Block: BlockWidgetConfig{
+				Placement: Placement{X: 2340, Y: 300}, Enabled: true, Color: "#9ecbff",
+			},
+			// Close under block info, and further left than it: the longest row this
+			// group can draw is now "nearest 12 up 12 left  1054, 1015", and a small
+			// gap between the two is what makes them read as one column.
+			Bosses: BossesWidgetConfig{
+				Placement: Placement{X: 2240, Y: 344}, Enabled: true, ShowNearest: true,
+			},
 			// White for the clock and off-white for the board: the game's own HUD is
 			// already yellow and green, so the readings that are neither a warning nor
 			// a status read as ours rather than as more of the game's.
@@ -581,7 +599,10 @@ func defaultConfig() *Config {
 			// going. Five minutes is long enough to smooth the gaps between kills
 			// and short enough to still respond when you change what you are doing.
 			XP: XPWidgetConfig{
-				Placement: Placement{X: 160, Y: 85}, Enabled: true, Prefix: "Xp/Hr: ",
+				// White to match the clock, and because this row sits beside the game's
+				// own "LV 415: 8,122,281,000" and is meant to read as its continuation.
+				Placement: Placement{X: 160, Y: 85}, Enabled: true,
+				Color: "#ffffff", Prefix: "Xp/Hr: ",
 				Window: duration{5 * time.Minute}, MinSamples: 3,
 			},
 			Challenges: ChallengesWidgetConfig{

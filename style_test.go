@@ -10,7 +10,9 @@ import (
 // someone changes hud.font_size and finds it does nothing.
 func TestWidgetStyleCSSOnlyEmitsWhatIsSet(t *testing.T) {
 	bare := defaultConfig()
+	bare.Widget.Block.Color = ""
 	bare.Widget.Session.Color = ""
+	bare.Widget.XP.Color = ""
 	bare.Widget.Challenges.Color = ""
 	if got := widgetStyleCSS(bare); got != "" {
 		t.Errorf("widgetStyleCSS = %q, want nothing when no group overrides anything", got)
@@ -25,8 +27,10 @@ func TestWidgetStyleCSSOnlyEmitsWhatIsSet(t *testing.T) {
 	if !strings.Contains(got, ".group-challenges") {
 		t.Errorf("the default board colour never reached the sheet:\n%s", got)
 	}
-	// And the groups that set nothing still contribute nothing.
-	if strings.Contains(got, ".group-bosses") || strings.Contains(got, ".group-block") {
+	// And the groups that set nothing still contribute nothing. Bosses and the
+	// status banner are the two without a default colour: the banner has no key at
+	// all, and the boss rows carry their own amber from the state classes.
+	if strings.Contains(got, ".group-bosses") || strings.Contains(got, ".group-status") {
 		t.Errorf("a group with no overrides emitted a rule:\n%s", got)
 	}
 }
@@ -56,9 +60,9 @@ func TestWidgetStyleCSSOverrides(t *testing.T) {
 	if end := strings.Index(xp, "}"); end > 0 && strings.Contains(xp[:end], "font-family") {
 		t.Errorf("the xp rule should set only the size:\n%s", xp[:end])
 	}
-	// Untouched groups contribute nothing. Block sets neither key by default, which
+	// Untouched groups contribute nothing. Bosses sets neither key by default, which
 	// is why it is the one checked here.
-	if strings.Contains(got, ".group-block") {
+	if strings.Contains(got, ".group-bosses") {
 		t.Errorf("a group with no overrides must emit no rule:\n%s", got)
 	}
 }

@@ -240,6 +240,29 @@ Everything from the board is escaped before it reaches Pango. That is not
 optional: Pango refuses to parse malformed markup and GTK answers with an empty
 label, so one challenge named with an ampersand would silently blank its own row.
 
+### Which way to walk
+
+Most blocks have nothing on them, and an empty group says nothing at all. So when
+the feed has no event where you are standing, the boss group reports the nearest
+one instead:
+
+```
+nearest 4 up 1 left  1057, 1016
+```
+
+Direction in block moves, then the block's own coordinates. Both, on purpose: the
+words are what you read at a glance, and the coordinates are the form the game
+itself shows you, so they are both the actionable version and the way to catch this
+being wrong.
+
+Because **up is inferred, not verified.** DFProfiler's map is an HTML table whose
+rows are `y`, so the smallest `y` renders topmost, which means `y` decreasing is up
+the screen. That is the one claim here that could send someone the wrong way, and
+the coordinates beside it are the check: walk one block and see which number moves.
+
+Anything more than a dozen blocks away is not reported - it would be furniture
+rather than information - and `show_nearest = false` turns it off.
+
 ## When the overlay is on screen
 
 A layer surface belongs to a *monitor*, and the protocol has no concept of a

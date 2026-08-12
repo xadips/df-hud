@@ -251,16 +251,26 @@ x = 10
 y = 10
 
 [widget.block]
-# Where you are: coordinates or outpost name, the region, and the block-support
-# countdown. Off to the right, clear of the game's own left-hand panels.
+# Where you are: the region or outpost name, and the block-support countdown. Off
+# to the right, clear of the game's own left-hand panels.
 enabled = true
 x = 2340
 y = 300
 # font_size = 14
-# color = "#88ccff"
-# Print the raw position coordinates under the block name. Useful while
-# calibrating the area grid, noise once that is done.
-show_coords = false
+
+# Cool blue, because the amber below it means "something here can kill you". Where
+# you are standing is not a warning and should not borrow the colour of one.
+color = "#9ecbff"
+
+# Print the raw coordinates: as the head out in the city, and under the name of an
+# outpost.
+#
+# Off, because the game already shows them under its own minimap and two identical
+# readouts an inch apart is not information. With it off the city head becomes the
+# region name, which the game shows nowhere - and the group is one row shorter.
+#
+# Turn it on while calibrating the area grid.
+show_position = false
 
 [widget.bosses]
 # What the city event feed says is on your block - bosses, bandit packs, missions,
@@ -272,14 +282,25 @@ show_coords = false
 #
 # The amber that says "something is standing here" and the red of an outpost attack
 # win over color, since those say what the words do not.
-# Left of block info by 40px, because these rows are the longest thing on screen:
-# "1 x Irradiated Giant Spider" at x = 2340 finished 13 pixels from the edge of a
-# 2560-wide screen, and a group is clipped rather than wrapped.
+# Left of block info, and close under it. These rows are the longest thing the HUD
+# draws: "1 x Irradiated Giant Spider" at x = 2340 finished thirteen pixels from the
+# edge of a 2560-wide screen, and a group is clipped rather than wrapped.
 enabled = true
-x = 2300
-y = 360
+x = 2240
+y = 344
 # font_size = 14
 # color = "#ffd166"
+
+# When your own block is empty - which is most blocks - say which way the nearest
+# event is, in block moves and then as the block's own coordinates:
+#
+#   nearest 4 up 1 left  1054, 1015
+#
+# Both forms on purpose. The words are what you read at a glance; the coordinates
+# are what the game itself shows you, so they are also how you would catch "up"
+# being the wrong way round. Anything further than a dozen blocks is not reported:
+# it would be furniture rather than information.
+show_nearest = true
 
 [widget.session]
 # Time in the inner city on this run: it starts when you press Start (see
@@ -309,6 +330,9 @@ prefix = "IC Time: "
 enabled = true
 x = 160
 y = 85
+# White to match the clock, and because this row sits beside the game's own
+# "LV 415: 8,122,281,000" and is meant to read as its continuation.
+color = "#ffffff"
 # font_size = 16
 # The amber and red that say recent polls have been missing still win over this.
 # color = "#9be564"

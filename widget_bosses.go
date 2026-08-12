@@ -28,17 +28,25 @@ type bossesWidget struct {
 	// here" and must not share a colour with one.
 	attack  *gtk.Label
 	threats []*gtk.Label
+	// nearest is which way to walk when this block is empty. Its own label because
+	// it is the opposite case from the threat rows: they are never both up.
+	nearest *gtk.Label
 }
 
 func newBossesWidget(cfg BossesWidgetConfig) *bossesWidget {
 	w := &bossesWidget{
-		cfg:    cfg,
-		box:    gtk.NewBox(gtk.OrientationVertical, 0),
-		attack: newHUDLabel(),
+		cfg:     cfg,
+		box:     gtk.NewBox(gtk.OrientationVertical, 0),
+		attack:  newHUDLabel(),
+		nearest: newHUDLabel(),
 	}
 	w.attack.AddCSSClass("threat")
 	w.attack.AddCSSClass("urgent")
 	w.box.Append(w.attack)
+	// Above the threat rows in the box, since those are created on demand later.
+	// That is not a layout decision: the two are never up at the same time, because
+	// this one only exists for a block with nothing on it.
+	w.box.Append(w.nearest)
 	return w
 }
 
@@ -47,14 +55,20 @@ func (w *bossesWidget) Root() gtk.Widgetter { return w.box }
 func (w *bossesWidget) Update(v *View) {
 	attack, showAttack := outpostAttackLine(v)
 	threats := threatLines(v)
+	nearest, showNearest := nearestLine(v, w.cfg)
 
-	// Nothing on this block and no siege is the normal case for most of the map, so
-	// the whole group goes away rather than leaving an empty box behind.
-	if !showAttack && len(threats) == 0 {
+	// With nothing to say at all the whole group goes away rather than leaving an
+	// empty box behind.
+	if !showAttack && len(threats) == 0 && !showNearest {
 		w.box.SetVisible(false)
 		return
 	}
 	w.box.SetVisible(true)
+
+	w.nearest.SetVisible(showNearest)
+	if showNearest {
+		w.nearest.SetText(nearest)
+	}
 
 	w.attack.SetVisible(showAttack)
 	if showAttack {

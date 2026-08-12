@@ -24,11 +24,28 @@ func viewForBlock(inOutpost bool) *View {
 	}
 }
 
+// The default is the region as the head and NO coordinates, because the game prints
+// them under its own minimap and two identical readouts an inch apart is not
+// information. The region it shows nowhere.
 func TestBlockLinesInTheCity(t *testing.T) {
 	head, sub, show := blockLines(viewForBlock(false), BlockWidgetConfig{})
 	if !show {
 		t.Fatal("a known position should render")
 	}
+	if head != "South Eastern" {
+		t.Errorf("head = %q, want the region when the coordinates are off", head)
+	}
+	// And not twice: with the region promoted to the head it must leave the row
+	// below rather than appearing on both.
+	if strings.Contains(sub, "South Eastern") {
+		t.Errorf("sub = %q, want the region only once", sub)
+	}
+	if strings.Contains(head+sub, "1058") {
+		t.Errorf("%q / %q, want no coordinates by default", head, sub)
+	}
+
+	// With them on, the coordinates head the group and the region drops below.
+	head, sub, _ = blockLines(viewForBlock(false), BlockWidgetConfig{ShowPosition: true})
 	if head != "1058, 1016" {
 		t.Errorf("head = %q, want the coordinates", head)
 	}
@@ -60,9 +77,9 @@ func TestBlockLinesInAnOutpost(t *testing.T) {
 	}
 
 	// Unless coordinates were asked for, which is what the calibration flow needs.
-	_, sub, _ = blockLines(v, BlockWidgetConfig{ShowCoords: true})
+	_, sub, _ = blockLines(v, BlockWidgetConfig{ShowPosition: true})
 	if sub != "1058, 1019" {
-		t.Errorf("sub with show_coords = %q", sub)
+		t.Errorf("sub with show_position = %q", sub)
 	}
 }
 
@@ -146,13 +163,14 @@ func TestHudLinesOrdersByPositionAndLeadsWithStatus(t *testing.T) {
 	v.SessionTime = time.Hour
 
 	lines := hudLines(v, cfg)
-	// The defaults stack them clock (y=60), rate (y=100), block info (y=300). The
+	// The defaults stack them clock (y=60), rate (y=85), block info (y=300). The
 	// rate is dashes here because this view carries no samples, and it holds its
-	// row rather than vanishing.
-	if len(lines) != 4 {
-		t.Fatalf("lines = %v, want the clock, the rate and the two block rows", lines)
+	// row rather than vanishing. Block info is one row, since the coordinates are
+	// off by default and the region takes the head.
+	if len(lines) != 3 {
+		t.Fatalf("lines = %v, want the clock, the rate and block info", lines)
 	}
-	if lines[0] != "IC Time: 1:00:00" || lines[1] != "Xp/Hr: --" || lines[2] != "1058, 1016" {
+	if lines[0] != "IC Time: 1:00:00" || lines[1] != "Xp/Hr: --" || lines[2] != "South Eastern" {
 		t.Errorf("lines = %v, want them ordered down the screen", lines)
 	}
 
