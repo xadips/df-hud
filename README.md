@@ -204,6 +204,7 @@ rather than a cap on rows:
 | `show_clan` | your clan's challenges, which are the clan's progress and not yours |
 | `show_personal` | the ordinary dailies and weeklies |
 | `show_completed` | cuts across all three: rows that will not change again this cycle |
+| `show_sections` | a divider naming each category, and a shared prefix said once |
 
 `show_repeatable` is named after the wire, not the event. The board marks these
 `repeatable`, verified against a live fetch: `1` on exactly the three Summer
@@ -224,19 +225,36 @@ Three levels of hierarchy, built out of weight, size and alpha rather than colou
 so they compose with whatever `color` the group is set to:
 
 ```
+── event ───────────────────────────────
 Summer Death
-  Kill Regular Infected           55/100
-Summer Loot                                    green, struck through
-  Loot Anything                   10/10
-Nearly There                      20m          red: 20 minutes left
-  Kill Dogs                       95/100
-Weekly Challenge - Kill Infected  159,487/162,401
+  Kill Regular Infected  55/100
+Summer Loot                              green, struck through
+  Loot Anything          10/10
+── yours ───────────────────────────────
+Nearly There             20m             red: 20 minutes left
+  Kill Dogs              95/100
+── clan - Weekly Challenge ─────────────
+Kill Infected            159,487/162,401
+Travel Blocks            366/360
 ```
 
 The progress is bold, because it is what you scan the board for. The objective is
 dimmed, because it is subordinate to the challenge it belongs to. A finished
 challenge or objective is **green and struck through**; one that is unfinished with
 less than `urgent_within` left (default two hours) is **red**.
+
+The dividers pay for their own rows. Every clan entry is called "Weekly Challenge -
+something", so five of them said that eighteen-character prefix five times and
+pushed every figure on the board right by as much; it moves into the heading
+instead, where it is said once. A prefix has to be shared by at least two
+challenges and end at a separator - "Kill Infected" and "Kill Dog Infected" share
+`Kill ` and stripping that would leave "Infected" and "Dog Infected" - and it is
+only ever taken away when there is a heading to move it to. Categories appear in
+the board's own order, so the dividers describe what is on screen without
+rearranging it, and a single category on screen gets no heading at all.
+
+They are drawn as text, not as a CSS border, because a GTK label is only as wide as
+its own content: `border-bottom` would stop at the end of the word.
 
 Every value sits in one column, and every challenge after the first gets a few
 pixels above it, so a board of nineteen rows reads as groups. The column is built

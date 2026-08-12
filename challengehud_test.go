@@ -548,3 +548,110 @@ func hasClass(all []string, want string) bool {
 	}
 	return false
 }
+
+// A divider per category, and the prefix five clan challenges share said once.
+func TestChallengeLinesSections(t *testing.T) {
+	cfg := allCategories()
+	cfg.ShowSections = true
+	// Two clan challenges, so their shared prefix is a repetition rather than one
+	// challenge's name.
+	end := time.Now().Add(5 * 24 * time.Hour)
+	b := append(board(), Challenge{
+		Name: "Weekly Challenge - Loot Anything", Clan: true, End: end,
+		Objectives: []Objective{{Name: "Loot Anything", Target: 100, Score: 4, HasScore: true}},
+	})
+	v := &View{Now: time.Now(), Challenges: b}
+
+	lines := texts(challengeLines(v, cfg))
+	joined := strings.Join(lines, "\n")
+
+	// Three categories in the board's own order, each with a heading.
+	var headings []int
+	for i, line := range lines {
+		if strings.HasPrefix(line, "──") {
+			headings = append(headings, i)
+		}
+	}
+	if len(headings) != 3 {
+		t.Fatalf("%d headings, want one per category:\n%s", len(headings), joined)
+	}
+	if headings[0] != 0 {
+		t.Errorf("the first heading is at %d, want the top of the board", headings[0])
+	}
+	if !strings.Contains(lines[headings[0]], "event") {
+		t.Errorf("first heading = %q, want the event challenges, which the board lists first", lines[headings[0]])
+	}
+	if !strings.Contains(lines[headings[2]], "clan") {
+		t.Errorf("last heading = %q, want clan", lines[headings[2]])
+	}
+
+	// The prefix moved into the heading, and out of both names.
+	if !strings.Contains(lines[headings[2]], "Weekly Challenge") {
+		t.Errorf("clan heading = %q, want the shared prefix in it", lines[headings[2]])
+	}
+	if strings.Count(joined, "Weekly Challenge") != 1 {
+		t.Errorf("the shared prefix is still repeated:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Kill Infected") || !strings.Contains(joined, "159,487/162,401") {
+		t.Errorf("stripping the prefix lost the challenge:\n%s", joined)
+	}
+
+	// The rule reaches the widest row, so the board reads as a column.
+	widest := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "──") {
+			continue
+		}
+		if n := len([]rune(strings.TrimSuffix(line, " done"))); n > widest {
+			widest = n
+		}
+	}
+	for _, i := range headings {
+		if n := len([]rune(lines[i])); n != widest {
+			t.Errorf("heading %d is %d wide, want %d to match the board", i, n, widest)
+		}
+	}
+}
+
+// One category on screen needs no label: it would name the only thing there.
+func TestChallengeLinesNoHeadingForASingleCategory(t *testing.T) {
+	cfg := allCategories()
+	cfg.ShowSections = true
+	cfg.ShowRepeatable, cfg.ShowClan = false, false
+	v := &View{Now: time.Now(), Challenges: board()}
+	for _, line := range texts(challengeLines(v, cfg)) {
+		if strings.HasPrefix(line, "──") {
+			t.Errorf("a heading was drawn for the only category on screen: %q", line)
+		}
+	}
+}
+
+// A prefix is only shared if more than one challenge has it, and only at a
+// separator: "Kill Infected" and "Kill Dog Infected" share "Kill " and taking it
+// away would leave "Infected" and "Dog Infected".
+func TestSharedPrefix(t *testing.T) {
+	one := func(names ...string) []Challenge {
+		out := make([]Challenge, 0, len(names))
+		for _, n := range names {
+			out = append(out, Challenge{Name: n})
+		}
+		return out
+	}
+	cases := []struct {
+		name string
+		in   []Challenge
+		want string
+	}{
+		{"the live clan board", one("Weekly Challenge - Kill Infected", "Weekly Challenge - Travel Blocks"), "Weekly Challenge - "},
+		{"one challenge repeats nothing", one("Weekly Challenge - Kill Infected"), ""},
+		{"a common word is not a prefix", one("Kill Infected", "Kill Dog Infected"), ""},
+		{"only some share it", one("Weekly Challenge - A", "Weekly Challenge - B", "Summer Death"), ""},
+		{"nothing may be left with an empty name", one("Weekly Challenge - ", "Weekly Challenge - B"), ""},
+		{"different prefixes", one("Weekly Challenge - A", "Daily Challenge - B"), ""},
+	}
+	for _, tc := range cases {
+		if got := sharedPrefix(tc.in); got != tc.want {
+			t.Errorf("%s: sharedPrefix = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

@@ -380,6 +380,19 @@ show_clan = true
 show_personal = true
 show_completed = true
 
+# Draw a divider naming each category:
+#
+#   ── clan - Weekly Challenge ──────────────────
+#     Kill Infected            162,423/162,401
+#
+# It also earns its row back. A prefix that every challenge in a category shares
+# moves up into the heading, so the five clan entries - all called "Weekly
+# Challenge - something" - say that once between them instead of once each, and
+# stop pushing every figure on the board to the right.
+#
+# Never drawn when only one category is on screen.
+show_sections = true
+
 # Cap on rows, or 0 for no cap. The group has its own place on screen, so the
 # whole board fits and there is nothing to crop around.
 max_shown = 0

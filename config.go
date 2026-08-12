@@ -446,6 +446,14 @@ type ChallengesWidgetConfig struct {
 	ShowPersonal   bool `toml:"show_personal"`
 	ShowCompleted  bool `toml:"show_completed"`
 
+	// ShowSections draws a divider naming each category, and moves a prefix the
+	// whole category shares up into it - so five clan entries say "Weekly
+	// Challenge" once between them instead of once each.
+	//
+	// Only ever drawn when more than one category is on screen: with a single
+	// category it is a label on the only thing there.
+	ShowSections bool `toml:"show_sections"`
+
 	// MaxShown caps the rows. 0 means no cap, which is the point of the window:
 	// the whole board, in the board's own order.
 	MaxShown int `toml:"max_shown"`
@@ -612,6 +620,7 @@ func defaultConfig() *Config {
 				// somewhere quieter to stand out from.
 				Color:          "#e8e8e8",
 				ShowRepeatable: true, ShowClan: true, ShowPersonal: true, ShowCompleted: true,
+				ShowSections: true,
 				UrgentWithin: duration{2 * time.Hour},
 			},
 		},

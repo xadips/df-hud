@@ -312,14 +312,40 @@ func challengeLines(v *View, cfg ChallengesWidgetConfig) []challengeRow {
 		}
 		return nil
 	}
-	rows := make([]challengeRow, 0, len(shown))
-	for _, c := range shown {
-		rows = append(rows, challengeRows(c, v.Now, cfg)...)
+
+	sections := groupByCategory(shown)
+	// A heading is only worth a row when there is something to tell apart. With one
+	// section it would be a label on the only thing on screen.
+	headings := cfg.ShowSections && len(sections) > 1
+
+	rows := make([]challengeRow, 0, len(shown)+len(sections))
+	for _, s := range sections {
+		// The clan entries are all named "Weekly Challenge - <objective>", so five of
+		// them put those eighteen characters on screen five times and push every
+		// figure on the board right by as much. The prefix MOVES into the heading -
+		// so only when there is a heading to move it to, or it would not be said at
+		// all and "weekly" is not nothing.
+		prefix := ""
+		if headings {
+			prefix = sharedPrefix(s.challenges)
+			label := s.category.label()
+			if prefix != "" {
+				label += " - " + strings.TrimSuffix(strings.TrimSpace(prefix), "-")
+			}
+			rows = append(rows, challengeRow{Heading: true, Name: strings.TrimSpace(label)})
+		}
+		for _, c := range s.challenges {
+			if prefix != "" {
+				c.Name = strings.TrimSpace(strings.TrimPrefix(c.Name, prefix))
+			}
+			rows = append(rows, challengeRows(c, v.Now, cfg)...)
+		}
 	}
 
-	// Two passes over the finished set, because both of these are properties of the
-	// board rather than of any one challenge: where the progress column falls, and
-	// which rows begin a new challenge under another one.
+	// Three passes over the finished set, because all of these are properties of the
+	// board rather than of any one row: where the progress column falls, which rows
+	// begin a new challenge under another one, and how wide the rule on a heading
+	// has to be to reach the far side of the widest row.
 	pad := 0
 	for _, r := range rows {
 		// Countdowns count towards the column as well as progress figures. They are
@@ -332,13 +358,95 @@ func challengeLines(v *View, cfg ChallengesWidgetConfig) []challengeRow {
 			pad = width
 		}
 	}
+	board := 0
 	for i := range rows {
 		rows[i].Pad = pad
 		// Not the first: a margin above row zero would push the whole group down
 		// from the y it was configured at.
 		rows[i].Gap = i > 0 && !rows[i].Sub
+		if w := rows[i].width(); w > board {
+			board = w
+		}
+	}
+	for i := range rows {
+		if rows[i].Heading {
+			rows[i].Rule = board
+		}
 	}
 	return rows
+}
+
+// challengeSection is one category's worth of the board, in the board's own order.
+type challengeSection struct {
+	category   challengeCategory
+	challenges []Challenge
+}
+
+// groupByCategory splits the board into sections, keeping the board's own order:
+// sections appear in the order their first challenge does, and challenges keep their
+// places within a section.
+//
+// Not a fixed order of my choosing, tempting as "your own first" is. The board
+// arrives grouped already - event, then weeklies, then dailies, then clan - so the
+// dividers describe what is on screen rather than rearranging it, and nothing moves
+// under someone who has learnt where their dailies sit.
+func groupByCategory(board []Challenge) []challengeSection {
+	var out []challengeSection
+	at := map[challengeCategory]int{}
+	for _, c := range board {
+		k := categoryOf(c)
+		if i, ok := at[k]; ok {
+			out[i].challenges = append(out[i].challenges, c)
+			continue
+		}
+		at[k] = len(out)
+		out = append(out, challengeSection{category: k, challenges: []Challenge{c}})
+	}
+	return out
+}
+
+// sharedPrefix is the "<something> - " that every challenge in a section begins
+// with, or "" if they do not all share one.
+//
+// Cut at " - " rather than at any common run of characters: two challenges called
+// "Kill Infected" and "Kill Dog Infected" share "Kill " and stripping it would
+// leave "Infected" and "Dog Infected", which is worse than the repetition. The
+// separator makes the prefix a deliberate one rather than a coincidence.
+//
+// Two is the minimum. One challenge repeats nothing, and taking its prefix away
+// would move information into a heading for no gain.
+func sharedPrefix(challenges []Challenge) string {
+	if len(challenges) < 2 {
+		return ""
+	}
+	const sep = " - "
+	i := strings.Index(challenges[0].Name, sep)
+	if i <= 0 {
+		return ""
+	}
+	prefix := challenges[0].Name[:i] + sep
+	for _, c := range challenges {
+		if !strings.HasPrefix(c.Name, prefix) {
+			return ""
+		}
+		// And nothing may be left with an empty name. Checked on the first as well
+		// as the rest: it is where the prefix came from, not an exception to it.
+		if strings.TrimSpace(strings.TrimPrefix(c.Name, prefix)) == "" {
+			return ""
+		}
+	}
+	return prefix
+}
+
+func (c challengeCategory) label() string {
+	switch c {
+	case categoryRepeatable:
+		return "event"
+	case categoryClan:
+		return "clan"
+	default:
+		return "yours"
+	}
 }
 
 // challengeRow is one row of the board, kept in parts rather than pre-joined.
@@ -367,6 +475,14 @@ type challengeRow struct {
 	// Sub marks an objective belonging to the challenge above it, which is indented
 	// and dimmed so the grouping is visible.
 	Sub bool
+	// Heading marks a section divider - "yours", "clan", "event" - drawn as the
+	// name followed by a rule out to Rule characters wide. A rule made of text
+	// rather than a CSS border because a GTK label is only as wide as its own
+	// content: a border-bottom would stop at the end of the word.
+	Heading bool
+	// Rule is how wide the widest row on the board is, so a heading's line reaches
+	// the far side of it. Set across the whole board at once, like Pad.
+	Rule int
 	// Gap asks for a few pixels above the row. Set on every challenge except the
 	// first, which turns nineteen unbroken rows into visible groups without
 	// spending a whole blank row on each break.
@@ -381,6 +497,9 @@ type challengeRow struct {
 // objective in whichever combination this row carries.
 func (r challengeRow) label() string {
 	var b strings.Builder
+	if r.Heading {
+		return r.headingText()
+	}
 	if r.Sub {
 		b.WriteString("  ")
 	}
@@ -410,8 +529,47 @@ func (r challengeRow) padding(label string) string {
 	return strings.Repeat(" ", width)
 }
 
+// headingText is a section divider: the name, then a line to the far side of the
+// board. Box-drawing characters, which are one cell wide in any monospace font the
+// HUD is likely to be set in, and a plain fallback is not worth carrying - the rule
+// degrading to a row of dashes would be indistinguishable from what most people
+// would draw by hand anyway.
+func (r challengeRow) headingText() string {
+	head := "── " + r.Name + " "
+	if fill := r.Rule - utf8.RuneCountInString(head); fill > 0 {
+		return head + strings.Repeat("─", fill)
+	}
+	return head
+}
+
+// width is how wide the row draws, in characters, ignoring the "done" that only the
+// plain form adds. It is what a heading's rule is measured against.
+func (r challengeRow) width() int {
+	if r.Heading {
+		// Headings are what the width is being computed FOR, so they cannot
+		// contribute to it - a heading long enough to be the widest row would
+		// otherwise pull every other heading out to match it.
+		return 0
+	}
+	label := r.label()
+	n := utf8.RuneCountInString(label)
+	switch {
+	case r.Progress != "":
+		n += utf8.RuneCountInString(r.padding(label)) + utf8.RuneCountInString(r.Progress)
+		if r.Countdown != "" {
+			n += 2 + utf8.RuneCountInString(r.Countdown)
+		}
+	case r.Countdown != "":
+		n += utf8.RuneCountInString(r.padding(label)) + utf8.RuneCountInString(r.Countdown)
+	}
+	return n
+}
+
 // Text is the plain form, for -print-hud and the tests.
 func (r challengeRow) Text() string {
+	if r.Heading {
+		return r.headingText()
+	}
 	var b strings.Builder
 	label := r.label()
 	b.WriteString(label)
@@ -452,6 +610,11 @@ func (r challengeRow) Text() string {
 // width. Dimming carries the hierarchy on its own.
 func (r challengeRow) Markup() string {
 	var b strings.Builder
+	if r.Heading {
+		// Dimmer than an objective: a divider is furniture, and it should be the
+		// least insistent thing on the board while still being findable.
+		return `<span alpha="50%">` + escapeMarkup(r.headingText()) + `</span>`
+	}
 	if r.Sub {
 		b.WriteString("  ")
 	}
