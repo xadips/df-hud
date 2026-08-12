@@ -47,8 +47,10 @@ is yours:
 | `POST /api/console/toggle` | the console window |
 | `POST /api/run/click` | a click that *might* be the game's Start button |
 
-[contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf) has all of them ready to
-`source` from `hyprland.conf`, along with the layer rules.
+Ready-made, with the layer rules: [contrib/df-hud.lua](contrib/df-hud.lua) for
+Hyprland's Lua configuration, [contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf)
+for `hyprland.conf`. The defaults are on `SUPER+ALT` rather than the function keys,
+which Dead Frontier uses itself.
 
 The tray menu offers the same three corrections, and the two stay in step: toggle
 the overlay from a key and the tray's tick follows.
@@ -68,6 +70,13 @@ Hyprland passes the click through with a non-consuming bind and calls
 `/api/run/click`; df-hud then checks, for itself, whether the cursor was on the
 button. Global input monitoring is a keylogger-shaped capability and this program
 does not want it.
+
+It has to be the compositor and not an invisible surface of our own, which is the
+obvious alternative: a Wayland surface that receives a pointer event **consumes**
+it, and the protocol has no forwarding. An invisible box over the Start button
+would eat the click, so the button would never be pressed. Only the compositor can
+both act on a click and still deliver it, because it is the thing doing the
+delivering.
 
 Two things keep a pixel rectangle from being as fragile as it sounds:
 
