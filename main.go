@@ -415,7 +415,7 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 		}
 		// The same two corrections the tray offers, on the loopback listener so a
 		// keybind can reach them without taking a hand off the mouse.
-		bs.runStart = func() { a.store.RestartRun(time.Now()) }
+		bs.runStart = func() { a.store.RestartRun(time.Now(), "a keybind") }
 		bs.xpReset = a.resetXPRate
 		bs.runClick = a.runClick
 		bs.overlayToggle = func() { a.visibility.SetEnabled(!a.visibility.Enabled()) }
@@ -603,7 +603,7 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 			SetOverlayEnabled: a.visibility.SetEnabled,
 			OverlayEnabled:    a.visibility.Enabled,
 			ResetXPRate:       a.resetXPRate,
-			RestartRunClock:   func() { a.store.RestartRun(time.Now()) },
+			RestartRunClock:   func() { a.store.RestartRun(time.Now(), "the tray menu") },
 			ReloadConfig:      a.reloadConfig,
 			Quit:              opts.quit,
 			View:              func() *View { return a.store.Derive(time.Now()) },
@@ -806,8 +806,10 @@ func (a *app) runClick() {
 		}
 		return
 	}
-	log.Printf("session: Start pressed (click at %d, %d in the game window)", x, y)
-	a.store.RestartRun(time.Now())
+	// The click's own coordinates rather than a bare "Start pressed": they are
+	// what confirms the configured rectangle is still right after a resolution
+	// change, and they cost one line per run.
+	a.store.RestartRun(time.Now(), fmt.Sprintf("the Start button (click at %d, %d in the game window)", x, y))
 }
 
 // runClickAllowed is the part of the decision that needs nothing but state, kept

@@ -538,18 +538,23 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 	}
 }
 
-// RestartRun starts the clock from now, by hand.
+// RestartRun starts the clock from now, and why is the caller's to say.
 //
 // It exists because none of the automatic signals is certain: the server's record
 // does not mark the client taking control at all, so the clock can only be started
 // from evidence of activity, which for a loot run inside a single block can arrive
 // a long way into it. A one-click correction beats a number you cannot trust and
 // cannot fix.
-func (s *Store) RestartRun(at time.Time) {
+//
+// why is a parameter because there are three callers now and they are not the same
+// event. It said "by hand" unconditionally, which became untrue the moment the
+// Start button could do it: the log read "Start pressed" and then claimed a manual
+// restart on the next line.
+func (s *Store) RestartRun(at time.Time, why string) {
 	s.mu.Lock()
 	s.runStart, s.runSeed = at, nil
 	s.mu.Unlock()
-	log.Print("session: run clock restarted by hand")
+	log.Printf("session: run clock started from %s", why)
 }
 
 // SetRunSeed offers a persisted run to restore, so restarting df-hud mid-run

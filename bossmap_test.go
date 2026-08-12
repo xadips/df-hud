@@ -218,7 +218,7 @@ func TestThreatLineMarksThePreviousCycle(t *testing.T) {
 		BlockEvents:     []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Charred Giant Spider"}}},
 		BlockEventsPast: []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Irradiated Wraith"}}},
 	}
-	text, _, show := threatLine(v)
+	text, show := threatLine(v)
 	if !show {
 		t.Fatal("expected a threat line")
 	}
@@ -304,25 +304,47 @@ func TestThreatLine(t *testing.T) {
 	v := &View{HaveData: true, HasPosition: true, PositionX: 1058, PositionY: 1016}
 	v.BlockEvents = m.At(1058, 1016, fixtureNow(t, m))
 
-	text, urgent, show := threatLine(v)
+	text, show := threatLine(v)
 	if !show || !strings.Contains(text, "6 x Bandits") {
 		t.Errorf("threatLine = %q, %v", text, show)
-	}
-	if urgent {
-		t.Error("a bandit pack is a warning, not the map-wide alarm")
 	}
 
 	// An empty block says nothing at all. "nothing here" on every block would
 	// train you to stop reading the line.
-	if _, _, show := threatLine(&View{HaveData: true, HasPosition: true}); show {
+	if _, show := threatLine(&View{HaveData: true, HasPosition: true}); show {
 		t.Error("an empty block must not take a row")
 	}
+}
 
-	// The map-wide alarm shows wherever you are standing, and gets the loud colour.
-	attack := &View{HaveData: true, OutpostAttack: true}
-	text, urgent, show = threatLine(attack)
-	if !show || !urgent || !strings.Contains(text, "OUTPOST ATTACK") {
-		t.Errorf("threatLine = %q, urgent=%v", text, urgent)
+// The map-wide alarm is its own row, and this is the property that matters: it
+// must not appear in, or recolour, what is standing on your own block. While they
+// shared a label an outpost attack painted a bandit pack the colour of an event
+// happening on the other side of the map.
+func TestOutpostAttackIsItsOwnLine(t *testing.T) {
+	m := loadFixtureBossMap(t)
+	v := &View{HaveData: true, HasPosition: true, PositionX: 1058, PositionY: 1016, OutpostAttack: true}
+	v.BlockEvents = m.At(1058, 1016, fixtureNow(t, m))
+
+	attack, show := outpostAttackLine(v)
+	if !show || !strings.Contains(attack, "OUTPOST ATTACK") {
+		t.Errorf("outpostAttackLine = %q, %v", attack, show)
+	}
+
+	threat, show := threatLine(v)
+	if !show || !strings.Contains(threat, "6 x Bandits") {
+		t.Fatalf("threatLine = %q, %v", threat, show)
+	}
+	if strings.Contains(threat, "OUTPOST") {
+		t.Errorf("threatLine = %q, want the attack on its own row", threat)
+	}
+
+	// And with no attack the row is absent rather than empty.
+	if _, show := outpostAttackLine(&View{HaveData: true}); show {
+		t.Error("no attack must not take a row")
+	}
+	// No data at all means no claim either way.
+	if _, show := outpostAttackLine(&View{OutpostAttack: true}); show {
+		t.Error("without data there is nothing to report")
 	}
 }
 

@@ -21,10 +21,15 @@ import "github.com/diamondburned/gotk4/pkg/gtk/v4"
 // knowledge/allstats-map-and-xp.md. The widget degrades to the above rather than
 // guessing, and the extra lines appear once a transform exists.
 type blockWidget struct {
-	cfg    BlockWidgetConfig
-	box    *gtk.Box
-	head   *gtk.Label
-	sub    *gtk.Label
+	cfg  BlockWidgetConfig
+	box  *gtk.Box
+	head *gtk.Label
+	sub  *gtk.Label
+	// attack and threat are two labels rather than one because they are two
+	// different claims with two different colours: the attack is map-wide, the
+	// threat is your own block. Sharing a label meant the attack's colour was
+	// applied to both.
+	attack *gtk.Label
 	threat *gtk.Label
 }
 
@@ -34,11 +39,17 @@ func newBlockWidget(cfg BlockWidgetConfig) *blockWidget {
 		box:    gtk.NewBox(gtk.OrientationVertical, 0),
 		head:   newHUDLabel(),
 		sub:    newHUDLabel(),
+		attack: newHUDLabel(),
 		threat: newHUDLabel(),
 	}
+	w.attack.AddCSSClass("threat")
+	// The loud colour is permanent on this label, since it only ever says one
+	// thing. Nothing toggles it, which is what stops the two rows sharing a state.
+	w.attack.AddCSSClass("urgent")
 	w.threat.AddCSSClass("threat")
 	w.box.Append(w.head)
 	w.box.Append(w.sub)
+	w.box.Append(w.attack)
 	w.box.Append(w.threat)
 	return w
 }
@@ -57,16 +68,15 @@ func (w *blockWidget) Update(v *View) {
 	// An empty label would otherwise occupy a row and say nothing.
 	w.sub.SetVisible(sub != "")
 
-	threat, urgent, showThreat := threatLine(v)
+	attack, showAttack := outpostAttackLine(v)
+	w.attack.SetVisible(showAttack)
+	if showAttack {
+		w.attack.SetText(attack)
+	}
+
+	threat, showThreat := threatLine(v)
 	w.threat.SetVisible(showThreat)
 	if showThreat {
 		w.threat.SetText(threat)
-		// An outpost attack is map-wide and time-limited, so it gets the loud
-		// colour; anything on your own block gets the ordinary warning one.
-		if urgent {
-			w.threat.AddCSSClass("urgent")
-		} else {
-			w.threat.RemoveCSSClass("urgent")
-		}
 	}
 }

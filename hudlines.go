@@ -58,24 +58,34 @@ func blockLines(v *View, cfg BlockWidgetConfig) (head, sub string, show bool) {
 	return head, strings.Join(parts, "  "), true
 }
 
+// outpostAttackLine is the map-wide siege, on its own row.
+//
+// Separate from threatLine, and it has to be. They answer different questions -
+// "is the outpost under attack" is true everywhere on the map, while the threat
+// line is what is standing where you are - and while they shared a row the
+// attack's loud colour was applied to the whole thing, so six bandits on your
+// block were painted the colour of an event happening somewhere else entirely.
+func outpostAttackLine(v *View) (text string, show bool) {
+	if !v.HaveData || !v.OutpostAttack {
+		return "", false
+	}
+	return "OUTPOST ATTACK", true
+}
+
 // threatLine is what is standing on your block, from the city event feed.
 //
 // This is the row the HUD exists for as much as any other: a block with six
 // bandits on it is a different proposition from an empty one, and the game's own
-// client does not tell you until you are looking at them. urgent picks the colour
-// - an outpost attack is map-wide and gets the loud one.
+// client does not tell you until you are looking at them.
 //
 // Nothing is rendered when the feed has no events for your block. That is the
 // normal case for most of the map, and "nothing here" on every block would train
 // you to stop reading the line.
-func threatLine(v *View) (text string, urgent bool, show bool) {
+func threatLine(v *View) (text string, show bool) {
 	if !v.HaveData {
-		return "", false, false
+		return "", false
 	}
 	var parts []string
-	if v.OutpostAttack {
-		parts = append(parts, "OUTPOST ATTACK")
-	}
 	for _, e := range v.BlockEvents {
 		label := e.Label()
 		if len(e.Objectives) > 0 {
@@ -90,9 +100,9 @@ func threatLine(v *View) (text string, urgent bool, show bool) {
 		parts = append(parts, "last: "+e.Label())
 	}
 	if len(parts) == 0 {
-		return "", false, false
+		return "", false
 	}
-	return strings.Join(parts, "  "), v.OutpostAttack, true
+	return strings.Join(parts, "  "), true
 }
 
 // xpLine is the XP rate, and nothing else.
@@ -245,9 +255,13 @@ func hudLines(v *View, cfg *Config) []string {
 		}
 	}
 	if cfg.Widget.Block.Enabled {
-		if text, _, ok := threatLine(v); ok {
-			// Shares the block widget's order: it is information about the block
-			// you are on, and it belongs next to the block's name.
+		// Both share the block widget's order: they are information about where you
+		// are standing, and they belong next to the block's name. The attack goes
+		// first because it is the one that ends your run if you ignore it.
+		if text, ok := outpostAttackLine(v); ok {
+			rows = append(rows, row{cfg.Widget.Block.Order, []string{text}})
+		}
+		if text, ok := threatLine(v); ok {
 			rows = append(rows, row{cfg.Widget.Block.Order, []string{text}})
 		}
 	}
