@@ -216,16 +216,25 @@ so they compose with whatever `color` the group is set to:
 
 ```
 Summer Death
-  Kill Regular Infected  55/100
-First Strike                      20h20m
-  Kill Any Boss          0/7
-Summer Loot                                  (struck through when complete)
-  Loot Anything          10/10
+  Kill Regular Infected           55/100
+Summer Loot                                    green, struck through
+  Loot Anything                   10/10
+Nearly There                      20m          red: 20 minutes left
+  Kill Dogs                       95/100
+Weekly Challenge - Kill Infected  159,487/162,401
 ```
 
 The progress is bold, because it is what you scan the board for. The objective is
-dimmed and a step smaller, because it is subordinate to the challenge it belongs
-to. A finished challenge or objective is struck through rather than labelled.
+dimmed, because it is subordinate to the challenge it belongs to. A finished
+challenge or objective is **green and struck through**; one that is unfinished with
+less than `urgent_within` left (default two hours) is **red**.
+
+Every value sits in one column, and every challenge after the first gets a few
+pixels above it, so a board of nineteen rows reads as groups. The column is built
+out of padding characters, which is exact in a monospace font and approximate in
+anything else - and is why the objective is dimmed rather than drawn a size
+smaller, since a narrower character would make the same count of padding a
+different width and drift the column on exactly the rows it exists to line up.
 
 Everything from the board is escaped before it reaches Pango. That is not
 optional: Pango refuses to parse malformed markup and GTK answers with an empty

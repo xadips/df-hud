@@ -2,7 +2,11 @@
 
 package main
 
-import "github.com/diamondburned/gotk4/pkg/gtk/v4"
+import (
+	"strings"
+
+	"github.com/diamondburned/gotk4/pkg/gtk/v4"
+)
 
 // The challenge tracker, priority #2.
 //
@@ -21,8 +25,8 @@ type challengeWidget struct {
 	cfg  ChallengesWidgetConfig
 	box  *gtk.Box
 	rows []*gtk.Label
-	// applied is the state class currently on each row, tracked so a class is only
-	// swapped when it changes: GTK recomputes style on every add and remove, and
+	// applied is the classes currently on each row, joined, tracked so they are only
+	// swapped when they change: GTK recomputes style on every add and remove, and
 	// this runs every second forever.
 	applied []string
 }
@@ -58,15 +62,17 @@ func (w *challengeWidget) Update(v *View) {
 		label.SetMarkup(lines[i].Markup())
 		label.SetVisible(true)
 
-		// Green for finished, red for nearly out of time. A class rather than a
-		// colour in the markup, so the built-in sheet's scoping makes it outrank a
-		// per-group colour the way every other state colour does.
-		if want := lines[i].CSSClass(); want != w.applied[i] {
-			if w.applied[i] != "" {
-				label.RemoveCSSClass(w.applied[i])
+		// Green for finished, red for nearly out of time, and a margin above each
+		// challenge after the first. Classes rather than markup: the built-in sheet
+		// scopes the colours so they outrank a per-group colour the way every other
+		// state colour does, and a margin cannot be expressed in markup at all.
+		classes := lines[i].Classes()
+		if want := strings.Join(classes, " "); want != w.applied[i] {
+			for _, old := range strings.Fields(w.applied[i]) {
+				label.RemoveCSSClass(old)
 			}
-			if want != "" {
-				label.AddCSSClass(want)
+			for _, class := range classes {
+				label.AddCSSClass(class)
 			}
 			w.applied[i] = want
 		}

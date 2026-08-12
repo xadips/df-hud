@@ -160,7 +160,7 @@ func TestChallengeLines(t *testing.T) {
 	if lines[0] != "Summer Death" {
 		t.Errorf("lines[0] = %q, want the challenge alone on its row", lines[0])
 	}
-	if lines[1] != "  Kill Regular Infected  55/100" {
+	if !strings.HasPrefix(lines[1], "  Kill Regular Infected") || !strings.Contains(lines[1], "55/100") {
 		t.Errorf("lines[1] = %q, want the objective indented with its progress", lines[1])
 	}
 	// A countdown appears only when it is close enough to matter; "5d" on every
@@ -180,7 +180,8 @@ func TestChallengeLines(t *testing.T) {
 	if !strings.Contains(lines[3], "done") {
 		t.Errorf("lines[3] = %q, want the finished objective marked", lines[3])
 	}
-	if lines[10] != "Weekly Challenge - Kill Infected  159,487/162,401" {
+	if !strings.HasPrefix(lines[10], "Weekly Challenge - Kill Infected") ||
+		!strings.Contains(lines[10], "159,487/162,401") {
 		t.Errorf("lines[10] = %q, want the clan challenge as one row", lines[10])
 	}
 }
@@ -330,12 +331,15 @@ func TestChallengeRowMarkupHierarchy(t *testing.T) {
 	if !strings.Contains(got, "<b>0/7</b>") {
 		t.Errorf("markup = %q, want the progress bold", got)
 	}
-	// The objective is subordinate to the challenge it belongs to.
-	if !strings.Contains(got, `size="smaller">Kill Any Boss`) {
-		t.Errorf("markup = %q, want the objective a step smaller", got)
-	}
-	if !strings.Contains(got, `alpha="78%"`) {
+	// The objective is subordinate to the challenge it belongs to, said with alpha.
+	if !strings.Contains(got, `alpha="78%">Kill Any Boss`) {
 		t.Errorf("markup = %q, want the objective dimmed", got)
+	}
+	// And NOT with size. A narrower character makes the same count of padding
+	// characters a different width, which would drift the progress column on
+	// exactly the rows it exists to line up.
+	if strings.Contains(got, "size=") {
+		t.Errorf("markup = %q, want no size change: it breaks the aligned column", got)
 	}
 	// Deliberately no colour anywhere: a hardcoded one would fight both the
 	// per-group color key and the state colours.
@@ -459,4 +463,88 @@ func TestChallengeRowColours(t *testing.T) {
 	if got := challengeRows(done, now, cfg)[0].CSSClass(); got != "done" {
 		t.Errorf("urgent_within must not affect completion, got %q", got)
 	}
+}
+
+// The progress figures line up in one column across the whole board, which is why
+// the column is computed over the finished set rather than per challenge.
+func TestChallengeLinesAlignsProgress(t *testing.T) {
+	cfg := allCategories()
+	rows := challengeLines(&View{Now: time.Now(), Challenges: board()}, cfg)
+
+	column := -1
+	counted := 0
+	for _, r := range rows {
+		if r.Progress == "" {
+			continue
+		}
+		counted++
+		at := strings.Index(r.Text(), r.Progress)
+		if at < 0 {
+			t.Fatalf("row %q lost its progress", r.Text())
+		}
+		if column == -1 {
+			column = at
+			continue
+		}
+		if at != column {
+			t.Errorf("progress starts at %d in %q, but at %d in an earlier row",
+				at, r.Text(), column)
+		}
+	}
+	if counted < 5 {
+		t.Fatalf("only %d rows carried progress; the board should have more", counted)
+	}
+	// The longest label decides the column, and there is always a gap after it.
+	longest := 0
+	for _, r := range rows {
+		if r.Progress == "" {
+			continue
+		}
+		if n := len(r.Text()[:strings.Index(r.Text(), r.Progress)]); n > longest {
+			longest = n
+		}
+	}
+	if column != longest {
+		t.Errorf("column = %d, want the widest label's width %d", column, longest)
+	}
+}
+
+// Every challenge after the first asks for a margin above it, so nineteen rows read
+// as groups. Not the first: a margin above row zero would push the whole group down
+// from the y it was configured at.
+func TestChallengeLinesGapsBetweenChallenges(t *testing.T) {
+	cfg := allCategories()
+	rows := challengeLines(&View{Now: time.Now(), Challenges: board()}, cfg)
+
+	if rows[0].Gap {
+		t.Error("the first row must not have a gap above it")
+	}
+	gaps := 0
+	for i, r := range rows {
+		if r.Sub && r.Gap {
+			t.Errorf("row %d (%q) is an objective and must not break the group", i, r.Text())
+		}
+		if r.Gap {
+			gaps++
+		}
+	}
+	// Six challenges, so five breaks between them.
+	if gaps != 5 {
+		t.Errorf("got %d gaps, want one per challenge after the first", gaps)
+	}
+	// The class carries it, since a margin cannot be expressed in markup.
+	for _, r := range rows {
+		if r.Gap && !hasClass(r.Classes(), "board-gap") {
+			t.Errorf("row %q wants a gap but does not ask for the class", r.Text())
+		}
+	}
+}
+
+func hasClass(all []string, want string) bool {
+	for _, s := range all {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

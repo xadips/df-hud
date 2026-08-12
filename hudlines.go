@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // What each widget says, as pure functions of the View.
@@ -257,6 +258,28 @@ func challengeLines(v *View, cfg ChallengesWidgetConfig) []challengeRow {
 	for _, c := range shown {
 		rows = append(rows, challengeRows(c, v.Now, cfg)...)
 	}
+
+	// Two passes over the finished set, because both of these are properties of the
+	// board rather than of any one challenge: where the progress column falls, and
+	// which rows begin a new challenge under another one.
+	pad := 0
+	for _, r := range rows {
+		// Countdowns count towards the column as well as progress figures. They are
+		// the value on a challenge row that has no progress of its own, and leaving
+		// them out put them in a column of their own halfway across the board.
+		if r.Progress == "" && r.Countdown == "" {
+			continue
+		}
+		if width := utf8.RuneCountInString(r.label()); width > pad {
+			pad = width
+		}
+	}
+	for i := range rows {
+		rows[i].Pad = pad
+		// Not the first: a margin above row zero would push the whole group down
+		// from the y it was configured at.
+		rows[i].Gap = i > 0 && !rows[i].Sub
+	}
 	return rows
 }
 
@@ -284,13 +307,21 @@ type challengeRow struct {
 	// finished challenge does not care what time it is.
 	Urgent bool
 	// Sub marks an objective belonging to the challenge above it, which is indented
-	// and dimmed so the grouping is visible without a blank line between challenges.
+	// and dimmed so the grouping is visible.
 	Sub bool
+	// Gap asks for a few pixels above the row. Set on every challenge except the
+	// first, which turns nineteen unbroken rows into visible groups without
+	// spending a whole blank row on each break.
+	Gap bool
+	// Pad is the column the progress figures line up in, measured in characters
+	// from the start of the row. Set across the whole board at once by
+	// challengeLines, since a column is a property of the set rather than of a row.
+	Pad int
 }
 
-// Text is the plain form. The parts are separated by two spaces, which reads as a
-// column in the monospace font the HUD defaults to.
-func (r challengeRow) Text() string {
+// label is everything before the progress figure: the indent, and the name and
+// objective in whichever combination this row carries.
+func (r challengeRow) label() string {
 	var b strings.Builder
 	if r.Sub {
 		b.WriteString("  ")
@@ -302,11 +333,40 @@ func (r challengeRow) Text() string {
 		}
 		b.WriteString(r.Objective)
 	}
-	if r.Progress != "" {
-		b.WriteString("  " + r.Progress)
+	return b.String()
+}
+
+// padding is the spaces that put this row's progress in the shared column. Two
+// spaces minimum, so the longest label still has a gap after it.
+//
+// Characters, not pixels, which is exact in the monospace font the HUD defaults to
+// and approximate in anything else. It is also why the objective is no longer
+// rendered a step smaller: a narrower character makes the same count of them a
+// different width, and the column would drift on exactly the rows it is meant to
+// line up.
+func (r challengeRow) padding(label string) string {
+	width := 2
+	if extra := r.Pad - utf8.RuneCountInString(label); extra > 0 {
+		width += extra
 	}
-	if r.Countdown != "" {
-		b.WriteString("  " + r.Countdown)
+	return strings.Repeat(" ", width)
+}
+
+// Text is the plain form, for -print-hud and the tests.
+func (r challengeRow) Text() string {
+	var b strings.Builder
+	label := r.label()
+	b.WriteString(label)
+	switch {
+	case r.Progress != "":
+		b.WriteString(r.padding(label) + r.Progress)
+		if r.Countdown != "" {
+			b.WriteString("  " + r.Countdown)
+		}
+	case r.Countdown != "":
+		// Into the same column the progress figures use, since on this row it is the
+		// value.
+		b.WriteString(r.padding(label) + r.Countdown)
 	}
 	if r.Done {
 		// Said in words here because plain text has no strikethrough to say it with.
@@ -324,9 +384,14 @@ func (r challengeRow) Text() string {
 //
 //	progress   bold, because it is what you scan the board for
 //	name       plain
-//	objective  dimmed and a step smaller: subordinate to the challenge it belongs to
+//	objective  dimmed: subordinate to the challenge it belongs to
 //	countdown  dimmed, same reason
 //	done       struck through, and the whole row dimmed
+//
+// The objective was also a step smaller until the progress figures were lined up
+// into a column. The two cannot both be had: the column is built out of padding
+// characters, and a narrower character makes the same count of them a different
+// width. Dimming carries the hierarchy on its own.
 func (r challengeRow) Markup() string {
 	var b strings.Builder
 	if r.Sub {
@@ -340,13 +405,19 @@ func (r challengeRow) Markup() string {
 		if r.Name != "" {
 			b.WriteString(": ")
 		}
-		b.WriteString(`<span alpha="78%" size="smaller">` + escapeMarkup(r.Objective) + `</span>`)
+		b.WriteString(`<span alpha="78%">` + escapeMarkup(r.Objective) + `</span>`)
 	}
-	if r.Progress != "" {
-		b.WriteString("  <b>" + escapeMarkup(r.Progress) + "</b>")
-	}
-	if r.Countdown != "" {
-		b.WriteString(`  <span alpha="70%">` + escapeMarkup(r.Countdown) + `</span>`)
+	// The padding goes outside the objective's span, so it is never rendered at a
+	// different size from the padding on the row above it.
+	countdown := `<span alpha="70%">` + escapeMarkup(r.Countdown) + `</span>`
+	switch {
+	case r.Progress != "":
+		b.WriteString(r.padding(r.label()) + "<b>" + escapeMarkup(r.Progress) + "</b>")
+		if r.Countdown != "" {
+			b.WriteString("  " + countdown)
+		}
+	case r.Countdown != "":
+		b.WriteString(r.padding(r.label()) + countdown)
 	}
 	if r.Done {
 		// No "done" in words: the strikethrough is the word.
@@ -368,6 +439,19 @@ func (r challengeRow) CSSClass() string {
 		return "expiring"
 	}
 	return ""
+}
+
+// Classes is every class the row wants, colour and spacing together, so the widget
+// can diff one list instead of tracking each kind separately.
+func (r challengeRow) Classes() []string {
+	var out []string
+	if c := r.CSSClass(); c != "" {
+		out = append(out, c)
+	}
+	if r.Gap {
+		out = append(out, "board-gap")
+	}
+	return out
 }
 
 // escapeMarkup makes text safe to interpolate into Pango markup.

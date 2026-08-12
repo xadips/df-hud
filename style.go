@@ -62,6 +62,12 @@ window label.done {
 window label.expiring {
   color: #ff6b6b;
 }
+/* A few pixels above every challenge except the first, so a board of nineteen rows
+   reads as groups rather than as one column. A margin rather than a blank row: a
+   whole row of nothing per challenge would cost more height than the board has. */
+window label.board-gap {
+  margin-top: 6px;
+}
 /* What is on your block. Amber because it is a warning rather than a failure;
    an outpost attack is map-wide and gets the red. */
 window label.threat {
