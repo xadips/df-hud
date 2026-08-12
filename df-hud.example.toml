@@ -272,8 +272,11 @@ show_coords = false
 #
 # The amber that says "something is standing here" and the red of an outpost attack
 # win over color, since those say what the words do not.
+# Left of block info by 40px, because these rows are the longest thing on screen:
+# "1 x Irradiated Giant Spider" at x = 2340 finished 13 pixels from the edge of a
+# 2560-wide screen, and a group is clipped rather than wrapped.
 enabled = true
-x = 2340
+x = 2300
 y = 360
 # font_size = 14
 # color = "#ffd166"
@@ -294,7 +297,10 @@ enabled = true
 x = 350
 y = 60
 # font_size = 16
-# color = "#ffffff"
+# White, because the game's own HUD is already yellow and green: a reading that is
+# neither a warning nor a status should read as ours rather than as more of the
+# game's.
+color = "#ffffff"
 # Labels the clock. A bare number on an overlay over a game that has its own
 # clocks says nothing about what it is timing. Set it to "" for just the digits.
 prefix = "IC Time: "
@@ -302,7 +308,7 @@ prefix = "IC Time: "
 [widget.xp]
 enabled = true
 x = 160
-y = 100
+y = 85
 # font_size = 16
 # The amber and red that say recent polls have been missing still win over this.
 # color = "#9be564"
@@ -329,7 +335,10 @@ enabled = true
 x = 10
 y = 190
 # font_size = 11
-# color = "#cfd3dc"
+# Off-white rather than white: this is the longest column on screen, and the green
+# and red it marks finished and expiring rows with need somewhere quiet to stand
+# out from.
+color = "#e8e8e8"
 
 # Which parts of the board are worth a row. Each is a category rather than a
 # guess at what matters:

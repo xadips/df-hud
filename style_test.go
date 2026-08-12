@@ -5,14 +5,29 @@ import (
 	"testing"
 )
 
-// The default config sets no per-group font or colour, so it must generate no CSS
-// at all.
-// A rule emitted for every group would be five rules overriding [hud] with the
-// same values it already has - harmless until someone changes hud.font_size and
-// finds it does nothing.
-func TestWidgetStyleCSSIsEmptyByDefault(t *testing.T) {
-	if got := widgetStyleCSS(defaultConfig()); got != "" {
+// Only what is actually set gets a rule. A rule emitted for every group would be
+// six rules overriding [hud] with the same values it already has - harmless until
+// someone changes hud.font_size and finds it does nothing.
+func TestWidgetStyleCSSOnlyEmitsWhatIsSet(t *testing.T) {
+	bare := defaultConfig()
+	bare.Widget.Session.Color = ""
+	bare.Widget.Challenges.Color = ""
+	if got := widgetStyleCSS(bare); got != "" {
 		t.Errorf("widgetStyleCSS = %q, want nothing when no group overrides anything", got)
+	}
+
+	// The defaults DO set two colours - white for the clock, off-white for the
+	// board - and those must reach the sheet.
+	got := widgetStyleCSS(defaultConfig())
+	if !strings.Contains(got, ".group-session") || !strings.Contains(got, "#ffffff") {
+		t.Errorf("the default clock colour never reached the sheet:\n%s", got)
+	}
+	if !strings.Contains(got, ".group-challenges") {
+		t.Errorf("the default board colour never reached the sheet:\n%s", got)
+	}
+	// And the groups that set nothing still contribute nothing.
+	if strings.Contains(got, ".group-bosses") || strings.Contains(got, ".group-block") {
+		t.Errorf("a group with no overrides emitted a rule:\n%s", got)
 	}
 }
 
@@ -41,8 +56,9 @@ func TestWidgetStyleCSSOverrides(t *testing.T) {
 	if end := strings.Index(xp, "}"); end > 0 && strings.Contains(xp[:end], "font-family") {
 		t.Errorf("the xp rule should set only the size:\n%s", xp[:end])
 	}
-	// Untouched groups contribute nothing.
-	if strings.Contains(got, ".group-session") {
+	// Untouched groups contribute nothing. Block sets neither key by default, which
+	// is why it is the one checked here.
+	if strings.Contains(got, ".group-block") {
 		t.Errorf("a group with no overrides must emit no rule:\n%s", got)
 	}
 }

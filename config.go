@@ -566,8 +566,14 @@ func defaultConfig() *Config {
 			// Directly under Block Info, same column: it is about the same place, and
 			// keeping the x aligned means the two read as one column even though a
 			// growing boss list cannot push the position line around.
-			Bosses:  BossesWidgetConfig{Placement: Placement{X: 2340, Y: 360}, Enabled: true},
-			Session: SessionWidgetConfig{Placement: Placement{X: 350, Y: 60}, Enabled: true, Prefix: "IC Time: "},
+			Bosses: BossesWidgetConfig{Placement: Placement{X: 2300, Y: 360}, Enabled: true},
+			// White for the clock and off-white for the board: the game's own HUD is
+			// already yellow and green, so the readings that are neither a warning nor
+			// a status read as ours rather than as more of the game's.
+			Session: SessionWidgetConfig{
+				Placement: Placement{X: 350, Y: 60}, Enabled: true,
+				Color: "#ffffff", Prefix: "IC Time: ",
+			},
 			// Five minutes, not thirty seconds. XP arrives in lumps - a kill, a
 			// challenge - so a window short enough to contain no lump reads as a
 			// rate of zero, and a HUD that flips between 20M/hr and nothing is
@@ -575,11 +581,15 @@ func defaultConfig() *Config {
 			// going. Five minutes is long enough to smooth the gaps between kills
 			// and short enough to still respond when you change what you are doing.
 			XP: XPWidgetConfig{
-				Placement: Placement{X: 160, Y: 100}, Enabled: true, Prefix: "Xp/Hr: ",
+				Placement: Placement{X: 160, Y: 85}, Enabled: true, Prefix: "Xp/Hr: ",
 				Window: duration{5 * time.Minute}, MinSamples: 3,
 			},
 			Challenges: ChallengesWidgetConfig{
 				Placement: Placement{X: 10, Y: 190}, Enabled: true,
+				// Off-white rather than white: the board is the longest column on
+				// screen, and the green and red it marks its own rows with need
+				// somewhere quieter to stand out from.
+				Color:          "#e8e8e8",
 				ShowRepeatable: true, ShowClan: true, ShowPersonal: true, ShowCompleted: true,
 				UrgentWithin: duration{2 * time.Hour},
 			},
