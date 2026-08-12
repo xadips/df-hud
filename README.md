@@ -52,6 +52,22 @@ Hyprland's Lua configuration, [contrib/df-hud.hypr.conf](contrib/df-hud.hypr.con
 for `hyprland.conf`. The defaults are on `SUPER+ALT` rather than the function keys,
 which Dead Frontier uses itself.
 
+The Lua one is a module, so it needs a `require` as well as being on
+`package.path`, and nothing happens if you only do one of the two:
+
+```sh
+ln -s ~/Programming/df-hud/contrib/df-hud.lua ~/.config/hypr/conf.d/df-hud.lua
+```
+
+```lua
+require("df-hud")     -- in hyprland.lua, next to the other require lines
+```
+
+Then `hyprctl reload`, and `hyprctl binds -j | grep df-hud` to see the five binds.
+There is a stubbed-`hl` check for that file in
+[contrib/df-hud_spec.lua](contrib/df-hud_spec.lua), run by `go test`, because a
+mistake in it is otherwise only visible in the compositor's log.
+
 The tray menu offers the same three corrections, and the two stay in step: toggle
 the overlay from a key and the tray's tick follows.
 
@@ -88,13 +104,22 @@ Two things keep a pixel rectangle from being as fragile as it sounds:
   Every click you fire during play is therefore inert, and answered without
   asking the compositor anything.
 
-The bind itself is **armed only while the game is focused**. That part matters as
-much as the rest: a plain global bind on the left mouse button spawns a process on
-every click you make all day, in every application. Hyprland has no per-window
-bind filter, so [contrib/df-hud.lua](contrib/df-hud.lua) subscribes to
-`window.active` and calls `set_enabled` on the keybind - it does not exist while you
-are anywhere else. The `hyprland.conf` dialect cannot express that, which is worth
-knowing before copying the bind out of the other file.
+Two things then keep the bind from being a nuisance, because clicking is also how
+you shoot:
+
+- it is **armed only while the game is focused**. A plain global bind on the left
+  mouse button spawns a process on every click you make all day, in every
+  application. Hyprland has no per-window bind filter, so
+  [contrib/df-hud.lua](contrib/df-hud.lua) subscribes to `window.active` and calls
+  `set_enabled` on the keybind - it does not exist while you are anywhere else.
+- the dispatcher is a **Lua function rather than `exec`**, so it runs inside the
+  compositor and decides whether to spawn anything, and at most one report per
+  second leaves it. That limit loses nothing: the Start press is a single click,
+  and anything it drops was under a second behind a click df-hud has already
+  judged.
+
+The `hyprland.conf` dialect can express neither, which is worth knowing before
+copying the bind out of the other file.
 
 Rejected alternatives, both measured rather than assumed: the game's memory
 (`ptrace_scope` is 1, so it would need root or a machine-wide security change,
@@ -125,21 +150,28 @@ an unmatched window means the workspace rule quietly does nothing.
 
 Launching Dead Frontier means a launcher, then a Launch button, then a loading
 screen, then a Start button. Process uptime can therefore be minutes ahead of any
-playing, and a clock counting that is timing a loading screen — which is exactly
-what the first version did, and what it was reported for.
+playing, and a clock counting that is timing a loading screen, which is exactly
+what the first version did and what it was reported for.
 
-The signal is **movement**: the run starts at the first poll where the position
-changed. Nothing on the server moves your character while you are looking at a
-launcher, so it cannot fire early. Two things were tried and rejected:
+No single signal is reliable, so the clock starts on the first of several and each
+one is chosen so that being wrong makes it start *late* rather than early:
 
-- the process start time, wrong as described above
-- `df_inoutpost`, which was already `0` at the launcher, before Start was
-  pressed — so it does not mean "your character is docked at an outpost" the way
-  the name suggests. It is kept as an *end* condition only, where being wrong
-  stops a clock early rather than inventing playing time.
+- the click on Start, described above, which is the only thing that knows for
+  certain
+- **leaving an outpost**: not the value of `df_inoutpost` but the *edge*, the poll
+  where it went from set to clear. The value was already `0` at the launcher,
+  before Start was pressed, so it does not mean "your character is docked at an
+  outpost" the way the name suggests; the transition still does.
+- **movement or XP**, as backstops. Both can arrive a long way into a run, since a
+  whole loot run can happen inside one block and killing is not what you do first,
+  which is why neither is the primary signal.
 
-The clock is persisted with the game's process identity, so restarting df-hud
-mid-run resumes it instead of showing zero for a run that is an hour old.
+The clock ends on entering an outpost or dying, and is discarded when the game
+closes or relaunches. `SUPER + ALT + T` and the tray both restart it from now, for
+when it starts before you do.
+
+It is persisted with the game's process identity, so restarting df-hud mid-run
+resumes it instead of showing zero for a run that is an hour old.
 
 ## How it gets your session
 

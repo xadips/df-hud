@@ -273,6 +273,11 @@ type app struct {
 	// single goroutine, so it needs no lock.
 	lastRunStart time.Time
 
+	// lastMissedClick rate limits the "clicked in the window but not on the
+	// button" line, in unix nanoseconds. Atomic because clicks arrive on the
+	// bridge's handler goroutines.
+	lastMissedClick atomic.Int64
+
 	reloadMu       sync.Mutex
 	onConfigReload func(*Config)
 }
@@ -780,7 +785,25 @@ func (a *app) runClick() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	x, y, ok := hyprClient{}.PointerInWindow(ctx, cfg.Game.WindowMatch())
-	if !ok || !cfg.RunStart.ButtonContains(x, y) {
+	if !ok {
+		return
+	}
+	if !cfg.RunStart.ButtonContains(x, y) {
+		// The one case worth a line: the click was inside the game's own window,
+		// so this is either an ordinary click on something else or the configured
+		// rectangle being wrong - and those are indistinguishable without the
+		// coordinate. Printing it is how the rectangle gets calibrated, since the
+		// alternative is a silent failure that looks exactly like df-hud being
+		// broken.
+		//
+		// Bounded to one line every few seconds, and it can only happen before a
+		// run starts, which is a screen with very few things to click.
+		if logMissedClick(&a.lastMissedClick, time.Now(), missedClickInterval) {
+			log.Printf("session: a click at %d, %d in the game window was not on the Start button "+
+				"at %d, %d %dx%d - if that was Start, correct [run_start] in the config",
+				x, y, cfg.RunStart.ButtonX, cfg.RunStart.ButtonY,
+				cfg.RunStart.ButtonWidth, cfg.RunStart.ButtonHeight)
+		}
 		return
 	}
 	log.Printf("session: Start pressed (click at %d, %d in the game window)", x, y)
@@ -792,6 +815,24 @@ func (a *app) runClick() {
 // and so the guard order is testable.
 func runClickAllowed(cfg RunStartConfig, runInProgress, gameRunning bool) bool {
 	return cfg.ClickEnabled && gameRunning && !runInProgress
+}
+
+// missedClickInterval is how often the calibration line above may be printed.
+const missedClickInterval = 5 * time.Second
+
+// logMissedClick reports whether enough time has passed to print again, and claims
+// the slot if so. Compare-and-swap rather than a mutex because two clicks racing
+// here should produce one line, and the loser has nothing to wait for.
+func logMissedClick(last *atomic.Int64, now time.Time, every time.Duration) bool {
+	for {
+		prev := last.Load()
+		if prev != 0 && now.Sub(time.Unix(0, prev)) < every {
+			return false
+		}
+		if last.CompareAndSwap(prev, now.UnixNano()) {
+			return true
+		}
+	}
 }
 
 // persistRun stores the run clock's start, so a df-hud restart mid-run resumes

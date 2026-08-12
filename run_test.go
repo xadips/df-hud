@@ -2,6 +2,7 @@ package main
 
 import (
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -379,5 +380,22 @@ func TestRunClockIgnoresAnAlreadyZeroOutpostFlag(t *testing.T) {
 	}
 	if v := s.Derive(launch.Add(80 * time.Second)); v.HasSession {
 		t.Errorf("the clock started at the launcher again, at %s", v.SessionTime)
+	}
+}
+
+// The calibration line is bounded: a click storm before the run starts must not
+// fill the log, and the first click must not be swallowed by a zero-value clock.
+func TestLogMissedClick(t *testing.T) {
+	var last atomic.Int64
+	now := time.Date(2026, 8, 12, 20, 0, 0, 0, time.UTC)
+
+	if !logMissedClick(&last, now, 5*time.Second) {
+		t.Fatal("the first click must print; a zero last-time means nothing has been said yet")
+	}
+	if logMissedClick(&last, now.Add(4*time.Second), 5*time.Second) {
+		t.Error("a click inside the interval must be dropped")
+	}
+	if !logMissedClick(&last, now.Add(5*time.Second), 5*time.Second) {
+		t.Error("a click at the interval must print again")
 	}
 }

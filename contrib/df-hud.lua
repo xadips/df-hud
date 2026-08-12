@@ -21,10 +21,17 @@
 
 local endpoint = "http://127.0.0.1:9275"
 
+-- --max-time so a wedged listener cannot leave a curl per keypress lying around,
+-- and -o /dev/null so nothing is written anywhere.
+local function post_cmd(path)
+    return "curl -fsS --max-time 2 -o /dev/null -X POST " .. endpoint .. path
+end
+
+-- Two forms of the same call, because Hyprland has two: hl.dsp.exec_cmd builds a
+-- dispatcher for a bind, hl.exec_cmd runs a command now and is what a Lua
+-- dispatcher function has to use.
 local function post(path)
-    -- --max-time so a wedged listener cannot leave a curl per keypress lying
-    -- around, and -o /dev/null so nothing is written anywhere.
-    return hl.dsp.exec_cmd("curl -fsS --max-time 2 -o /dev/null -X POST " .. endpoint .. path)
+    return hl.dsp.exec_cmd(post_cmd(path))
 end
 
 -- SUPER + ALT is used because the game itself uses the function keys, and because
@@ -60,21 +67,45 @@ hl.bind("SUPER + ALT + C", post("/api/console/toggle"), { description = "df-hud:
 -- window, with no run already in progress. Configure the rectangle under
 -- [run_start] in df-hud's config; the default is measured at 2560x1440.
 --
--- The bind is ENABLED ONLY WHILE THE GAME IS FOCUSED, which is the difference
--- between this being usable and being a nuisance: a plain global bind on the left
--- mouse button spawns a curl on every click you make all day, in every
--- application. Hyprland has no per-window bind filter, so it is done with an event
--- subscription and set_enabled - the bind simply does not exist while you are
--- anywhere else.
+-- Two things keep this from being a nuisance, because clicking is also how you
+-- shoot and a plain global bind on the left mouse button would fork a curl several
+-- times a second all day, in every application:
 --
--- Set catch_start_button to true to use it. Even then it fires on every click
--- inside the game, which is also how you shoot: each costs one curl while no run
--- is in progress, and nothing at all once one is, because df-hud answers those
--- immediately without asking the compositor anything.
-local catch_start_button = false
+--   1. The bind EXISTS ONLY WHILE THE GAME IS FOCUSED. Hyprland has no per-window
+--      bind filter, so it is done with an event subscription and set_enabled - the
+--      bind simply is not there while you are anywhere else.
+--   2. The dispatcher is a FUNCTION rather than exec_cmd, so it runs inside the
+--      compositor and decides whether to spawn anything, and at most one report
+--      per second leaves the compositor.
+--
+-- One per second loses nothing. The Start press is a single click, and any click
+-- dropped by that limit was under a second behind one df-hud has already judged -
+-- so the only way to miss the button is to press it twice in one second, by which
+-- point the clock is already running.
+--
+-- Set catch_start_button to false to do without it and start the clock with
+-- SUPER + ALT + T instead.
+local catch_start_button = true
 
 if catch_start_button then
-    local catch = hl.bind("mouse:272", post("/api/run/click"), {
+    local report = post_cmd("/api/run/click")
+
+    -- os.time has one-second granularity, which is exactly the resolution wanted
+    -- here. It is checked for existence rather than assumed: an embedded Lua
+    -- without the os library should lose the rate limit, not the whole feature.
+    local last = 0
+    local function throttled()
+        if os and os.time then
+            local now = os.time()
+            if now == last then
+                return
+            end
+            last = now
+        end
+        hl.exec_cmd(report)
+    end
+
+    local catch = hl.bind("mouse:272", throttled, {
         non_consuming = true,
         click = true,
         description = "df-hud: catch the Start button",
