@@ -32,22 +32,83 @@ import (
 //
 // Hyprland moved these from /tmp/hypr to $XDG_RUNTIME_DIR/hypr, so both are
 // checked, the runtime dir first.
+// hyprDirs is a variable so tests can point it at a temporary directory. Without
+// that they would find the real compositor on the developer's own machine, which is
+// exactly the thing this function is now allowed to do.
+var hyprDirs = hyprInstanceDirs
+
 func hyprSocketPath(name string) (string, error) {
-	sig := os.Getenv("HYPRLAND_INSTANCE_SIGNATURE")
-	if sig == "" {
-		return "", errors.New("HYPRLAND_INSTANCE_SIGNATURE is unset (not running under Hyprland)")
-	}
 	var candidates []string
-	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
-		candidates = append(candidates, filepath.Join(runtimeDir, "hypr", sig, name))
+	dirs := hyprDirs()
+	if sig := os.Getenv("HYPRLAND_INSTANCE_SIGNATURE"); sig != "" {
+		for _, dir := range dirs {
+			candidates = append(candidates, filepath.Join(dir, sig, name))
+		}
 	}
-	candidates = append(candidates, filepath.Join("/tmp", "hypr", sig, name))
 	for _, path := range candidates {
 		if _, err := os.Stat(path); err == nil {
 			return path, nil
 		}
 	}
+	// The environment was absent or stale, so look for the running compositor
+	// instead. This is what makes df-hud work as a systemd user service: the
+	// signature changes every time Hyprland starts, and a service inherits
+	// whatever was imported into the session environment, which after a compositor
+	// restart is last time's value.
+	//
+	// ONLY when exactly one instance is running. With two, there is no way to tell
+	// which one asked for the HUD, and picking one would mean reading the wrong
+	// compositor's window list - which is worse than failing open, because it looks
+	// like an answer.
+	if sock, found, err := loneHyprSocket(dirs, name); err == nil && found {
+		return sock, nil
+	}
+	if len(candidates) == 0 {
+		return "", errors.New("HYPRLAND_INSTANCE_SIGNATURE is unset and no single running " +
+			"Hyprland instance was found")
+	}
 	return "", fmt.Errorf("no Hyprland socket %s (looked in %s)", name, strings.Join(candidates, ", "))
+}
+
+// hyprInstanceDirs is where Hyprland keeps its per-instance sockets, runtime dir
+// first. It moved these from /tmp/hypr to $XDG_RUNTIME_DIR/hypr, so both are
+// checked.
+func hyprInstanceDirs() []string {
+	var dirs []string
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		dirs = append(dirs, filepath.Join(runtimeDir, "hypr"))
+	}
+	return append(dirs, filepath.Join("/tmp", "hypr"))
+}
+
+// loneHyprSocket finds the named socket when exactly one instance directory has
+// one. found is false when there is none or more than one.
+func loneHyprSocket(dirs []string, name string) (path string, found bool, err error) {
+	for _, dir := range dirs {
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			continue
+		}
+		var hits []string
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			candidate := filepath.Join(dir, e.Name(), name)
+			if _, statErr := os.Stat(candidate); statErr == nil {
+				hits = append(hits, candidate)
+			}
+		}
+		switch len(hits) {
+		case 0:
+			continue
+		case 1:
+			return hits[0], true, nil
+		default:
+			return "", false, fmt.Errorf("%d Hyprland instances are running, so which one to ask is ambiguous", len(hits))
+		}
+	}
+	return "", false, nil
 }
 
 // hyprRequest runs one command and returns the raw reply. The protocol is as

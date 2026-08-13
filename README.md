@@ -463,13 +463,49 @@ The first build compiles gotk4, which is large and single-package, so expect
 several minutes; rebuilds are a few seconds.
 
 ```sh
-go build -o df-hud .
+make            # go build, with the commit stamped into -version
 ./df-hud -check-config
 ./df-hud
 ```
 
 `go build -tags nolayershell` builds the headless core with no GTK at all, for
-CI or a machine with no Wayland.
+CI or a machine with no Wayland. `make check` is everything CI runs: `gofmt`,
+`go vet`, `go test -race`, and that headless build.
+
+## Running it
+
+```sh
+make install    # binary to ~/.local/bin, unit to ~/.config/systemd/user
+make enable     # start it, and at every login from now on
+make logs       # journalctl -f
+```
+
+A **systemd user service**, not a terminal you have to keep open and not an
+`exec-once` in `hyprland.conf`. What that buys, in the order it matters:
+
+- **It comes back.** `Restart=on-failure`, and five failures in a minute is taken
+  as a broken config rather than something to retry forever - a restart loop
+  buries the reason in a thousand identical journal entries.
+- **The logs are somewhere.** `journalctl --user -u df-hud` has yesterday's, which
+  is what makes "why did that take five seconds" a question you can answer.
+- **Its lifetime is the compositor's.** `PartOf=graphical-session.target`, so it
+  starts with Hyprland and stops with it. A leftover df-hud with no compositor
+  would sit there failing to find one, once a second, until you noticed.
+- **The running binary is not the one you are editing.** `make install` copies to
+  `~/.local/bin`; rebuilding under a running process otherwise leaves it holding
+  the old inode, so the log claims one version and the file on disk is another.
+
+`systemctl --user reload df-hud` re-reads the config **without restarting**, so the
+run clock and the XP window survive - SIGHUP is handled for exactly that reason,
+since its default disposition is to terminate and a "reload" that kills the daemon
+is not a reload. A restart is safe too: the run is tied to the game's own process
+and resumes rather than starting from zero.
+
+`make restart` rebuilds, reinstalls and restarts in one step, which is the edit
+loop while working on df-hud itself.
+
+Nothing here is required. `./df-hud` from a terminal still works and is still the
+right way to try a change before installing it.
 
 ## Configuration
 

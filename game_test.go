@@ -400,14 +400,62 @@ func TestGameWatcherPokeCoalesces(t *testing.T) {
 	}
 }
 
-func TestHyprSocketPathNeedsTheSignature(t *testing.T) {
+// The socket is found by the signature when there is one, and by looking for the
+// running compositor when there is not - which is what lets df-hud run as a systemd
+// user service, since the signature changes on every compositor start and a service
+// inherits whatever was imported into the session environment last time.
+func TestHyprSocketPath(t *testing.T) {
+	// Pointed at a temporary directory, or this would find the real Hyprland on
+	// the machine running the test.
+	root := t.TempDir()
+	old := hyprDirs
+	hyprDirs = func() []string { return []string{root} }
+	t.Cleanup(func() { hyprDirs = old })
+
+	instance := func(sig string) string {
+		dir := filepath.Join(root, sig)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, ".socket2.sock")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	// Nothing running at all: an error, never a guessed path.
 	t.Setenv("HYPRLAND_INSTANCE_SIGNATURE", "")
 	if _, err := hyprSocketPath(".socket2.sock"); err == nil {
-		t.Error("without HYPRLAND_INSTANCE_SIGNATURE this must fail, not guess a path")
+		t.Error("with no compositor and no signature this must fail, not guess a path")
 	}
-	t.Setenv("HYPRLAND_INSTANCE_SIGNATURE", "nonexistent-signature")
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	if _, err := hyprSocketPath(".socket2.sock"); err == nil {
-		t.Error("a signature with no socket on disk must fail")
+
+	want := instance("real-signature")
+
+	// The signature names it.
+	t.Setenv("HYPRLAND_INSTANCE_SIGNATURE", "real-signature")
+	if got, err := hyprSocketPath(".socket2.sock"); err != nil || got != want {
+		t.Errorf("with the signature set: (%q, %v), want %q", got, err, want)
+	}
+
+	// A STALE signature still finds the one instance that is running. This is the
+	// service case, and the reason any of this exists.
+	t.Setenv("HYPRLAND_INSTANCE_SIGNATURE", "last-time-i-was-started")
+	if got, err := hyprSocketPath(".socket2.sock"); err != nil || got != want {
+		t.Errorf("with a stale signature: (%q, %v), want the running instance %q", got, err, want)
+	}
+
+	// Two instances and a signature that matches neither: no answer. Picking one
+	// would mean reading the wrong compositor's window list, which is worse than
+	// failing open, because it looks like an answer.
+	instance("a-second-compositor")
+	if got, err := hyprSocketPath(".socket2.sock"); err == nil {
+		t.Errorf("with two instances running this must not choose one, got %q", got)
+	}
+
+	// Unless the signature says which, in which case there is no ambiguity.
+	t.Setenv("HYPRLAND_INSTANCE_SIGNATURE", "a-second-compositor")
+	if _, err := hyprSocketPath(".socket2.sock"); err != nil {
+		t.Errorf("a signature naming one of two instances should resolve: %v", err)
 	}
 }

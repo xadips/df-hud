@@ -25,7 +25,12 @@ const namespace = "df-hud"
 // version is reported by /healthz, -version and the User-Agent. It stays a dev
 // string until there is a release process, rather than claiming a version
 // number nothing produces.
-const version = "0.1.0-dev"
+//
+// A var rather than a const so `make` can stamp the commit into it
+// (-ldflags -X only works on variables). That matters once df-hud runs as a
+// service: "which build is actually running" is otherwise unanswerable, and a
+// plain `go build` still gives the honest default below.
+var version = "0.1.0-dev"
 
 func main() {
 	// Time only, no date: this log is read while something is happening, and
@@ -620,6 +625,7 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 	if a.watcher != nil {
 		go a.watcher.Run(ctx, a.Config, a.applyReload)
 	}
+	go a.reloadOnSIGHUP(ctx)
 	if opts.printView || opts.printHUD {
 		go a.printLoop(ctx, opts)
 	}
@@ -750,9 +756,31 @@ func (a *app) applyReload(next *Config, _ []string) {
 	log.Print("config: reloaded")
 }
 
-// reloadConfig re-reads the file on demand, for the tray menu. The watcher
-// already reloads on every save; this is for when a save produced no event, which
-// happens on some network and bind-mounted home directories.
+// reloadOnSIGHUP is `systemctl --user reload df-hud`, and the same thing by hand.
+//
+// It has to be handled rather than left alone: the default disposition for SIGHUP
+// is to terminate, so a unit file with an ExecReload of kill -HUP would KILL the
+// HUD - a "reload" that loses the run clock and the XP window is not a reload. A
+// restart is always available for the fields that need one; this is for the ones
+// that do not.
+func (a *app) reloadOnSIGHUP(ctx context.Context) {
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-hup:
+			log.Print("config: SIGHUP")
+			a.reloadConfig()
+		}
+	}
+}
+
+// reloadConfig re-reads the file on demand, for the tray menu and SIGHUP. The
+// watcher already reloads on every save; this is for when a save produced no event,
+// which happens on some network and bind-mounted home directories.
 func (a *app) reloadConfig() {
 	next, frozen, err := reloadFrom(a.cfgPath, a.Config())
 	if err != nil {
