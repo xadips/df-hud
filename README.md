@@ -294,10 +294,16 @@ coordinates. When the walk is longer than the directions add up to, the row says
 nearest 3 up 1 left, 8 blocks  1015, 1024
 ```
 
-Because **up is inferred, not verified.** DFProfiler's map is an HTML table whose
-rows are `y`, so the smallest `y` renders topmost, which means `y` decreasing is up
-the screen. That is the one claim here that could send someone the wrong way, and
-the coordinates beside it are the check: walk one block and see which number moves.
+**Up is `y` decreasing**, which was the one claim here that could have sent someone
+the wrong way. It started as an inference - DFProfiler's map is an HTML table whose
+rows are `y`, so the smallest `y` renders topmost - and was checked in the game on
+2026-08-13 by walking one block north and watching the second coordinate fall. The
+coordinates stay beside the words regardless, since they are what the game's own
+readout shows.
+
+That also settles the map's orientation: [citymap.txt](citymap.txt) is stored with
+`y` increasing downwards and drawn the same way, so north on the overlay is north in
+the game.
 
 Anything more than a dozen blocks away is not reported - it would be furniture
 rather than information - and `show_nearest = false` turns it off.

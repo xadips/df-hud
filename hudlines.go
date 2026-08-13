@@ -157,10 +157,11 @@ const nearestReportRange = 12
 // 2 left, 9 blocks" - since that difference is the whole reason the direct line is
 // not the route, and hiding it would be the same lie as before, told more precisely.
 //
-// UP IS y DECREASING. That is inferred rather than verified - DFProfiler's map is
-// an HTML table whose rows are y, so the smallest y renders topmost (bossmap.js) -
-// and it is the one claim here that could send someone the wrong way. The
-// coordinates beside it are the check: walk one block and see which number moves.
+// UP IS y DECREASING. Verified in the game on 2026-08-13 by walking one block and
+// watching the second coordinate fall - it had until then been inferred from
+// DFProfiler's map being an HTML table whose rows are y, which was the one claim in
+// this file that could have sent someone the wrong way. The coordinates stay beside
+// the words anyway, since they are also what the game's own readout shows.
 func nearestLine(v *View, cfg BossesWidgetConfig) (string, bool) {
 	if !cfg.ShowNearest || !v.HaveData || !v.HasNearest {
 		return "", false

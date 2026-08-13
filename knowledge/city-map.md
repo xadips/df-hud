@@ -46,6 +46,16 @@ df-hud already depends on their bossmap feed; credit is in the README.
 Each of these is in `citymap_test.go`, so a regenerated map that breaks one of them
 fails the build rather than quietly changing where df-hud sends you.
 
+## Orientation: `y` increases southwards
+
+**Verified in the game 2026-08-13** by walking one block north and watching
+`df_positiony` fall. Until then it was an inference from their map being an HTML
+table whose rows are `y`, which put the smallest `y` at the top.
+
+So the file is stored with `y` increasing downwards, the grid is drawn the same way,
+and "up" in the HUD's `nearest 3 up 1 left` means north in the game. This was the
+last unverified claim that could have sent someone the wrong way.
+
 ## What is in the file
 
 - `origin` and `size`: the bounding box, so a coordinate is an index.
