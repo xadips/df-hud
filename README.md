@@ -48,7 +48,7 @@ is yours:
 | `POST /api/xp/reset` | start the xp/hr average again from now |
 | `POST /api/overlay/toggle` | show or hide the overlay by hand |
 | `POST /api/widget/<group>/toggle` | show or hide one group: `block`, `bosses`, `session`, `xp`, `challenges`, `map` |
-| `POST /api/console/toggle` | the console window - **not built yet**, answers 503 |
+| `POST /api/console/toggle` | the console window - **not built yet**, answers 503, and has no default bind |
 | `POST /api/run/click` | a click that *might* be the game's Start button |
 
 Ready-made, with the layer rules: [contrib/df-hud.lua](contrib/df-hud.lua) for
@@ -67,7 +67,7 @@ ln -s ~/Programming/df-hud/contrib/df-hud.lua ~/.config/hypr/conf.d/df-hud.lua
 require("df-hud")     -- in hyprland.lua, next to the other require lines
 ```
 
-Then `hyprctl reload`, and `hyprctl binds -j | grep df-hud` to see the seven binds.
+Then `hyprctl reload`, and `hyprctl binds -j | grep df-hud` to see the six binds.
 There is a stubbed-`hl` check for that file in
 [contrib/df-hud_spec.lua](contrib/df-hud_spec.lua), run by `go test`, because a
 mistake in it is otherwise only visible in the compositor's log.
@@ -310,7 +310,7 @@ rather than information - and `show_nearest = false` turns it off.
 
 ## The city map
 
-`SUPER + ALT + M` draws the whole city: one cell per block, shaded by difficulty
+`SUPER + ALT + D` draws the whole city: one cell per block, shaded by difficulty
 band the way DFProfiler's own map shades it, the gaps left empty, the district
 lines heavier, an identifier on every active event and a white ring on the block
 you are standing on.
@@ -323,6 +323,10 @@ you are standing on.
     |  g n 4 i mark what is standing where  |             1 x Mega Mother
     +---------------------------------------+   i 6m24s  4 x Evolved Longarms
 ```
+
+Not on `M`, which is the game's own map key. A consuming compositor bind should mean
+the game never sees the keypress, but a client that polls raw key state does not care
+what else is held down, so the letter is chosen to be one the game does nothing with.
 
 **It starts hidden**, and the key brings it up. That is not the same as
 `enabled = false`: this is something you summon to decide where to walk and dismiss

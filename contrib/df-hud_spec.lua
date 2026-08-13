@@ -83,8 +83,7 @@ local want = {
     ["SUPER + ALT + X"] = "/api/xp/reset",
     ["SUPER + ALT + K"] = "/api/overlay/toggle",
     ["SUPER + ALT + B"] = "/api/widget/challenges/toggle",
-    ["SUPER + ALT + M"] = "/api/widget/map/toggle",
-    ["SUPER + ALT + C"] = "/api/console/toggle",
+    ["SUPER + ALT + D"] = "/api/widget/map/toggle",
 }
 for keys, path in pairs(want) do
     local b = find_bind(keys)

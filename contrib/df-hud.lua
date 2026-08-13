@@ -36,6 +36,11 @@ end
 
 -- SUPER + ALT is used because the game itself uses the function keys, and because
 -- everything under it is free here except SUPER + ALT + R.
+--
+-- The LETTER still matters even under two modifiers. The map was on M, which is the
+-- game's own map key: a consuming compositor bind should stop the game ever seeing
+-- the keypress, but a client that polls raw key state does not care what else is
+-- held down, so the safe choice is a letter the game does nothing with. Hence D.
 
 -- Start the run clock from now.
 --
@@ -68,11 +73,13 @@ hl.bind("SUPER + ALT + B", post("/api/widget/challenges/toggle"),
 --
 -- Same endpoint as every other group, because it IS another group: it inherits the
 -- HUD's click-through, so the mouse still reaches the game through it.
-hl.bind("SUPER + ALT + M", post("/api/widget/map/toggle"),
+hl.bind("SUPER + ALT + D", post("/api/widget/map/toggle"),
     { description = "df-hud: toggle the city map" })
 
--- The console window, once it exists.
-hl.bind("SUPER + ALT + C", post("/api/console/toggle"), { description = "df-hud: console" })
+-- No bind for /api/console/toggle. The console does not exist yet - the endpoint
+-- answers 503 - and SUPER + C is the window kill in this config, so a neighbouring
+-- SUPER + ALT + C is a keystroke away from closing something. Bind it when there is
+-- something to open.
 
 -- OPTIONAL: start the run clock from the game's own Start button.
 --
