@@ -353,6 +353,60 @@ prefix = "Xp/Hr: "
 window = "5m"
 min_samples = 3
 
+[widget.map]
+# The whole city as a grid, shaded the way DFProfiler's own map shades it: one cell
+# per block, the gaps left empty because they are not places, the district lines
+# heavier, an identifier on every active event and a ring on the block you are
+# standing on.
+#
+# IT STARTS HIDDEN. SUPER + ALT + M brings it up (POST /api/widget/map/toggle).
+# That is not the same as enabled = false: this is a thing you summon to decide
+# where to walk and dismiss ten seconds later, and a thousand pixels of city permanently
+# over the game would not be a HUD, it would be a wall. Turning enabled off costs
+# you the key as well.
+#
+# It is a widget group like any other, so the mouse still passes through it to the
+# game - which is why it has no hover: a map you can point at would be a map that
+# eats the clicks you shoot with.
+enabled = true
+
+# Centre the grid on the monitor, ignoring x/y below. On by default: the right
+# coordinate depends on both the monitor and cell_size - the grid is 1003 wide at
+# 17px and 1062 at 18px - so a number here would have to be recomputed by hand
+# every time either changed.
+center = true
+
+# Where the top-left of the grid goes when center = false.
+x = 700
+y = 240
+
+# Pixels per block. 59x55 cells, so 17 gives 1003x935 and 18 - the size their own
+# map uses - gives 1062x990. Minimum 6, below which a marker is unreadable and the
+# thing is a coloured smear.
+#
+# Centring means this is the only number to change to resize the map: the position
+# follows from it.
+cell_size = 17
+
+# Multiplies the map's own alpha, which is already partial (0.7, their value), so
+# the game shows through the city. The markers are NOT faded: the point is to see
+# through the map, not to make the writing on it hard to read.
+opacity = 1.0
+
+# The key beside the grid - which identifier is what, how far away it is to walk,
+# how long is left. Without it the digits in the cells mean nothing.
+#
+# Sorted nearest first, because the question is not "what is on the map" but "what
+# can I get to". max_listed caps it, 0 for no cap, and what is dropped is counted
+# rather than silently left out.
+show_list = true
+max_listed = 20
+
+# Font and colour for that list. Empty inherits from [hud].
+font_family = ""
+font_size = 0
+color = "#e8e8e8"
+
 [widget.challenges]
 # The whole board, in the board's own order.
 enabled = true
@@ -435,12 +489,11 @@ urgent_within = "2h"
 # problem.
 
 [console]
-# NOT BUILT YET. /api/console/toggle answers 503 and the key does nothing; these
-# two settings are read and validated so that the size is yours when it lands.
+# NOT BUILT YET. /api/console/toggle answers 503; these two settings are read and
+# validated so the size is yours when it lands.
 #
-# The console is to be an ordinary window (not an overlay), for the things a
-# click-through HUD cannot do: the full challenge list with every objective, the
-# whole boss map, diagnostics. The keybind is already in contrib/df-hud.lua
-# (SUPER + ALT + C) - not a function key, since the game uses those itself.
+# An ordinary window, for what a HUD group cannot be: the full challenge list with
+# every objective, and diagnostics. The city map did not need it - see
+# [widget.map], which is an overlay group like everything else.
 width = 720
 height = 560

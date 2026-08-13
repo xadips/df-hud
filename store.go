@@ -751,11 +751,16 @@ type View struct {
 	// than the deltas suggest, which is how the row can admit that the direct line
 	// is not walkable.
 	HasNearest              bool
-	NearestEvent            CityEvent
+	NearestLabel            string
 	NearestDX, NearestDY    int
 	NearestX, NearestY      int
 	NearestDistanceInBlocks int
 	NearestDetour           int
+
+	// CityMarks is every active event on the whole map, which is what the map group
+	// draws. The nearest one above is chosen from this list rather than found
+	// separately, so the marker you see and the row you read cannot disagree.
+	CityMarks []CityMark
 	// BossMapAge is how stale the event feed is, so a widget can decline to
 	// claim a block is clear on the strength of an hour-old fetch.
 	BossMapAge time.Duration
@@ -853,18 +858,33 @@ func (s *Store) Derive(now time.Time) *View {
 				// city the cycle is an hour and the previous boss is gone.
 				v.BlockEventsPast = s.bossMap.AtEnded(v.PositionX, v.PositionY, now)
 			}
-			// Only when your own block is empty. With something in front of you, the
-			// nearest OTHER thing is a distraction.
-			// v.InOutpost rather than the snapshot, which is out of scope here: the
-			// view already carries it and they are the same value.
-			if len(v.BlockEvents) == 0 && !v.InOutpost {
-				if e, walk, ok := s.bossMap.NearestEvent(v.PositionX, v.PositionY, now); ok {
-					v.HasNearest, v.NearestEvent = true, e
-					v.NearestDX, v.NearestDY = walk.DX, walk.DY
-					v.NearestX, v.NearestY = v.PositionX+walk.DX, v.PositionY+walk.DY
-					v.NearestDistanceInBlocks = walk.Blocks
-					v.NearestDetour = walk.Detour
-				}
+		}
+		// Every active event, for the map group - and the source the nearest one is
+		// picked from, so a marker on the map and the row on the HUD can never
+		// disagree about what is out there or how far it is.
+		//
+		// One breadth-first search, shared: it is what makes distances to a dozen
+		// bosses cost the same as a distance to one.
+		var from [2]int
+		var dist []int32
+		if v.HasPosition && theCity.IsBlock(v.PositionX, v.PositionY) {
+			from = [2]int{v.PositionX, v.PositionY}
+			dist = theCity.walkDistances(v.PositionX, v.PositionY)
+		}
+		v.CityMarks = s.bossMap.ActiveMarks(now, from, dist)
+
+		// Only when your own block is empty. With something in front of you, the
+		// nearest OTHER thing is a distraction.
+		// v.InOutpost rather than the snapshot, which is out of scope here: the
+		// view already carries it and they are the same value.
+		if v.HasPosition && len(v.BlockEvents) == 0 && !v.InOutpost {
+			if m, ok := nearestMark(v.CityMarks); ok {
+				v.HasNearest = true
+				v.NearestLabel = m.Label
+				v.NearestDX, v.NearestDY = m.Walk.DX, m.Walk.DY
+				v.NearestX, v.NearestY = m.X, m.Y
+				v.NearestDistanceInBlocks = m.Walk.Blocks
+				v.NearestDetour = m.Walk.Detour
 			}
 		}
 	}

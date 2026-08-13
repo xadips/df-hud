@@ -437,6 +437,29 @@ func (h *hud) sizeToMonitor(monitor *gdk.Monitor) {
 	width, height := geometry.Width(), geometry.Height()
 	if width > 0 && height > 0 {
 		h.window.SetDefaultSize(width, height)
+		h.centreGroups(width, height)
+	}
+}
+
+// centreGroups puts the groups that asked to be centred in the middle of the
+// monitor, which cannot be done from the config: a coordinate in a file would have
+// to be recomputed by hand for every monitor and every cell size, and the map is
+// a thousand pixels wide at one setting and eight hundred at another.
+//
+// Done here because this is where the monitor's size becomes known - it is also why
+// it is re-done on every remap, since the HUD can move between monitors.
+func (h *hud) centreGroups(width, height int) {
+	for _, placed := range h.widgets {
+		centred, ok := placed.w.(interface {
+			Centered() bool
+			NaturalSize() (int, int)
+		})
+		if !ok || !centred.Centered() {
+			continue
+		}
+		w, hh := centred.NaturalSize()
+		x, y := (width-w)/2, (height-hh)/2
+		h.fixed.Move(placed.w.Root(), float64(max(x, 0)), float64(max(y, 0)))
 	}
 }
 

@@ -68,6 +68,14 @@ window label.expiring {
 window label.board-gap {
   margin-top: 6px;
 }
+/* The map's key gets a TIGHT outline instead of the glow above.
+   The 4px blur is right for a handful of large readings over a moving game, and
+   wrong for a dozen close-set rows: every letter's halo lands on its neighbours and
+   the whole block turns into a smear with a glow around it. The 1px offsets still
+   carry it over a bright scene. */
+.group-map label {
+  text-shadow: 1px 1px 0 #000, -1px 0 0 #000, 0 -1px 0 #000;
+}
 /* What is on your block. Amber because it is a warning rather than a failure;
    an outpost attack is map-wide and gets the red. */
 window label.threat {
@@ -104,6 +112,7 @@ func groupStyles(cfg *Config) []groupStyle {
 		{name: "session", place: cfg.Widget.Session.Placement, color: cfg.Widget.Session.Color},
 		{name: "xp", place: cfg.Widget.XP.Placement, color: cfg.Widget.XP.Color},
 		{name: "challenges", place: cfg.Widget.Challenges.Placement, color: cfg.Widget.Challenges.Color},
+		{name: "map", place: cfg.Widget.Map.Placement, color: cfg.Widget.Map.Color},
 	}
 }
 

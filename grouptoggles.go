@@ -23,7 +23,11 @@ type groupToggles struct {
 }
 
 func newGroupToggles() *groupToggles {
-	return &groupToggles{hidden: map[string]bool{}}
+	t := &groupToggles{hidden: map[string]bool{}}
+	for _, name := range hiddenAtStart() {
+		t.hidden[name] = true
+	}
+	return t
 }
 
 // toggleableGroups is every group a key may hide.
@@ -32,8 +36,17 @@ func newGroupToggles() *groupToggles {
 // do its job, and a hidden one leaves the HUD looking simply broken. It is also
 // invisible unless something is wrong, so there is nothing to hide.
 func toggleableGroups() []string {
-	return []string{"block", "bosses", "session", "xp", "challenges"}
+	return []string{"block", "bosses", "session", "xp", "challenges", "map"}
 }
+
+// hiddenAtStart is the groups that begin hidden even though they are enabled.
+//
+// Only the map, and it is the exception that proves the rule about not persisting
+// these: the map is a thousand pixels of city, which is a thing you summon to decide where
+// to walk and dismiss ten seconds later. Permanently over the game it would not be a
+// HUD, it would be a wall. Every other group is small enough to earn its place by
+// default, so `enabled` is the only question they need.
+func hiddenAtStart() []string { return []string{"map"} }
 
 func knownGroup(name string) bool {
 	for _, g := range toggleableGroups() {

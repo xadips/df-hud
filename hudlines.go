@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -854,3 +855,172 @@ func hudLines(v *View, cfg *Config) []string {
 	}
 	return lines
 }
+
+// outpostLetters is the identifier each outpost is drawn with on the map, taken from
+// DFProfiler's own legend so that anyone who knows their map can read this one.
+var outpostLetters = map[string]string{
+	"Nastya's Holdout": "N",
+	"Dogg's Stockade":  "D",
+	"Precinct 13":      "P",
+	"Fort Pastor":      "F",
+	"Secronom Bunker":  "S",
+	"Valcrest":         "C",
+	"Ground Zero":      "Z",
+}
+
+// mapRow is one line of the key beside the map.
+//
+// Marker and Timer are set on an entry's first row and empty on its continuations,
+// which are indented under it. Three fields rather than one string because each is
+// styled differently, and because the column they line up in only works if the
+// renderer knows where one ends and the next begins.
+type mapRow struct {
+	Marker string
+	Timer  string
+	Text   string
+	Sub    bool
+}
+
+// mapListLines is the key beside the map: which marker is what, and how long is left.
+//
+// It exists because the markers on the grid cannot say what they are. A letter in a
+// cell is only meaningful next to a list, and the list is also the only place a
+// countdown will fit.
+//
+// ONE ENTRY PER EVENT, not per marked block. The feed puts the same bandit pack on a
+// dozen blocks at once - 185 marks from 30 events in one live capture - so a row each
+// made the list "+173 more" and told you nothing, with the same enemies and the same
+// countdown repeated a dozen times.
+//
+// Entries are still ORDERED by the nearest of their blocks, so the top of the list is
+// what you could reach, but the distance itself is not written: the map is where you
+// see where something is, and a number of blocks beside every row was a column of
+// figures nobody reads.
+//
+// One line per event when there is one enemy type, which is most of them. A nest
+// carries up to seven, and those get a row each - as a joined label it is 140
+// characters and runs off the side of the screen, taking the dangerous part with it.
+func mapListLines(v *View, cfg MapWidgetConfig) []mapRow {
+	if len(v.CityMarks) == 0 {
+		return nil
+	}
+
+	// Collapse to the nearest mark per event, keeping the feed's order for the ones
+	// that cannot be compared.
+	order := make([]string, 0, len(v.CityMarks))
+	best := map[string]CityMark{}
+	for _, m := range v.CityMarks {
+		prev, seen := best[m.Marker]
+		if !seen {
+			order = append(order, m.Marker)
+			best[m.Marker] = m
+			continue
+		}
+		if closer(m, prev) {
+			best[m.Marker] = m
+		}
+	}
+	entries := make([]CityMark, 0, len(order))
+	for _, marker := range order {
+		entries = append(entries, best[marker])
+	}
+	sort.SliceStable(entries, func(i, j int) bool { return closer(entries[i], entries[j]) })
+
+	var rows []mapRow
+	for i, m := range entries {
+		if cfg.MaxListed > 0 && i == cfg.MaxListed {
+			// Said rather than silently dropped: a list that stops without saying so
+			// reads as "that is everything", which is the one thing it is not.
+			rows = append(rows, mapRow{Text: fmt.Sprintf("+%d more", len(entries)-i)})
+			break
+		}
+		names := m.Enemies
+		if len(names) == 0 {
+			// A mission or a QRF, whose name is the thing worth saying.
+			names = []string{m.Label}
+		}
+		head := mapRow{Marker: m.Marker, Timer: mapTimer(m), Text: names[0]}
+		rows = append(rows, head)
+		for _, enemy := range names[1:] {
+			rows = append(rows, mapRow{Text: enemy, Sub: true})
+		}
+	}
+	return rows
+}
+
+// closer orders two marks by how far they are to walk: reachable before not,
+// on-map before off, and neither if there is nothing to choose between them (which
+// leaves the feed's own order in place).
+func closer(a, b CityMark) bool {
+	if a.OffMap != b.OffMap {
+		return b.OffMap
+	}
+	if a.Reachable != b.Reachable {
+		return a.Reachable
+	}
+	if a.Reachable && b.Reachable {
+		return a.Walk.Blocks < b.Walk.Blocks
+	}
+	return false
+}
+
+// mapTimer is how long is left, or where it is when that is the surprising part:
+// Onslaught is a real coordinate in the same space but not a place on this map, so a
+// row that said nothing about it would look like somewhere you could walk.
+func mapTimer(m CityMark) string {
+	timer := ""
+	if m.EndsIn > 0 {
+		timer = formatCountdown(m.EndsIn)
+	}
+	if m.OffMap {
+		if timer == "" {
+			return "Onslaught"
+		}
+		return timer + " Onslaught"
+	}
+	return timer
+}
+
+// mapListMarkup is the same list, styled: the marker in its own colour so the eye can
+// tie a row to a cell on the grid, the countdown dimmed, the name plain.
+//
+// The marker needs a colour of its own rather than just bold. It is the only thing on
+// the row that also appears on the map, and a bold letter in a column of bold letters
+// is not something you can find at a glance while a boss walks towards you.
+func mapListMarkup(v *View, cfg MapWidgetConfig) string {
+	rows := mapListLines(v, cfg)
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		var b strings.Builder
+		switch {
+		case r.Marker != "":
+			// A chip, not just a colour. A thin cyan glyph one character wide, over
+			// whatever the game happens to be showing, was unreadable - and this is
+			// the one character on the row that has to be legible, because it is
+			// what ties the row to a cell on the grid. A dark box behind it gives it
+			// its own background to be bright against.
+			b.WriteString(`<span background="` + mapMarkerChip + `" foreground="` +
+				mapMarkerColor + `"><b>` + escapeMarkup(r.Marker) + "</b></span> ")
+			if r.Timer != "" {
+				b.WriteString(`<span alpha="78%">` + escapeMarkup(r.Timer) + "</span>  ")
+			}
+			b.WriteString(escapeMarkup(r.Text))
+		case r.Sub:
+			// Indented to the width of the marker and the countdown, so a nest reads
+			// as one thing rather than as several unrelated rows.
+			b.WriteString("        " + escapeMarkup(r.Text))
+		default:
+			b.WriteString(`<span alpha="60%">` + escapeMarkup(r.Text) + "</span>")
+		}
+		out = append(out, b.String())
+	}
+	return strings.Join(out, "\n")
+}
+
+// mapMarkerColor is the identifier's colour, in the list and on the grid. Cyan
+// because every other colour on this HUD already means something - amber is a
+// threat, red is urgent, green is done - and an identifier means none of those.
+const (
+	mapMarkerColor = "#cdeeff"
+	mapMarkerChip  = "#0b2030"
+)

@@ -522,7 +522,19 @@ func TestBossPollerNextDelayClamps(t *testing.T) {
 }
 
 // Which way to walk when your own block is empty, which is most blocks.
-func TestNearestEvent(t *testing.T) {
+//
+// nearestFixture is the pair the store uses: every active event as a mark, with one
+// shared walk-distance table, then the closest of them.
+func nearestFixture(t *testing.T, m *BossMap, now time.Time, x, y int) (CityMark, bool) {
+	t.Helper()
+	if !theCity.IsBlock(x, y) {
+		t.Fatalf("%d,%d is a gap, so nobody can be standing there to ask", x, y)
+	}
+	dist := theCity.walkDistances(x, y)
+	return nearestMark(m.ActiveMarks(now, [2]int{x, y}, dist))
+}
+
+func TestNearestMark(t *testing.T) {
 	m := loadFixtureBossMap(t)
 	now := fixtureNow(t, m)
 
@@ -531,83 +543,113 @@ func TestNearestEvent(t *testing.T) {
 	//
 	// 1058,1014 rather than 1058,1018, which this test used to walk from: that is a
 	// gap, so it is not somewhere a player can be standing to ask the question.
-	event, walk, ok := m.NearestEvent(1058, 1014, now)
+	mark, ok := nearestFixture(t, m, now, 1058, 1014)
 	if !ok {
 		t.Fatal("expected an event somewhere on the map")
 	}
-	if walk.DX != 0 || walk.DY != 2 {
+	if mark.Walk.DX != 0 || mark.Walk.DY != 2 {
 		// dy positive means the target is at a larger y, which is down the screen.
-		t.Errorf("deltas = %d, %d; want 0, 2 towards 1058,1016", walk.DX, walk.DY)
+		t.Errorf("deltas = %d, %d; want 0, 2 towards 1058,1016", mark.Walk.DX, mark.Walk.DY)
 	}
-	if walk.Blocks != 2 || walk.Detour != 0 {
+	if mark.Walk.Blocks != 2 || mark.Walk.Detour != 0 {
 		t.Errorf("walk = %d blocks, detour %d; that column is unbroken",
-			walk.Blocks, walk.Detour)
+			mark.Walk.Blocks, mark.Walk.Detour)
 	}
-	if !strings.Contains(event.Label(), "Bandits") {
-		t.Errorf("nearest = %q, want the bandit pack two blocks up", event.Label())
+	if !strings.Contains(mark.Label, "Bandits") {
+		t.Errorf("nearest = %q, want the bandit pack two blocks up", mark.Label)
+	}
+	if mark.X != 1058 || mark.Y != 1016 {
+		t.Errorf("mark is at %d,%d, want 1058,1016", mark.X, mark.Y)
 	}
 
 	// Something on your own block is not "nearest": the caller already has it from
 	// At, and reporting it as somewhere to walk would be nonsense.
-	if _, walk, ok := m.NearestEvent(1058, 1016, now); ok && walk.DX == 0 && walk.DY == 0 {
+	if got, ok := nearestFixture(t, m, now, 1058, 1016); ok && got.Walk.Blocks == 0 {
 		t.Error("an event on your own block must not be reported as the nearest one")
 	}
 }
 
 // The nearest event is the nearest to WALK to, which is not always the one with the
-// smallest coordinate difference. Precinct 13 sits at the mouth of the southern
-// strip: from inside the strip, a boss a few blocks west across the gap is a long
-// way round, and one further off in open ground is closer.
-func TestNearestEventPrefersTheShorterWalk(t *testing.T) {
+// smallest coordinate difference.
+func TestNearestMarkPrefersTheShorterWalk(t *testing.T) {
 	m := loadFixtureBossMap(t)
 	now := fixtureNow(t, m)
 
 	from := [2]int{1013, 1024} // inside the southern strip
-	event, walk, ok := m.NearestEvent(from[0], from[1], now)
+	dist := theCity.walkDistances(from[0], from[1])
+	marks := m.ActiveMarks(now, from, dist)
+	best, ok := nearestMark(marks)
 	if !ok {
 		t.Skip("nothing active within reach of the strip in this capture")
 	}
-	straight := abs(walk.DX) + abs(walk.DY)
-	if walk.Blocks < straight {
+	straight := abs(best.Walk.DX) + abs(best.Walk.DY)
+	if best.Walk.Blocks < straight {
 		t.Fatalf("walk of %d blocks beats the straight line of %d, which cannot happen",
-			walk.Blocks, straight)
+			best.Walk.Blocks, straight)
 	}
 	// And nothing else on the map is a shorter walk than what was chosen.
-	dist := theCity.walkDistances(from[0], from[1])
-	for _, e := range m.Events {
-		if e.Onslaught || !e.ActiveAt(m.ServerNow(now)) {
-			continue
-		}
-		for _, loc := range e.Locations {
-			if loc[0] == from[0] && loc[1] == from[1] {
-				continue
-			}
-			other, reachable := theCity.routeFrom(dist, from[0], from[1], loc[0], loc[1])
-			if reachable && other.Blocks < walk.Blocks {
-				t.Errorf("chose %s at %d blocks, but %s is %d blocks away",
-					event.Label(), walk.Blocks, e.Label(), other.Blocks)
-			}
+	for _, m := range marks {
+		if m.Reachable && m.Walk.Blocks > 0 && m.Walk.Blocks < best.Walk.Blocks {
+			t.Errorf("chose %s at %d blocks, but %s is %d blocks away",
+				best.Label, best.Walk.Blocks, m.Label, m.Walk.Blocks)
 		}
 	}
 }
 
 // Onslaught's cycles sit on 3000,3000, which is not a place you can walk to from
-// the city. Included, they would report the nearest boss as two thousand blocks
-// away - and the capture contains them, so this is not hypothetical.
-func TestNearestEventIgnoresOnslaught(t *testing.T) {
+// the city. Counted as walkable they would report the nearest boss as two thousand
+// blocks away - and the capture contains them, so this is not hypothetical.
+func TestNearestMarkIgnoresOnslaught(t *testing.T) {
 	m := loadFixtureBossMap(t)
 	now := fixtureNow(t, m)
 
 	// 1048,1010 is a block; 1050,1010, which this used to ask from, is a gap.
-	event, walk, ok := m.NearestEvent(1048, 1010, now)
+	from := [2]int{1048, 1010}
+	marks := m.ActiveMarks(now, from, theCity.walkDistances(from[0], from[1]))
+	offMap := 0
+	for _, mark := range marks {
+		if mark.OffMap {
+			offMap++
+			if mark.Reachable {
+				t.Errorf("%s at %d,%d is off the map and cannot be walked to",
+					mark.Label, mark.X, mark.Y)
+			}
+		}
+	}
+	if offMap == 0 {
+		t.Fatal("the capture should contain Onslaught cycles on 3000,3000")
+	}
+	best, ok := nearestMark(marks)
 	if !ok {
 		t.Fatal("expected an event")
 	}
-	if event.Onslaught {
-		t.Error("an Onslaught cycle was reported as the nearest event")
+	if abs(best.Walk.DX) > 100 || abs(best.Walk.DY) > 100 {
+		t.Errorf("deltas = %d, %d; nothing on the city map is that far",
+			best.Walk.DX, best.Walk.DY)
 	}
-	if abs(walk.DX) > 100 || abs(walk.DY) > 100 {
-		t.Errorf("deltas = %d, %d; nothing on the city map is that far", walk.DX, walk.DY)
+}
+
+// Markers are assigned in the feed's order and are unique per event, which is what
+// makes the character on the map and the line in the list mean the same thing.
+func TestActiveMarksNumberEventsInOrder(t *testing.T) {
+	m := loadFixtureBossMap(t)
+	now := fixtureNow(t, m)
+	marks := m.ActiveMarks(now, [2]int{}, nil)
+	if len(marks) == 0 {
+		t.Fatal("the capture should have active events")
+	}
+	byMarker := map[string]string{}
+	for _, mark := range marks {
+		if label, seen := byMarker[mark.Marker]; seen && label != mark.Label {
+			t.Errorf("marker %q is used by both %q and %q", mark.Marker, label, mark.Label)
+		}
+		byMarker[mark.Marker] = mark.Label
+		if mark.Reachable {
+			t.Error("with no distance table nothing can be reachable")
+		}
+	}
+	if marks[0].Marker != "1" {
+		t.Errorf("the first marker is %q, want 1", marks[0].Marker)
 	}
 }
 

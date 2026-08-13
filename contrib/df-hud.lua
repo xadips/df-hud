@@ -61,6 +61,16 @@ hl.bind("SUPER + ALT + K", post("/api/overlay/toggle"), { description = "df-hud:
 hl.bind("SUPER + ALT + B", post("/api/widget/challenges/toggle"),
     { description = "df-hud: toggle the challenge board" })
 
+-- The city map: the whole 59x55 grid, shaded the way DFProfiler's own map shades
+-- it, with an identifier on every active event and a ring on the block you are
+-- standing on. It starts hidden and this is what brings it up - it is 826 pixels of
+-- city, which is worth having for ten seconds and not worth having permanently.
+--
+-- Same endpoint as every other group, because it IS another group: it inherits the
+-- HUD's click-through, so the mouse still reaches the game through it.
+hl.bind("SUPER + ALT + M", post("/api/widget/map/toggle"),
+    { description = "df-hud: toggle the city map" })
+
 -- The console window, once it exists.
 hl.bind("SUPER + ALT + C", post("/api/console/toggle"), { description = "df-hud: console" })
 

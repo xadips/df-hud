@@ -311,6 +311,7 @@ type WidgetConfig struct {
 	Session    SessionWidgetConfig    `toml:"session"`
 	XP         XPWidgetConfig         `toml:"xp"`
 	Challenges ChallengesWidgetConfig `toml:"challenges"`
+	Map        MapWidgetConfig        `toml:"map"`
 }
 
 // Placement is where one group of rows sits, and how its text is drawn.
@@ -468,6 +469,48 @@ type ChallengesWidgetConfig struct {
 	UrgentWithin duration `toml:"urgent_within"`
 }
 
+// mapMinCell is the smallest cell worth drawing: below this a marker character stops
+// being legible and the map is a coloured smear. Here rather than beside the drawing
+// code because the config has to reject it, and the config compiles without GTK.
+const mapMinCell = 6
+
+// MapWidgetConfig is the whole city drawn as a grid, in the shape DFProfiler's map
+// draws it: a block per cell, shaded by difficulty band, the gaps left empty.
+//
+// It starts HIDDEN even when enabled, and a key brings it up
+// (POST /api/widget/map/toggle). That is not the same as enabled = false: this is a
+// thing you summon to decide where to walk and dismiss ten seconds later, and a thousand pixels of city permanently over the game is not a HUD, it is a wall. `enabled`
+// still means "do I ever want this", so turning it off costs the key as well.
+type MapWidgetConfig struct {
+	Placement
+	Enabled bool `toml:"enabled"`
+
+	Color string `toml:"color"`
+
+	// Center puts the grid in the middle of the monitor and ignores x/y. On by
+	// default, because the right coordinate depends on both the monitor and
+	// cell_size - 1003 pixels wide at 17px per block, 1062 at 18 - so a number in
+	// a file would have to be recomputed by hand every time either changed.
+	Center bool `toml:"center"`
+
+	// CellSize is pixels per block. The whole grid is 59x55 cells, so 17 gives
+	// 1003x935 and 18 - the size their own map uses - gives 1062x990. Below 6 the
+	// markers stop being legible and it is a coloured smear, so 6 is the floor.
+	CellSize int `toml:"cell_size"`
+
+	// Opacity multiplies the map's own alpha, which is already partial (0.7, the
+	// value their stylesheet uses). The markers are NOT affected: the point is to
+	// see the game through the city, not to make the writing on it faint.
+	Opacity float64 `toml:"opacity"`
+
+	// ShowList draws the key beside the grid - which marker is what, how far away,
+	// how long is left. Without it the digits in the cells mean nothing.
+	ShowList bool `toml:"show_list"`
+	// MaxListed caps that list, 0 for no cap. What is dropped is counted rather
+	// than silently omitted.
+	MaxListed int `toml:"max_listed"`
+}
+
 // EffectiveChallengeInterval is the board's cadence for the current state.
 //
 // The configured value is the playing cadence. With the game closed there is
@@ -509,9 +552,10 @@ func (x XPWidgetConfig) EffectiveWindow(activeInterval time.Duration) time.Durat
 }
 
 type ConsoleConfig struct {
-	// The console is an ordinary toplevel window (not a layer surface) for
-	// the things the click-through HUD cannot do: the full challenge list,
-	// pin checkboxes, diagnostics. Toggled by POST /api/console/toggle.
+	// The console is an ordinary toplevel window, for the things a HUD group
+	// cannot be: the full challenge list with every objective, diagnostics.
+	// NOT BUILT YET - /api/console/toggle answers 503 - but the size is
+	// validated so it is yours when it lands.
 	Width  int `toml:"width"`
 	Height int `toml:"height"`
 }
@@ -612,6 +656,15 @@ func defaultConfig() *Config {
 				Placement: Placement{X: 160, Y: 85}, Enabled: true,
 				Color: "#ffffff", Prefix: "Xp/Hr: ",
 				Window: duration{5 * time.Minute}, MinSamples: 3,
+			},
+			Map: MapWidgetConfig{
+				// Middle of a 2560-wide screen, clear of the board on the left and
+				// the boss column on the right. It is hidden until a key asks for
+				// it, so this is where it appears rather than where it lives.
+				Placement: Placement{X: 700, Y: 240}, Enabled: true,
+				Color:    "#e8e8e8",
+				Center:   true,
+				CellSize: 17, Opacity: 1, ShowList: true, MaxListed: 20,
 			},
 			Challenges: ChallengesWidgetConfig{
 				Placement: Placement{X: 10, Y: 190}, Enabled: true,
@@ -864,6 +917,25 @@ func (c *Config) validate() error {
 			if err := validateColor(g.color); err != nil {
 				errs = append(errs, fmt.Errorf("widget.%s.color: %w", g.name, err))
 			}
+		}
+	}
+
+	// --- map ---
+	//
+	// A cell too small to read is not a smaller map, it is a coloured smear, and an
+	// opacity of 0 is an invisible group that looks exactly like a broken one.
+	if c.Widget.Map.Enabled {
+		if c.Widget.Map.CellSize < mapMinCell {
+			errs = append(errs, fmt.Errorf("widget.map.cell_size %d is too small to read a marker in (minimum %d)",
+				c.Widget.Map.CellSize, mapMinCell))
+		}
+		if c.Widget.Map.Opacity <= 0 || c.Widget.Map.Opacity > 1 {
+			errs = append(errs, fmt.Errorf("widget.map.opacity %g must be above 0 and at most 1",
+				c.Widget.Map.Opacity))
+		}
+		if c.Widget.Map.MaxListed < 0 {
+			errs = append(errs, fmt.Errorf("widget.map.max_listed %d cannot be negative (0 means no cap)",
+				c.Widget.Map.MaxListed))
 		}
 	}
 

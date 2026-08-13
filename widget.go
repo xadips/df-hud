@@ -48,6 +48,9 @@ func buildWidgets(cfg *Config) []placedWidget {
 	if cfg.Widget.XP.Enabled {
 		out = append(out, placedWidget{"xp", cfg.Widget.XP.Placement, newXPWidget(cfg.Widget.XP)})
 	}
+	if cfg.Widget.Map.Enabled {
+		out = append(out, placedWidget{"map", cfg.Widget.Map.Placement, newMapWidget(cfg.Widget.Map)})
+	}
 	if cfg.Widget.Challenges.Enabled {
 		out = append(out, placedWidget{"challenges", cfg.Widget.Challenges.Placement,
 			newChallengeWidget(cfg.Widget.Challenges)})

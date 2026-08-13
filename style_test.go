@@ -14,6 +14,7 @@ func TestWidgetStyleCSSOnlyEmitsWhatIsSet(t *testing.T) {
 	bare.Widget.Session.Color = ""
 	bare.Widget.XP.Color = ""
 	bare.Widget.Challenges.Color = ""
+	bare.Widget.Map.Color = ""
 	if got := widgetStyleCSS(bare); got != "" {
 		t.Errorf("widgetStyleCSS = %q, want nothing when no group overrides anything", got)
 	}

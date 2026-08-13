@@ -47,7 +47,7 @@ is yours:
 | `POST /api/run/start` | start the run clock from now |
 | `POST /api/xp/reset` | start the xp/hr average again from now |
 | `POST /api/overlay/toggle` | show or hide the overlay by hand |
-| `POST /api/widget/<group>/toggle` | show or hide one group: `block`, `bosses`, `session`, `xp`, `challenges` |
+| `POST /api/widget/<group>/toggle` | show or hide one group: `block`, `bosses`, `session`, `xp`, `challenges`, `map` |
 | `POST /api/console/toggle` | the console window - **not built yet**, answers 503 |
 | `POST /api/run/click` | a click that *might* be the game's Start button |
 
@@ -67,7 +67,7 @@ ln -s ~/Programming/df-hud/contrib/df-hud.lua ~/.config/hypr/conf.d/df-hud.lua
 require("df-hud")     -- in hyprland.lua, next to the other require lines
 ```
 
-Then `hyprctl reload`, and `hyprctl binds -j | grep df-hud` to see the six binds.
+Then `hyprctl reload`, and `hyprctl binds -j | grep df-hud` to see the seven binds.
 There is a stubbed-`hl` check for that file in
 [contrib/df-hud_spec.lua](contrib/df-hud_spec.lua), run by `go test`, because a
 mistake in it is otherwise only visible in the compositor's log.
@@ -301,6 +301,59 @@ the coordinates beside it are the check: walk one block and see which number mov
 
 Anything more than a dozen blocks away is not reported - it would be furniture
 rather than information - and `show_nearest = false` turns it off.
+
+## The city map
+
+`SUPER + ALT + M` draws the whole city: one cell per block, shaded by difficulty
+band the way DFProfiler's own map shades it, the gaps left empty, the district
+lines heavier, an identifier on every active event and a white ring on the block
+you are standing on.
+
+```
+    +---------------------------------------+   g 6m24s  6 x Bandits
+    |  the city, 59 x 55 blocks             |   n 6m24s  1 x Flaming Charred Titan
+    |  gaps are gaps: you walk around them  |   4 6m24s  3 x Evolved Longarms
+    |  N D P F S C Z are the outposts       |             1 x Irradiated Wraith
+    |  g n 4 i mark what is standing where  |             1 x Mega Mother
+    +---------------------------------------+   i 6m24s  4 x Evolved Longarms
+```
+
+**It starts hidden**, and the key brings it up. That is not the same as
+`enabled = false`: this is something you summon to decide where to walk and dismiss
+ten seconds later, and a thousand pixels of city permanently over the game would not be a
+HUD, it would be a wall. It is `center`ed on the monitor by default, because the
+right coordinate depends on both the monitor and `cell_size`.
+
+Everything about it follows from being **a widget group rather than a window**, and
+each of the alternatives was tried first:
+
+- an ordinary window sits *behind* a fullscreen one, so a map opened while playing
+  is drawn under the game - invisible at exactly the moment it is wanted. It also
+  gets tiled and resized, which silently clipped the east side of the city off a
+  grid that had asked for its full width.
+- a second layer surface would need its own copy of the monitor pinning, the
+  workspace following and the show/hide rules the HUD already has.
+- 1716 labels was the first draft, for the sake of per-cell tooltips - which are
+  worth nothing on a surface that passes every pointer event through to the game.
+  One `GtkDrawingArea` draws the same thing in one widget.
+
+So **the mouse still reaches the game through it**, and there is no hover. The key
+beside the grid does that job instead: one entry per event, nearest first, the
+identifier in its own colour on a dark chip so it can be found at a glance, the
+countdown, and the enemy types - one per row for a nest, since seven of them joined
+into one line is 140 characters and runs off the screen taking the dangerous part
+with it.
+
+One entry per **event**, not per block. The feed puts the same bandit pack on a
+dozen blocks at once - 185 marks from 30 events in one live capture - so a row each
+made the list "+173 more" with the same enemies and the same countdown repeated a
+dozen times. The entry is ordered by the nearest of its blocks, which is why the
+distance itself is not written: the map is where you see where something is.
+
+The shades are reproduced because they make the map recognisable to anyone who
+already knows the real one. **What they mean is not known** - whether a band equals
+a `df_dangerlevel` range has not been checked - so nothing is derived from them,
+they are only drawn. See [knowledge/city-map.md](knowledge/city-map.md).
 
 ## When the overlay is on screen
 

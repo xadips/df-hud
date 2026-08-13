@@ -231,51 +231,106 @@ func (b *BossMap) AtEnded(x, y int, now time.Time) []CityEvent {
 	return b.eventsAt(x, y, func(e CityEvent) bool { return e.EndedRecentlyAt(server) })
 }
 
-// NearestEvent is the closest active event to a block, for when the block you are
+// CityMark is one active event at one place, ready to draw. Both the map group and
+// the HUD's one-line "which way to walk" are built from these, so the two can never
+// disagree about what is on the map or how far away it is.
+type CityMark struct {
+	// Marker is the character the map draws in the cell, and the list repeats
+	// beside the name. Assigned in the feed's order.
+	Marker string
+	Label  string
+	// Enemies is the types standing there, separately, because a boss nest can
+	// carry seven at once and Label joins them into a 140-character line. The list
+	// beside the map gives them a row each.
+	Enemies []string
+	Kind    CityEventKind
+	X, Y    int
+	// EndsIn is how long is left, zero when the feed gave no usable end time.
+	EndsIn time.Duration
+
+	// OffMap is Onslaught, whose cycles sit on 3000,3000: a real coordinate in the
+	// same space, but not a place on the city grid and not somewhere you can walk.
+	OffMap bool
+	// Walk is the route from where the player is standing, valid only when
+	// Reachable. Unreachable covers standing in Onslaught, standing nowhere known,
+	// and the mark being off the map.
+	Walk      cityWalk
+	Reachable bool
+}
+
+// markerChars is what an active event is drawn with, in the feed's order. Digits
+// first because a digit stays legible in a small cell, then lowercase letters,
+// which cannot be mistaken for the uppercase letters the outposts use.
+//
+// Deliberately NOT one letter per event type: there are seven boss types on a busy
+// day, and "B" for both Behemoth and Bandits is worse than a number you can look up.
+const markerChars = "123456789abcdefghijklmnopqrstuvwxyz"
+
+// ActiveMarks is everything happening on the map right now.
+//
+// dist is a walk-distance table from where the player is standing, or nil when that
+// is unknown - one breadth-first search shared by every mark, so the cost does not
+// grow with the number of bosses.
+func (b *BossMap) ActiveMarks(now time.Time, from [2]int, dist []int32) []CityMark {
+	if b == nil {
+		return nil
+	}
+	server := b.ServerNow(now)
+	var out []CityMark
+	marker := 0
+	for _, e := range b.Events {
+		if !e.ActiveAt(server) {
+			continue
+		}
+		char := "?"
+		if marker < len(markerChars) {
+			char = string(markerChars[marker])
+		}
+		marker++
+		var ends time.Duration
+		if !e.End.IsZero() {
+			if left := e.End.Sub(now); left > 0 {
+				ends = left
+			}
+		}
+		for _, loc := range e.Locations {
+			m := CityMark{
+				Marker: char, Label: e.Label(), Enemies: e.Enemies, Kind: e.Kind,
+				X: loc[0], Y: loc[1], EndsIn: ends,
+				OffMap: loc[0] == onslaughtCoord && loc[1] == onslaughtCoord,
+			}
+			if !m.OffMap && dist != nil {
+				m.Walk, m.Reachable = theCity.routeFrom(dist, from[0], from[1], m.X, m.Y)
+			}
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// nearestMark is the closest active event to walk to, for when the block you are
 // standing on has nothing on it.
 //
 // Closest is measured by WALKING, not by subtracting coordinates. The city is not a
-// full rectangle - see citymap.go - so a boss five blocks up can be nine blocks
-// away around a gap while one seven blocks east is seven, and the nearer-looking one
-// is the wrong answer. The route is what df-hud reports, and it also decides which
-// event wins.
+// full rectangle - see citymap.go - so a boss five blocks up can be nine blocks away
+// around a gap while one seven blocks east is seven, and the nearer-looking one is
+// the wrong answer.
 //
-// Onslaught is excluded. Its cycles sit on 3000,3000, which is not a place you can
-// walk to from the city, so including it would report the nearest boss as being
-// roughly two thousand blocks away.
-func (b *BossMap) NearestEvent(x, y int, now time.Time) (event CityEvent, walk cityWalk, ok bool) {
-	if b == nil {
-		return CityEvent{}, cityWalk{}, false
-	}
-	// One search from where you are stand serves every candidate, so the cost does
-	// not grow with the number of bosses on the map.
-	dist := theCity.walkDistances(x, y)
-	server := b.ServerNow(now)
-	for _, e := range b.Events {
-		if e.Onslaught || !e.ActiveAt(server) {
+// Ties go to the first one seen, which is the feed's own order, so the row does not
+// flicker between two equidistant bosses every poll.
+func nearestMark(marks []CityMark) (CityMark, bool) {
+	var best CityMark
+	found := false
+	for _, m := range marks {
+		if !m.Reachable || m.Walk.Blocks == 0 {
+			// Zero is your own block, which the caller already has from At.
 			continue
 		}
-		for _, loc := range e.Locations {
-			ex, ey := loc[0], loc[1]
-			if ex == onslaughtCoord && ey == onslaughtCoord {
-				continue
-			}
-			if ex == x && ey == y {
-				// Something on your own block, which the caller already has from At.
-				continue
-			}
-			w, reachable := theCity.routeFrom(dist, x, y, ex, ey)
-			if !reachable {
-				continue
-			}
-			// Ties broken by the first one seen, which is the feed's own order, so
-			// the row does not flicker between two equidistant bosses every poll.
-			if !ok || w.Blocks < walk.Blocks {
-				event, walk, ok = e, w, true
-			}
+		if !found || m.Walk.Blocks < best.Walk.Blocks {
+			best, found = m, true
 		}
 	}
-	return event, walk, ok
+	return best, found
 }
 
 func abs(n int) int {
