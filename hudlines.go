@@ -877,9 +877,12 @@ var outpostLetters = map[string]string{
 // renderer knows where one ends and the next begins.
 type mapRow struct {
 	Marker string
-	Timer  string
-	Text   string
-	Sub    bool
+	// Color is the category's colour, as hex - the same one that rings this event's
+	// cells on the map, so a chip in the key and a ring on the grid are one lookup.
+	Color string
+	Timer string
+	Text  string
+	Sub   bool
 }
 
 // mapListLines is the key beside the map: which marker is what, and how long is left.
@@ -906,6 +909,11 @@ func mapListLines(v *View, cfg MapWidgetConfig) []mapRow {
 		return nil
 	}
 
+	// Anything off the map has already been filtered out by ActiveMarks unless you
+	// are standing in Onslaught - see there for why. Where they do appear they come
+	// first, because then they are what is in front of you.
+	inOnslaught := v.HasPosition && v.PositionX == onslaughtCoord && v.PositionY == onslaughtCoord
+
 	// Collapse to the nearest mark per event, keeping the feed's order for the ones
 	// that cannot be compared.
 	order := make([]string, 0, len(v.CityMarks))
@@ -925,7 +933,12 @@ func mapListLines(v *View, cfg MapWidgetConfig) []mapRow {
 	for _, marker := range order {
 		entries = append(entries, best[marker])
 	}
-	sort.SliceStable(entries, func(i, j int) bool { return closer(entries[i], entries[j]) })
+	sort.SliceStable(entries, func(i, j int) bool {
+		if inOnslaught && entries[i].OffMap != entries[j].OffMap {
+			return entries[i].OffMap
+		}
+		return closer(entries[i], entries[j])
+	})
 
 	var rows []mapRow
 	for i, m := range entries {
@@ -940,7 +953,10 @@ func mapListLines(v *View, cfg MapWidgetConfig) []mapRow {
 			// A mission or a QRF, whose name is the thing worth saying.
 			names = []string{m.Label}
 		}
-		head := mapRow{Marker: m.Marker, Timer: mapTimer(m), Text: names[0]}
+		head := mapRow{
+			Marker: m.Marker, Color: m.Category().Color().Hex(),
+			Timer: mapTimer(m), Text: names[0],
+		}
 		rows = append(rows, head)
 		for _, enemy := range names[1:] {
 			rows = append(rows, mapRow{Text: enemy, Sub: true})
@@ -995,13 +1011,17 @@ func mapListMarkup(v *View, cfg MapWidgetConfig) string {
 		var b strings.Builder
 		switch {
 		case r.Marker != "":
-			// A chip, not just a colour. A thin cyan glyph one character wide, over
-			// whatever the game happens to be showing, was unreadable - and this is
-			// the one character on the row that has to be legible, because it is
-			// what ties the row to a cell on the grid. A dark box behind it gives it
-			// its own background to be bright against.
-			b.WriteString(`<span background="` + mapMarkerChip + `" foreground="` +
-				mapMarkerColor + `"><b>` + escapeMarkup(r.Marker) + "</b></span> ")
+			// A chip, not just a coloured glyph. A thin one-character glyph over
+			// whatever the game happens to be showing was unreadable - and this is
+			// the one character on the row that has to be legible, since it is what
+			// ties the row to a cell on the grid.
+			//
+			// The chip carries the category's colour, the same colour that rings its
+			// cells on the map, so the two are one lookup: see a magenta ring, find
+			// the magenta chip. Dark text on a bright chip rather than the reverse,
+			// because every colour in that palette is bright by design.
+			b.WriteString(`<span background="` + r.Color + `" foreground="` +
+				mapMarkerInk + `"><b>` + escapeMarkup(r.Marker) + "</b></span> ")
 			if r.Timer != "" {
 				b.WriteString(`<span alpha="78%">` + escapeMarkup(r.Timer) + "</span>  ")
 			}
@@ -1021,7 +1041,86 @@ func mapListMarkup(v *View, cfg MapWidgetConfig) string {
 // mapMarkerColor is the identifier's colour, in the list and on the grid. Cyan
 // because every other colour on this HUD already means something - amber is a
 // threat, red is urgent, green is done - and an identifier means none of those.
+// mapMarkerInk is the letter's own colour, on top of the category-coloured chip.
+// Near-black rather than black: pure black against a bright chip is harsher than it
+// needs to be at this size.
+const mapMarkerInk = "#101010"
+
+// What sort of thing a mark is, for colour. The feed does not carry this: it carries
+// a kind (spawn, mission, QRF) and a list of enemy names, and the distinction between
+// a boss, a nest of them and a bandit pack is in those names and their count.
+//
+// It matters because those four are different decisions. A bandit pack is a fight you
+// pick for the loot; a single boss is a fight you pick for the challenge; a nest is
+// somewhere to avoid unless you came for it; a mission is not a fight at all. One
+// colour for all of them made the map say "something is here" and nothing else.
+type markCategory int
+
 const (
-	mapMarkerColor = "#cdeeff"
-	mapMarkerChip  = "#0b2030"
+	markBoss markCategory = iota
+	markNest
+	markBandits
+	markMission
+	markQRF
+	markOther
 )
+
+// markColor is a colour in both the forms this needs it: hex for Pango markup and
+// floats for cairo. Kept as one table so the ring on the map and the chip in the key
+// cannot drift apart - they are the same claim about the same event.
+type markColor struct{ R, G, B uint8 }
+
+func (c markColor) Hex() string { return fmt.Sprintf("#%02x%02x%02x", c.R, c.G, c.B) }
+
+func (c markColor) Floats() (float64, float64, float64) {
+	return float64(c.R) / 255, float64(c.G) / 255, float64(c.B) / 255
+}
+
+// The palette. Bright enough to read as a ring over any of the map's sixteen shades,
+// and far enough apart to tell at a glance:
+//
+//	nest     magenta - the one you most need to recognise before walking in
+//	boss     red     - a single one, which is the ordinary case
+//	bandits  amber   - the same amber the HUD uses for a threat on your own block
+//	mission  blue    - not a fight
+//	qrf      green   - a timed event of its own kind
+//	other    grey    - an event the feed described in a way we do not recognise
+var markColors = map[markCategory]markColor{
+	markNest:    {0xf0, 0x5c, 0xff},
+	markBoss:    {0xff, 0x55, 0x55},
+	markBandits: {0xff, 0xd1, 0x66},
+	markMission: {0x55, 0xa8, 0xff},
+	markQRF:     {0x5c, 0xe6, 0x5c},
+	markOther:   {0xc0, 0xc0, 0xc0},
+}
+
+func (c markCategory) Color() markColor {
+	if col, ok := markColors[c]; ok {
+		return col
+	}
+	return markColors[markOther]
+}
+
+// Category classifies one mark.
+//
+// A nest is a spawn carrying MORE THAN ONE enemy type, which is what the game means
+// by one: a block with several kinds of boss standing on it. Bandits are recognised
+// by name because the feed gives no other handle on them - they arrive as
+// "6 x Bandits" in the same field a boss does.
+func (m CityMark) Category() markCategory {
+	switch m.Kind {
+	case EventMission:
+		return markMission
+	case EventQRF:
+		return markQRF
+	case EventUnknown:
+		return markOther
+	}
+	if len(m.Enemies) > 1 {
+		return markNest
+	}
+	if len(m.Enemies) == 1 && strings.Contains(strings.ToLower(m.Enemies[0]), "bandit") {
+		return markBandits
+	}
+	return markBoss
+}

@@ -172,13 +172,15 @@ func (w *mapWidget) draw(_ *gtk.DrawingArea, cr *cairo.Context, _, _ int) {
 		if m.OffMap {
 			continue
 		}
-		// A mission is the one kind worth telling apart at a glance, because it is
-		// the only one that is yours to do rather than something standing there.
-		r, g, b := 1.0, 0.33, 0.33
-		if m.Kind == EventMission {
-			r, g, b = 0.33, 0.66, 1.0
-		}
+		// The ring carries the category - a nest, a single boss, a bandit pack, a
+		// mission, a QRF - because those are four different decisions and one colour
+		// for all of them made the map say "something is here" and nothing else. The
+		// same colour is the chip behind that event's letter in the key beside the
+		// grid, so the two are one lookup.
+		r, g, b := m.Category().Color().Floats()
 		w.ring(cr, cell, m.X, m.Y, r, g, b, 1.5)
+		// The letter stays white whatever the ring is: it has to be legible on all
+		// sixteen of the map's shades, and a coloured glyph one cell wide is not.
 		w.drawMarker(cr, layout, cell, m.X, m.Y, m.Marker, 1, 1, 1)
 	}
 	if w.haveStandin {

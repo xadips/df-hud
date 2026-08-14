@@ -597,28 +597,45 @@ func TestNearestMarkPrefersTheShorterWalk(t *testing.T) {
 }
 
 // Onslaught's cycles sit on 3000,3000, which is not a place you can walk to from
-// the city. Counted as walkable they would report the nearest boss as two thousand
-// blocks away - and the capture contains them, so this is not hypothetical.
-func TestNearestMarkIgnoresOnslaught(t *testing.T) {
+// the city, so out in the city they are left out of the marks entirely - they would
+// be events you can do nothing about, several every cycle, and they would consume
+// identifiers, leaving gaps in the letters drawn on the map. Standing in Onslaught
+// they are the only events that concern you, so there they appear.
+func TestActiveMarksSkipsOnslaughtUnlessYouAreInIt(t *testing.T) {
 	m := loadFixtureBossMap(t)
 	now := fixtureNow(t, m)
 
-	// 1048,1010 is a block; 1050,1010, which this used to ask from, is a gap.
-	from := [2]int{1048, 1010}
-	marks := m.ActiveMarks(now, from, theCity.walkDistances(from[0], from[1]))
+	from := [2]int{1048, 1010} // a block in the city
+	for _, mark := range m.ActiveMarks(now, from, theCity.walkDistances(from[0], from[1])) {
+		if mark.OffMap {
+			t.Errorf("%s at %d,%d is off the map and should not be marked from the city",
+				mark.Label, mark.X, mark.Y)
+		}
+	}
+
+	inside := [2]int{onslaughtCoord, onslaughtCoord}
 	offMap := 0
-	for _, mark := range marks {
+	for _, mark := range m.ActiveMarks(now, inside, nil) {
 		if mark.OffMap {
 			offMap++
 			if mark.Reachable {
-				t.Errorf("%s at %d,%d is off the map and cannot be walked to",
-					mark.Label, mark.X, mark.Y)
+				t.Errorf("%s is off the map and cannot be walked to", mark.Label)
 			}
 		}
 	}
 	if offMap == 0 {
-		t.Fatal("the capture should contain Onslaught cycles on 3000,3000")
+		t.Fatal("standing in Onslaught, its own cycles should be marked (the capture has them)")
 	}
+}
+
+// And the nearest event is never one of them, which is what that filter protects:
+// counted as walkable they would report the nearest boss as two thousand blocks away.
+func TestNearestMarkIgnoresOnslaught(t *testing.T) {
+	m := loadFixtureBossMap(t)
+	now := fixtureNow(t, m)
+
+	from := [2]int{1048, 1010}
+	marks := m.ActiveMarks(now, from, theCity.walkDistances(from[0], from[1]))
 	best, ok := nearestMark(marks)
 	if !ok {
 		t.Fatal("expected an event")

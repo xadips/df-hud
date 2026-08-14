@@ -42,26 +42,41 @@ func TestMapListCollapsesAnEventToOneEntry(t *testing.T) {
 }
 
 // Ordered by the walk to the nearest of an event's blocks, so the top of the list is
-// what you can reach. Off the map goes last: Onslaught is a real coordinate but not
-// somewhere you can walk.
+// what you can reach.
 func TestMapListOrdersByTheWalk(t *testing.T) {
-	off := mark("z", 0, false, time.Minute, "Onslaught boss")
-	off.OffMap = true
 	v := &View{CityMarks: []CityMark{
 		mark("a", 12, true, time.Minute, "far"),
-		off,
 		mark("b", 2, true, time.Minute, "near"),
 		mark("c", 0, false, time.Minute, "unknown distance"),
 	}}
-	var markers []string
-	for _, r := range mapListLines(v, mapCfg()) {
+	want := []string{"b", "a", "c"}
+	if got := listMarkers(mapListLines(v, mapCfg())); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+func listMarkers(rows []mapRow) []string {
+	var out []string
+	for _, r := range rows {
 		if r.Marker != "" {
-			markers = append(markers, r.Marker)
+			out = append(out, r.Marker)
 		}
 	}
-	want := []string{"b", "a", "c", "z"}
-	if strings.Join(markers, ",") != strings.Join(want, ",") {
-		t.Errorf("order = %v, want %v", markers, want)
+	return out
+}
+
+// Off-map events are filtered upstream in ActiveMarks (see its test), so the key only
+// has to put them first when they are there at all - which is when you are standing
+// in Onslaught, where they are what is in front of you.
+func TestMapListPutsOnslaughtFirstWhenYouAreInIt(t *testing.T) {
+	off := mark("z", 0, false, 4*time.Minute, "3 x Mega Wraith")
+	off.OffMap = true
+	off.X, off.Y = onslaughtCoord, onslaughtCoord
+	v := &View{HasPosition: true, PositionX: onslaughtCoord, PositionY: onslaughtCoord,
+		CityMarks: []CityMark{mark("a", 3, true, time.Minute, "6 x Bandits"), off}}
+	got := listMarkers(mapListLines(v, mapCfg()))
+	if len(got) != 2 || got[0] != "z" {
+		t.Errorf("in Onslaught the key = %v, want the Onslaught event first", got)
 	}
 }
 
@@ -117,12 +132,14 @@ func TestMapListSaysWhatItDropped(t *testing.T) {
 	}
 }
 
-// Onslaught says so, because a row with only a countdown on it would look like
-// somewhere you could walk.
+// When it IS shown, the row says Onslaught: with only a countdown on it, it would
+// look like somewhere you could walk.
 func TestMapListMarksOnslaught(t *testing.T) {
 	off := mark("z", 0, false, 4*time.Minute, "3 x Mega Wraith")
 	off.OffMap = true
-	rows := mapListLines(&View{CityMarks: []CityMark{off}}, mapCfg())
+	v := &View{HasPosition: true, PositionX: onslaughtCoord, PositionY: onslaughtCoord,
+		CityMarks: []CityMark{off}}
+	rows := mapListLines(v, mapCfg())
 	if len(rows) == 0 || !strings.Contains(rows[0].Timer, "Onslaught") {
 		t.Errorf("rows = %#v", rows)
 	}
@@ -141,8 +158,51 @@ func TestMapListMarkupEscapesAndStyles(t *testing.T) {
 	if strings.Contains(got, "& ") {
 		t.Errorf("raw ampersand left in the markup: %q", got)
 	}
-	if !strings.Contains(got, mapMarkerColor) || !strings.Contains(got, mapMarkerChip) {
-		t.Errorf("the identifier lost its colour or its chip: %q", got)
+	if !strings.Contains(got, markBandits.Color().Hex()) || !strings.Contains(got, mapMarkerInk) {
+		t.Errorf("the identifier lost its chip or its ink: %q", got)
+	}
+}
+
+// The chip's colour is the category's, and it is the same colour that rings the
+// event's cells on the map - see it on the grid, find it in the key. Four different
+// decisions, four colours: a nest is somewhere to avoid unless you came for it, a
+// single boss is a fight you pick, a bandit pack is loot, a mission is not a fight.
+func TestMarkCategories(t *testing.T) {
+	cases := []struct {
+		name string
+		in   CityMark
+		want markCategory
+	}{
+		{"a single boss", mark("1", 1, true, 0, "1 x Flaming Charred Titan"), markBoss},
+		{"a nest", mark("2", 1, true, 0, "3 x Evolved Longarms", "1 x Mega Mother"), markNest},
+		{"bandits", mark("3", 1, true, 0, "6 x Bandits"), markBandits},
+		{"bandits, other case", mark("4", 1, true, 0, "8 x BANDIT LEADER"), markBandits},
+		{"a mission", CityMark{Kind: EventMission, Label: "mission: The Clue"}, markMission},
+		{"a QRF", CityMark{Kind: EventQRF, Label: "QRF Extermination Mission"}, markQRF},
+		{"something unrecognised", CityMark{Kind: EventUnknown}, markOther},
+		// A nest of bandits is still a nest: several types on one block is the thing
+		// worth recognising before walking in, whatever they are.
+		{"bandits and a boss", mark("5", 1, true, 0, "6 x Bandits", "1 x Mega Wraith"), markNest},
+	}
+	seen := map[string]string{}
+	for _, tc := range cases {
+		if got := tc.in.Category(); got != tc.want {
+			t.Errorf("%s: category = %v, want %v", tc.name, got, tc.want)
+		}
+		// And no two categories share a colour, or the distinction is not visible.
+		hex := tc.want.Color().Hex()
+		if other, clash := seen[hex]; clash && other != tc.want.Color().Hex() {
+			t.Errorf("%s: colour %s is used by more than one category", tc.name, hex)
+		}
+		seen[hex] = hex
+	}
+	colours := map[string]markCategory{}
+	for category := range markColors {
+		hex := category.Color().Hex()
+		if prev, clash := colours[hex]; clash {
+			t.Errorf("categories %v and %v are both %s", prev, category, hex)
+		}
+		colours[hex] = category
 	}
 }
 

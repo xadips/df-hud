@@ -347,6 +347,20 @@ each of the alternatives was tried first:
   worth nothing on a surface that passes every pointer event through to the game.
   One `GtkDrawingArea` draws the same thing in one widget.
 
+**The ring colour says what it is**, on the grid and as the chip behind the same
+letter in the key: magenta for a nest, red for a single boss, amber for a bandit pack,
+blue for a mission, green for a QRF. Those are four different decisions - a nest is
+somewhere to avoid unless you came for it, a bandit pack is loot, a mission is not a
+fight at all - and one colour for all of them made the map say "something is here"
+and nothing else. A nest is a spawn carrying more than one enemy type; bandits are
+recognised by name, because the feed hands them over in the same field a boss arrives
+in.
+
+Onslaught is left out unless you are standing in it. Its cycles sit on `3000,3000`,
+which is a real coordinate but not a place on the grid, so out in the city they are
+several rows a cycle you can do nothing about - and they are filtered before
+identifiers are handed out, so the letters on the map have no gaps in them.
+
 So **the mouse still reaches the game through it**, and there is no hover. The key
 beside the grid does that job instead: one entry per event, nearest first, the
 identifier in its own colour on a dark chip so it can be found at a glance, the

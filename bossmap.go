@@ -275,11 +275,22 @@ func (b *BossMap) ActiveMarks(now time.Time, from [2]int, dist []int32) []CityMa
 	if b == nil {
 		return nil
 	}
+	// Onslaught is left out unless you are in it. Its cycles sit on 3000,3000 - a
+	// real coordinate in the same space, but not a place on the city grid and not
+	// somewhere you can walk to - so out in the city they are events you can do
+	// nothing about, several every cycle. Filtered HERE rather than where the list is
+	// built, so their identifiers are never assigned: otherwise the letters on the
+	// map would have gaps in them, which looks like something failed to draw.
+	inOnslaught := from[0] == onslaughtCoord && from[1] == onslaughtCoord
+
 	server := b.ServerNow(now)
 	var out []CityMark
 	marker := 0
 	for _, e := range b.Events {
 		if !e.ActiveAt(server) {
+			continue
+		}
+		if e.Onslaught && !inOnslaught {
 			continue
 		}
 		char := "?"
