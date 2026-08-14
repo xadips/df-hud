@@ -155,9 +155,37 @@ bind_action("grave", "/api/widget/map/toggle",
 -- so the only way to miss the button is to press it twice in one second, by which
 -- point the clock is already running.
 --
--- Set catch_start_button to false to do without it and start the clock with
--- SUPER + ALT + T instead.
-local catch_start_button = true
+-- OFF BY DEFAULT, BECAUSE IT CRASHED THE COMPOSITOR.
+--
+-- 2026-08-14, Hyprland 0.56.2: a left click segfaulted Hyprland inside its own Lua
+-- bindings. The backtrace is a mouse button arriving at CKeybindManager::handleKeybinds,
+-- which pcalls this Lua function, which calls hl.exec_cmd, and the argument check for
+-- that (Config::Lua::Bindings::Check::string) dies on a null dereference. The whole
+-- session goes with it, mid-game.
+--
+-- This is a bug in Hyprland - a compositor must not segfault on a callback its own
+-- config gave it - but the trigger is here, and it is the only bind in this file whose
+-- dispatcher is a Lua FUNCTION rather than a dispatcher object built at load time.
+-- Every key below is dispatched in C++ and none of them was in the backtrace.
+--
+-- Two details from that crash that are worth keeping:
+--
+--   * the game had closed five minutes earlier, so window.close should have disarmed
+--     this bind. Either set_enabled does not take on a mouse bind in this version, or
+--     what fired was a stale bind left over by an hyprctl reload. Both readings say
+--     the same thing: do not put a Lua callback on the input path.
+--   * two hyprctl reloads had happened that afternoon. If it is the stale-bind
+--     reading, a reload is what arms the gun.
+--
+-- Turning this on gets you the feature and the risk. The alternative that keeps the
+-- input path free of Lua is a plain exec dispatcher, which loses the rate limit and
+-- so forks a curl per click while the game is focused - several a second in a fight:
+--
+--   table.insert(gated, hl.bind("mouse:272", post("/api/run/click"),
+--       { non_consuming = true, click = true, description = "df-hud: catch the Start button" }))
+--
+-- Either way SUPER + T starts the clock by hand, which is what this was saving you.
+local catch_start_button = false
 
 if catch_start_button then
     local report = post_cmd("/api/run/click")
@@ -222,3 +250,4 @@ hl.layer_rule({
     no_anim = true,
     blur    = false,
 })
+

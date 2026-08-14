@@ -106,6 +106,19 @@ is how df-hud says it cannot do its job.
 
 ### Starting the clock from the game's own Start button
 
+**Off by default since 2026-08-14, because it crashed the compositor.** A left click
+segfaulted Hyprland 0.56.2 inside its own Lua bindings: the mouse button reached
+`CKeybindManager::handleKeybinds`, which `pcall`ed this bind's Lua function, which
+called `hl.exec_cmd`, and the argument check for that died on a null dereference. The
+session went with it. That is a Hyprland bug - a compositor must not segfault on a
+callback its own config handed it - but this bind is the trigger, and it is the only
+one in `df-hud.lua` whose dispatcher is a Lua *function* rather than a dispatcher
+object built at load time. Every key is dispatched in C++ and none of them appeared in
+the backtrace. `catch_start_button = true` turns it back on; `SUPER + T` does the same
+job by hand. The long note in that file has the evidence.
+
+The rest of this section is why the feature exists at all.
+
 The run clock cannot be inferred reliably, and it is worth being precise about
 why. Nothing in the player record marks the client taking control: position,
 trade zone and `df_inoutpost` all survive a client exit and relaunch unchanged,

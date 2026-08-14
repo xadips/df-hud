@@ -70,14 +70,6 @@ local function check(ok, what)
     end
 end
 
-local function find_bind(keys)
-    for _, b in ipairs(calls.binds) do
-        if b.keys == keys then
-            return b
-        end
-    end
-end
-
 -- The keybinds, one per action.
 --
 -- Matched on the ENDPOINT rather than on the key, deliberately. The combinations are
@@ -144,10 +136,28 @@ if calls.layer_rules[1] then
     check(rule.no_anim == true, "the layer rule disables animation")
 end
 
--- The click catcher. non_consuming is the whole point: without it the click that
--- starts the run never reaches the game, so pressing Start would do nothing.
-local catch = find_bind("mouse:272")
-check(catch ~= nil, "the click catcher is bound")
+-- The click catcher, which is OPTIONAL and off by default: on 2026-08-14 it segfaulted
+-- Hyprland 0.56.2 from inside its own Lua bindings, taking the session with it. See the
+-- long note in df-hud.lua.
+--
+-- So the first thing checked is the safety property, which holds either way: AT MOST ONE
+-- bind dispatches into a Lua function, and it is this one. Everything else is a
+-- dispatcher object built at load time and run in C++, with no Lua on the input path.
+local catch
+for _, b in ipairs(calls.binds) do
+    if type(b.dispatcher) == "function" then
+        check(catch == nil, "at most one bind dispatches into Lua")
+        check(b.keys == "mouse:272", "the only Lua dispatcher is the click catcher, not " .. tostring(b.keys))
+        catch = b
+    end
+end
+
+if not catch then
+    print("df-hud.lua: the click catcher is off, so nothing runs Lua on the input path")
+end
+
+-- non_consuming is the whole point of it: without it the click that starts the run
+-- never reaches the game, so pressing Start would do nothing.
 if catch then
     check(catch.opts.non_consuming == true, "the click is passed through to the game")
     check(catch.opts.click == true, "the bind is a click bind")
