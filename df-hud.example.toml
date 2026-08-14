@@ -371,9 +371,9 @@ min_samples = 3
 enabled = true
 
 # Centre the grid on the monitor, ignoring x/y below. On by default: the right
-# coordinate depends on both the monitor and cell_size - the grid is 1180 wide at
-# 20px per block and 1062 at 18 - so a number here would have to be recomputed by
-# hand every time either changed. Editing cell_size re-centres it on the spot.
+# coordinate depends on both the monitor and the scale - the grid is 1180 wide at
+# 1.0 and 1475 at 1.25 - so a number here would have to be recomputed by hand every
+# time either changed. Editing the scale re-centres it on the spot.
 center = true
 
 # Where the top-left of the grid goes when center = false.
@@ -394,29 +394,25 @@ y = 240
 # the whole city rather than a window around nowhere.
 radius = 0
 
-# How many pixels the map's longest side should take up. This is what makes a cropped
-# map BIGGER rather than merely smaller: the block size is derived from it, so the same
-# budget over 31 blocks gives 38px cells where 59 blocks gives 20. Cutting the radius
-# zooms in instead of shrinking the picture.
+# The size of the whole thing, grid AND the key beside it, from one number. 1.0 is
+# the map this shipped as: 1180 pixels across the longest side, 20 per block at the
+# full 59x55, a 12pt key. 1.25 is a quarter bigger, both halves of it.
 #
-# 1180 is the whole city at 20px per block. Centring means this is the only number to
-# change to resize the map - the position follows from it.
-size = 1180
-
-# Pixels per block, used only when size = 0, for fixing the block size and letting the
-# map's dimensions follow instead. Minimum 6, below which a marker is unreadable and
-# the map is a coloured smear.
-cell_size = 20
+# It is a pixel budget for the longest side rather than a size per block, which is
+# what makes a cropped map BIGGER rather than merely smaller: the same budget over 31
+# blocks gives 38px cells where 59 blocks gives 20, so cutting the radius above zooms
+# in. The key's font comes from the block size that falls out of this, so there is
+# nothing to keep in step by hand.
+#
+# Centring means this is the only number to change to resize the map - the position
+# follows from it. font_size below pins the key's text if you would rather it stayed
+# put while the map moves.
+scale = 1.0
 
 # Multiplies the map's own alpha, which is already partial (0.7, their value), so
 # the game shows through the city. The markers are NOT faded: the point is to see
 # through the map, not to make the writing on it hard to read.
 opacity = 1.0
-
-# The key's text is sized from the block size, so zooming the map zooms the whole
-# group. This is the multiplier on that: 1.3 makes the key half again as big, 0.8
-# shrinks it. Setting font_size below pins the text instead and ignores this.
-list_scale = 1.0
 
 # The key beside the grid - which identifier is what, how far away it is to walk,
 # how long is left. Without it the digits in the cells mean nothing.

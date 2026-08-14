@@ -271,7 +271,7 @@ func (h *hud) applyConfig(cfg *Config) {
 	if widgetSignature(cfg) != h.widgetSig {
 		h.rebuildWidgets(cfg)
 		// Re-centre what asked to be centred. A rebuilt group is put back at its
-		// configured x/y, so without this, editing cell_size resized the map and
+		// configured x/y, so without this, editing the map's scale resized it and
 		// left it where the file said - which reads as centring being broken rather
 		// than as it not having run yet.
 		if h.monitorW > 0 {

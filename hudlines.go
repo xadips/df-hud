@@ -870,47 +870,44 @@ var outpostLetters = map[string]string{
 	"Ground Zero":      "Z",
 }
 
-// mapCellPx is the size of one block in pixels.
+// mapCellPx is the size of one block in pixels, derived from widget.map.scale and how
+// many blocks are on show.
 //
-// Derived from widget.map.size when that is set, which is what makes a cropped map
-// bigger rather than merely smaller: the same pixel budget spread over 31 blocks
-// instead of 59 gives 38px cells instead of 20, so cutting the radius zooms in.
+// The scale is a budget for the longest side rather than a size per block, which is
+// what makes a cropped map bigger rather than merely smaller: the same 1180 pixels
+// spread over 31 blocks instead of 59 gives 38px cells instead of 20, so cutting the
+// radius zooms in.
 //
 // Here rather than in the widget because the key's font is derived from it too, and
 // the two have to agree - a map that scaled up while its key stayed at 12pt was the
-// first version of this.
+// first version of this, and the reason there is one scale key and not two.
 func mapCellPx(cfg MapWidgetConfig) int {
-	if cfg.Size > 0 {
-		bw, bh := mapWindowSize(cfg)
-		if side := max(bw, bh); side > 0 {
-			return max(cfg.Size/side, mapMinCell)
-		}
-	}
-	if cfg.CellSize < mapMinCell {
-		return mapMinCell
-	}
-	return cfg.CellSize
-}
-
-// mapListPt is the key's font size in points, scaled with the blocks so that zooming
-// in scales the whole group rather than just the grid. 0 means "leave it to the
-// stylesheet", which is the answer whenever the size was set by hand.
-//
-// 0.6pt per pixel of cell puts a 20px map's key at 12pt, which is where this started,
-// and widget.map.list_scale is the multiplier on that for anyone who wants it bigger or
-// smaller than the blocks imply.
-//
-// The bounds are sanity, not taste: under 8pt nothing is readable, and over 30pt the key
-// is taller than the map it explains. list_scale can reach either end.
-func mapListPt(cfg MapWidgetConfig) float64 {
-	if cfg.FontSize > 0 || cfg.Size <= 0 {
-		return 0
-	}
-	scale := cfg.ListScale
+	scale := cfg.Scale
 	if scale <= 0 {
 		scale = 1
 	}
-	pt := 0.6 * float64(mapCellPx(cfg)) * scale
+	bw, bh := mapWindowSize(cfg)
+	side := max(bw, bh)
+	if side <= 0 {
+		side = theCity.Width
+	}
+	return clampInt(int(scale*mapBaseSize)/side, mapMinCell, mapMaxCell)
+}
+
+// mapListPt is the key's font size in points, taken from the block size so that one
+// scale sizes the whole group rather than just the grid. 0 means "leave it to the
+// stylesheet", which is the answer when font_size pinned it by hand.
+//
+// 0.6pt per pixel of cell puts a 20px map's key at 12pt, which is where this started,
+// so scale 1.0 is the map and the key it shipped with.
+//
+// The bounds are sanity, not taste: under 8pt nothing is readable, and over 30pt the key
+// is taller than the map it explains.
+func mapListPt(cfg MapWidgetConfig) float64 {
+	if cfg.FontSize > 0 {
+		return 0
+	}
+	pt := 0.6 * float64(mapCellPx(cfg))
 	return math.Min(math.Max(pt, 8), 30)
 }
 

@@ -7,7 +7,7 @@ import (
 )
 
 func mapCfg() MapWidgetConfig {
-	return MapWidgetConfig{Enabled: true, CellSize: 17, Opacity: 1, ShowList: true, MaxListed: 20}
+	return MapWidgetConfig{Enabled: true, Scale: 1, Opacity: 1, ShowList: true, MaxListed: 20}
 }
 
 // mark is one location of one event, as ActiveMarks would produce it.
@@ -296,6 +296,62 @@ func TestMapWindow(t *testing.T) {
 	cfg.Radius = 7
 	if w, h := mapWindowSize(cfg); w != 15 || h != 15 {
 		t.Errorf("mapWindowSize = %dx%d, want 15x15", w, h)
+	}
+}
+
+// One scale key, moving the blocks and the key beside them together. The whole reason
+// there is one and not two is that they used to drift: the map scaled up and its key
+// stayed at 12pt.
+func TestMapScaleSizesTheGridAndTheKeyTogether(t *testing.T) {
+	cfg := mapCfg()
+
+	// Scale 1.0 is the map this shipped as: the full 59-block city at 20px a block,
+	// with a 12pt key.
+	if got := mapCellPx(cfg); got != 20 {
+		t.Errorf("cell at scale 1 = %dpx, want 20", got)
+	}
+	if got := mapListPt(cfg); got != 12 {
+		t.Errorf("key at scale 1 = %gpt, want 12", got)
+	}
+
+	// A bigger scale moves both, in step.
+	cfg.Scale = 1.5
+	bigCell, bigPt := mapCellPx(cfg), mapListPt(cfg)
+	if bigCell != 30 || bigPt != 18 {
+		t.Errorf("at scale 1.5: cell %dpx / key %gpt, want 30 and 18", bigCell, bigPt)
+	}
+
+	// So does cropping, because the scale is a budget for the window rather than a
+	// size per block - which is the whole point of it.
+	cfg.Scale, cfg.Radius = 1, 15
+	if got := mapCellPx(cfg); got != 38 {
+		t.Errorf("cell at radius 15 = %dpx, want 38 (1180 over 31 blocks)", got)
+	}
+	if got := mapListPt(cfg); got <= 12 {
+		t.Errorf("key at radius 15 = %gpt, want more than the uncropped 12", got)
+	}
+
+	// Both ends clamp. A tight radius divides the budget by very few blocks, and a
+	// tiny scale would draw a coloured smear with unreadable markers in it.
+	cfg.Radius = 1
+	if got := mapCellPx(cfg); got != mapMaxCell {
+		t.Errorf("cell at radius 1 = %dpx, want the %dpx ceiling", got, mapMaxCell)
+	}
+	cfg.Scale, cfg.Radius = 0.05, 0
+	if got := mapCellPx(cfg); got != mapMinCell {
+		t.Errorf("cell at scale 0.05 = %dpx, want the %dpx floor", got, mapMinCell)
+	}
+	// And the key has its own bounds, since a 6px cell implies 3.6pt.
+	if got := mapListPt(cfg); got != 8 {
+		t.Errorf("key at the floor = %gpt, want 8", got)
+	}
+
+	// font_size still pins the key's text while the map moves. 0 means "leave it to
+	// the stylesheet", which is what pinning it does.
+	cfg.Scale = 1
+	cfg.FontSize = 14
+	if got := mapListPt(cfg); got != 0 {
+		t.Errorf("key with font_size set = %gpt, want 0 so the stylesheet wins", got)
 	}
 }
 
