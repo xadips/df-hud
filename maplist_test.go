@@ -49,9 +49,18 @@ func TestMapListOrdersByTheWalk(t *testing.T) {
 		mark("b", 2, true, time.Minute, "near"),
 		mark("c", 0, false, time.Minute, "unknown distance"),
 	}}
-	want := []string{"b", "a", "c"}
-	if got := listMarkers(mapListLines(v, mapCfg())); strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("order = %v, want %v", got, want)
+	// Identifiers are assigned to the visible set in this order, so the nearest thing
+	// is always 1 - the letters the feed happened to hand out are not what is drawn.
+	rows := mapListLines(v, mapCfg())
+	var order []string
+	for _, r := range rows {
+		if r.Marker != "" {
+			order = append(order, r.Marker+" "+r.Text)
+		}
+	}
+	want := []string{"1 near", "2 far", "3 unknown distance"}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v, want %v", order, want)
 	}
 }
 
@@ -74,9 +83,12 @@ func TestMapListPutsOnslaughtFirstWhenYouAreInIt(t *testing.T) {
 	off.X, off.Y = onslaughtCoord, onslaughtCoord
 	v := &View{HasPosition: true, PositionX: onslaughtCoord, PositionY: onslaughtCoord,
 		CityMarks: []CityMark{mark("a", 3, true, time.Minute, "6 x Bandits"), off}}
-	got := listMarkers(mapListLines(v, mapCfg()))
-	if len(got) != 2 || got[0] != "z" {
-		t.Errorf("in Onslaught the key = %v, want the Onslaught event first", got)
+	rows := mapListLines(v, mapCfg())
+	if len(rows) != 2 {
+		t.Fatalf("rows = %#v, want both events", rows)
+	}
+	if rows[0].Marker != "1" || !strings.Contains(rows[0].Text, "Mega Wraith") {
+		t.Errorf("first row = %#v, want the Onslaught event as 1", rows[0])
 	}
 }
 
@@ -94,7 +106,8 @@ func TestMapListSplitsANest(t *testing.T) {
 	if rows[0].Marker == "" || rows[0].Sub {
 		t.Errorf("the single pack should be one headline row: %#v", rows[0])
 	}
-	if rows[1].Marker != "4" || rows[1].Text != "3 x Evolved Longarms" {
+	// The nest is the second entry, so it is renumbered 2 whatever the feed called it.
+	if rows[1].Marker != "2" || rows[1].Text != "3 x Evolved Longarms" {
 		t.Errorf("the nest's first type belongs on its headline: %#v", rows[1])
 	}
 	for _, r := range rows[2:] {
@@ -212,5 +225,129 @@ func TestMapListEmpty(t *testing.T) {
 	}
 	if got := mapListMarkup(&View{}, mapCfg()); got != "" {
 		t.Errorf("markup = %q, want empty", got)
+	}
+}
+
+// A radius crops the map to a square around you. Clamped into the city rather than
+// hanging off the edge, so the window's SIZE never changes - the group is centred on
+// the monitor, and a window that shrank near a boundary would make the whole map jump
+// sideways as you walked.
+func TestMapWindow(t *testing.T) {
+	cfg := mapCfg()
+	at := func(x, y int) *View { return &View{HasPosition: true, PositionX: x, PositionY: y} }
+
+	// No radius is the whole city.
+	if got := mapWindowFor(at(1020, 1000), cfg); got.W != theCity.Width || got.H != theCity.Height {
+		t.Errorf("radius 0 = %+v, want the whole city", got)
+	}
+
+	cfg.Radius = 5
+	// Well inside the map: centred on the player.
+	got := mapWindowFor(at(1020, 1000), cfg)
+	if got.W != 11 || got.H != 11 {
+		t.Errorf("window = %+v, want 11x11 for radius 5", got)
+	}
+	if got.X != 1015 || got.Y != 995 {
+		t.Errorf("window origin = %d,%d; want the player centred at 1015,995", got.X, got.Y)
+	}
+	if !got.contains(1020, 1000) || got.contains(1026, 1000) {
+		t.Errorf("window %+v contains the wrong blocks", got)
+	}
+
+	// Every edge clamps, and the size is the same at all of them.
+	for _, tc := range []struct{ x, y, wantX, wantY int }{
+		{1000, 1000, 1000, 995},      // west edge
+		{1058, 1000, 1058 - 10, 995}, // east edge
+		{1020, 981, 1015, 981},       // north edge
+		// 1013 rather than 1020: the southern strip is two blocks wide down there,
+		// and a position that is not a block has nothing to centre on.
+		{1013, 1035, 1008, 1025},                      // south edge
+		{theCity.OriginX, theCity.OriginY, 1000, 981}, // the corner
+	} {
+		got := mapWindowFor(at(tc.x, tc.y), cfg)
+		if got.W != 11 || got.H != 11 {
+			t.Errorf("at %d,%d the window is %dx%d, want 11x11", tc.x, tc.y, got.W, got.H)
+		}
+		if got.X != tc.wantX || got.Y != tc.wantY {
+			t.Errorf("at %d,%d origin = %d,%d, want %d,%d", tc.x, tc.y, got.X, got.Y, tc.wantX, tc.wantY)
+		}
+	}
+
+	// A radius larger than the city is the city, not a window hanging off both sides.
+	cfg.Radius = 500
+	if got := mapWindowFor(at(1020, 1000), cfg); got.W != theCity.Width || got.H != theCity.Height {
+		t.Errorf("an oversized radius = %+v, want the whole city", got)
+	}
+
+	// Nothing to crop around: the whole city rather than a window around nowhere.
+	cfg.Radius = 5
+	for _, v := range []*View{
+		{},
+		at(onslaughtCoord, onslaughtCoord),
+		at(1013, 1020), // a gap
+	} {
+		if got := mapWindowFor(v, cfg); got.W != theCity.Width {
+			t.Errorf("with no usable position the window = %+v, want the whole city", got)
+		}
+	}
+
+	// The size is knowable without a position, which is what lets the widget ask for
+	// it once at construction.
+	cfg.Radius = 7
+	if w, h := mapWindowSize(cfg); w != 15 || h != 15 {
+		t.Errorf("mapWindowSize = %dx%d, want 15x15", w, h)
+	}
+}
+
+// The key describes the map that is drawn, so a cropped map gets a cropped key.
+func TestMapListCropsWithTheMap(t *testing.T) {
+	cfg := mapCfg()
+	cfg.Radius = 5
+
+	near := mark("1", 2, true, time.Minute, "6 x Bandits")
+	near.X, near.Y = 1022, 1000
+	far := mark("2", 30, true, time.Minute, "1 x Mega Wraith")
+	far.X, far.Y = 1050, 1000
+	v := &View{HasPosition: true, PositionX: 1020, PositionY: 1000,
+		CityMarks: []CityMark{near, far}}
+
+	rows := mapListLines(v, cfg)
+	if len(rows) != 1 || !strings.Contains(rows[0].Text, "Bandits") {
+		t.Errorf("cropped key = %#v, want only the event inside the window", rows)
+	}
+	// And without the crop, both.
+	cfg.Radius = 0
+	if got := listMarkers(mapListLines(v, cfg)); len(got) != 2 {
+		t.Errorf("uncropped key = %v, want both events", got)
+	}
+}
+
+// The identifiers on the map must not collide with the letters the outposts are drawn
+// with: an event marked D beside Dogg's Stockade's own D is two different things drawn
+// the same way. Capitals otherwise, since they read better at cell size.
+func TestMarkerCharsAvoidTheOutposts(t *testing.T) {
+	taken := map[string]string{}
+	for name, letter := range outpostLetters {
+		taken[letter] = name
+	}
+	for i := 0; i < len(markerChars); i++ {
+		c := string(markerChars[i])
+		if name, clash := taken[c]; clash {
+			t.Errorf("marker %q is also %s's letter on the map", c, name)
+		}
+	}
+	if strings.Contains(markerChars, "I") {
+		t.Error("I is too close to 1, which is the first marker of all")
+	}
+	// Digits first, then capitals: the common case should not be lowercase.
+	if markerChars[0] != '1' {
+		t.Errorf("the first marker is %q, want 1", markerChars[0])
+	}
+	if got := markerChars[9]; got < 'A' || got > 'Z' {
+		t.Errorf("the tenth marker is %q, want a capital", string(got))
+	}
+	// And there are enough for a busy cycle: a live capture carried 31 active events.
+	if len(markerChars) < 40 {
+		t.Errorf("%d markers is not enough for a busy feed", len(markerChars))
 	}
 }

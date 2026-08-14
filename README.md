@@ -328,6 +328,15 @@ Not on `M`, which is the game's own map key. A consuming compositor bind should 
 the game never sees the keypress, but a client that polls raw key state does not care
 what else is held down, so the letter is chosen to be one the game does nothing with.
 
+`radius` crops it to a square around you - `radius = 15` draws 31x31 blocks - and
+cropping **zooms in rather than shrinking**: `size` is a pixel budget for the longest
+side, so the same 1180px over 31 blocks gives 38px cells where 59 blocks gave 20. The
+key is cropped to match, since a row about a boss you cannot see on the map is a row
+about nowhere. At the full 59x55 most of the picture is somewhere you are not going.
+The window is clamped into the city rather than hanging off the edge, so its size
+never changes and the map does not jump sideways as you approach a boundary; near an
+edge you are simply off-centre.
+
 **It starts hidden**, and the key brings it up. That is not the same as
 `enabled = false`: this is something you summon to decide where to walk and dismiss
 ten seconds later, and a thousand pixels of city permanently over the game would not be a
@@ -346,6 +355,15 @@ each of the alternatives was tried first:
 - 1716 labels was the first draft, for the sake of per-cell tooltips - which are
   worth nothing on a surface that passes every pointer event through to the game.
   One `GtkDrawingArea` draws the same thing in one widget.
+
+**The identifiers are numbered by distance**, over what is visible: 1 is the nearest
+thing, and the key runs down the page in that order. They are assigned per frame rather
+than taken from the feed's own order, which had two problems - a cropped map showed a
+sparse scatter of whatever characters the feed happened to hand those events (G, K, Q,
+V), and a busy cycle of thirty-odd events overflowed the digits and the capitals that
+are not already an outpost's letter, so it drew a lowercase `c` beside Camp Valcrest's
+`C`. The cost is that a boss's character changes as the order shifts, which is the right
+trade: it is a lookup within one glance, not a name.
 
 **The ring colour says what it is**, on the grid and as the chip behind the same
 letter in the key: magenta for a nest, red for a single boss, amber for a bandit pack,

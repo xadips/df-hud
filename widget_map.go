@@ -36,10 +36,14 @@ type mapWidget struct {
 	area *gtk.DrawingArea
 	list *gtk.Label
 
-	// marks and standing are what the last Update handed the draw function. The
-	// draw function runs when GTK feels like it, not when Update says so, so the
-	// state it reads has to outlive the call that set it.
-	marks       []CityMark
+	// frame and standing are what the last Update handed the draw function. The draw
+	// function runs when GTK feels like it, not when Update says so, so the state it
+	// reads has to outlive the call that set it.
+	//
+	// The frame carries the window, the visible marks and the key together, from one
+	// function, so what is drawn on a cell and what the key says about it cannot
+	// disagree - they are the same numbering.
+	frame       mapFrame
 	standing    [2]int
 	haveStandin bool
 }
@@ -52,7 +56,11 @@ func newMapWidget(cfg MapWidgetConfig) *mapWidget {
 		list: newHUDLabel(),
 	}
 	cell := w.cell()
-	w.area.SetSizeRequest(theCity.Width*cell, theCity.Height*cell)
+	// The window's contents move as you walk but its SIZE is fixed, which is what
+	// lets the size request be set once, here.
+	bw, bh := mapWindowSize(cfg)
+	w.frame.Window = mapWindow{X: theCity.OriginX, Y: theCity.OriginY, W: bw, H: bh}
+	w.area.SetSizeRequest(bw*cell, bh*cell)
 	w.area.SetDrawFunc(w.draw)
 	w.list.SetXAlign(0)
 	w.list.SetYAlign(0)
@@ -68,12 +76,9 @@ func newMapWidget(cfg MapWidgetConfig) *mapWidget {
 	return w
 }
 
-func (w *mapWidget) cell() int {
-	if w.cfg.CellSize < mapMinCell {
-		return mapMinCell
-	}
-	return w.cfg.CellSize
-}
+// cell is the size of one block in pixels. See mapCellPx, which the key's font size
+// is derived from as well, so the two scale together.
+func (w *mapWidget) cell() int { return mapCellPx(w.cfg) }
 
 func (w *mapWidget) Root() gtk.Widgetter { return w.box }
 
@@ -83,20 +88,21 @@ func (w *mapWidget) Root() gtk.Widgetter { return w.box }
 // name got longer would be worse than one that is centred on the city.
 func (w *mapWidget) NaturalSize() (int, int) {
 	cell := w.cell()
-	return theCity.Width * cell, theCity.Height * cell
+	bw, bh := mapWindowSize(w.cfg)
+	return bw * cell, bh * cell
 }
 
 // Centered reports whether the HUD should place this group itself.
 func (w *mapWidget) Centered() bool { return w.cfg.Center }
 
 func (w *mapWidget) Update(v *View) {
-	w.marks = v.CityMarks
+	w.frame = mapFrameFor(v, w.cfg)
 	w.standing = [2]int{v.PositionX, v.PositionY}
 	w.haveStandin = v.HasPosition
 	// The whole group goes away when there is nothing to draw on it. Not for the
 	// sake of the pixels - it is that a map with no events and no position is a
 	// picture of a city, which says nothing and hides the game behind it.
-	if !v.HaveData || (!w.haveStandin && len(w.marks) == 0) {
+	if !v.HaveData || (!w.haveStandin && len(w.frame.Marks) == 0) {
 		w.box.SetVisible(false)
 		return
 	}
@@ -122,9 +128,9 @@ func (w *mapWidget) draw(_ *gtk.DrawingArea, cr *cairo.Context, _, _ int) {
 	// blocks on it, which is the one thing it is for. Their own map draws the same
 	// border for the same reason.
 	cr.SetLineWidth(1)
-	for y := 0; y < theCity.Height; y++ {
-		for x := 0; x < theCity.Width; x++ {
-			shade, ok := theCity.Shade(theCity.OriginX+x, theCity.OriginY+y)
+	for y := 0; y < w.frame.Window.H; y++ {
+		for x := 0; x < w.frame.Window.W; x++ {
+			shade, ok := theCity.Shade(w.frame.Window.X+x, w.frame.Window.Y+y)
 			if !ok {
 				continue
 			}
@@ -145,14 +151,20 @@ func (w *mapWidget) draw(_ *gtk.DrawingArea, cr *cairo.Context, _, _ int) {
 	cr.SetSourceRGBA(1, 1, 1, 0.35*w.opacity())
 	cr.SetLineWidth(1)
 	for _, bx := range theCity.DividersX {
-		x := float64(bx-theCity.OriginX) * cell
+		if bx <= w.frame.Window.X || bx >= w.frame.Window.X+w.frame.Window.W {
+			continue
+		}
+		x := float64(bx-w.frame.Window.X) * cell
 		cr.MoveTo(x, 0)
-		cr.LineTo(x, float64(theCity.Height)*cell)
+		cr.LineTo(x, float64(w.frame.Window.H)*cell)
 	}
 	for _, by := range theCity.DividersY {
-		y := float64(by-theCity.OriginY) * cell
+		if by <= w.frame.Window.Y || by >= w.frame.Window.Y+w.frame.Window.H {
+			continue
+		}
+		y := float64(by-w.frame.Window.Y) * cell
 		cr.MoveTo(0, y)
-		cr.LineTo(float64(theCity.Width)*cell, y)
+		cr.LineTo(float64(w.frame.Window.W)*cell, y)
 	}
 	cr.Stroke()
 
@@ -168,7 +180,7 @@ func (w *mapWidget) draw(_ *gtk.DrawingArea, cr *cairo.Context, _, _ int) {
 	for _, o := range outposts {
 		w.drawMarker(cr, layout, cell, o.X, o.Y, outpostLetters[o.Name], 0.75, 1, 0.75)
 	}
-	for _, m := range w.marks {
+	for _, m := range w.frame.Marks {
 		if m.OffMap {
 			continue
 		}
@@ -190,11 +202,11 @@ func (w *mapWidget) draw(_ *gtk.DrawingArea, cr *cairo.Context, _, _ int) {
 
 // ring outlines one block, for an event or for where you are.
 func (w *mapWidget) ring(cr *cairo.Context, cell float64, bx, by int, r, g, b, width float64) {
-	if !theCity.IsBlock(bx, by) {
+	if !theCity.IsBlock(bx, by) || !w.frame.Window.contains(bx, by) {
 		return
 	}
-	x := float64(bx-theCity.OriginX) * cell
-	y := float64(by-theCity.OriginY) * cell
+	x := float64(bx-w.frame.Window.X) * cell
+	y := float64(by-w.frame.Window.Y) * cell
 	cr.SetSourceRGBA(r, g, b, 1)
 	cr.SetLineWidth(width)
 	// Inset by half the line width, or half of it falls in the neighbouring cell.
@@ -205,13 +217,13 @@ func (w *mapWidget) ring(cr *cairo.Context, cell float64, bx, by int, r, g, b, w
 // drawMarker centres one character in a block.
 func (w *mapWidget) drawMarker(cr *cairo.Context, layout *pango.Layout, cell float64,
 	bx, by int, text string, r, g, b float64) {
-	if text == "" || !theCity.IsBlock(bx, by) {
+	if text == "" || !theCity.IsBlock(bx, by) || !w.frame.Window.contains(bx, by) {
 		return
 	}
 	layout.SetText(text)
 	tw, th := layout.PixelSize()
-	x := float64(bx-theCity.OriginX)*cell + (cell-float64(tw))/2
-	y := float64(by-theCity.OriginY)*cell + (cell-float64(th))/2
+	x := float64(bx-w.frame.Window.X)*cell + (cell-float64(tw))/2
+	y := float64(by-w.frame.Window.Y)*cell + (cell-float64(th))/2
 	cr.SetSourceRGBA(r, g, b, 1)
 	cr.MoveTo(x, y)
 	pangocairo.ShowLayout(cr, layout)

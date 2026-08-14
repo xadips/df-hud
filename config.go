@@ -493,16 +493,46 @@ type MapWidgetConfig struct {
 	// a file would have to be recomputed by hand every time either changed.
 	Center bool `toml:"center"`
 
-	// CellSize is pixels per block. The whole grid is 59x55 cells, so 20 gives
-	// 1180x1100 - 18 is the size their own map uses. Below 6 the markers stop being
-	// legible and it is a coloured smear, so 6 is the floor. There is no ceiling: a
-	// grid larger than the screen is a mistake you can see.
+	// Radius crops the map to a square around you, measured in blocks: 15 draws
+	// 31x31. 0 is the whole city.
+	//
+	// Worth having because at the full 59x55 most of the picture is somewhere you are
+	// not going, and the part you might actually walk to is a sixth of it. The key
+	// beside the grid is cropped to match - a row about a boss you cannot see on the
+	// map is a row about nowhere.
+	//
+	// The window is clamped into the city rather than hanging off the edge, so its
+	// size never changes and the group does not jump sideways as you approach a
+	// boundary; near an edge you are simply off-centre.
+	Radius int `toml:"radius"`
+
+	// Size is how many pixels the map's longest side should take up, and it is what
+	// makes a cropped map BIGGER rather than just smaller: the cell size is derived
+	// from it and the window, so radius 15 draws 31 blocks at 38px each in the same
+	// space the whole city takes at 20.
+	//
+	// 0 falls back to CellSize, for anyone who would rather fix the block size and
+	// let the map's dimensions follow.
+	Size int `toml:"size"`
+
+	// CellSize is pixels per block, used only when Size is 0. The whole grid is 59x55
+	// cells, so 20 gives 1180x1100 - 18 is the size their own map uses. Below 6 the
+	// markers stop being legible and it is a coloured smear, so 6 is the floor.
 	CellSize int `toml:"cell_size"`
 
 	// Opacity multiplies the map's own alpha, which is already partial (0.7, the
 	// value their stylesheet uses). The markers are NOT affected: the point is to
 	// see the game through the city, not to make the writing on it faint.
 	Opacity float64 `toml:"opacity"`
+
+	// ListScale nudges the key's text relative to the blocks. The size is derived from
+	// the block size so that zooming the map zooms the whole group, and this is the
+	// multiplier on that: 1.0 puts a 20px map's key at 12pt, 1.3 makes it half again
+	// as big, 0.8 shrinks it.
+	//
+	// Ignored when FontSize is set, which pins the key's text and leaves it there
+	// whatever the map does.
+	ListScale float64 `toml:"list_scale"`
 
 	// ShowList draws the key beside the grid - which marker is what, how far away,
 	// how long is left. Without it the digits in the cells mean nothing.
@@ -670,9 +700,16 @@ func defaultConfig() *Config {
 				// the boss column on the right. It is hidden until a key asks for
 				// it, so this is where it appears rather than where it lives.
 				Placement: Placement{X: 700, Y: 240}, Enabled: true,
-				Color:    "#e8e8e8",
-				Center:   true,
-				CellSize: 20, Opacity: 1, ShowList: true, MaxListed: 40,
+				Color:  "#e8e8e8",
+				Center: true,
+				// The whole city by default: it is what the map is FOR the first
+				// time you open it, and cropping is a preference you arrive at.
+				Radius: 0,
+				// 1180 is the whole city at 20px per block, which is where this
+				// started - and it now means the same screen size at any radius.
+				Size:      1180,
+				ListScale: 1,
+				CellSize:  20, Opacity: 1, ShowList: true, MaxListed: 40,
 			},
 			Challenges: ChallengesWidgetConfig{
 				Placement: Placement{X: 10, Y: 190}, Enabled: true,
@@ -933,13 +970,25 @@ func (c *Config) validate() error {
 	// A cell too small to read is not a smaller map, it is a coloured smear, and an
 	// opacity of 0 is an invisible group that looks exactly like a broken one.
 	if c.Widget.Map.Enabled {
-		if c.Widget.Map.CellSize < mapMinCell {
+		if c.Widget.Map.Size < 0 {
+			errs = append(errs, fmt.Errorf("widget.map.size %d cannot be negative (0 means use cell_size)",
+				c.Widget.Map.Size))
+		}
+		if c.Widget.Map.Size == 0 && c.Widget.Map.CellSize < mapMinCell {
 			errs = append(errs, fmt.Errorf("widget.map.cell_size %d is too small to read a marker in (minimum %d)",
 				c.Widget.Map.CellSize, mapMinCell))
 		}
 		if c.Widget.Map.Opacity <= 0 || c.Widget.Map.Opacity > 1 {
 			errs = append(errs, fmt.Errorf("widget.map.opacity %g must be above 0 and at most 1",
 				c.Widget.Map.Opacity))
+		}
+		if c.Widget.Map.Radius < 0 {
+			errs = append(errs, fmt.Errorf("widget.map.radius %d cannot be negative (0 means the whole city)",
+				c.Widget.Map.Radius))
+		}
+		if c.Widget.Map.ListScale < 0 {
+			errs = append(errs, fmt.Errorf("widget.map.list_scale %g cannot be negative (1.0 is the derived size)",
+				c.Widget.Map.ListScale))
 		}
 		if c.Widget.Map.MaxListed < 0 {
 			errs = append(errs, fmt.Errorf("widget.map.max_listed %d cannot be negative (0 means no cap)",

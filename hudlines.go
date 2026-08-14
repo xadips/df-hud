@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -869,6 +870,110 @@ var outpostLetters = map[string]string{
 	"Ground Zero":      "Z",
 }
 
+// mapCellPx is the size of one block in pixels.
+//
+// Derived from widget.map.size when that is set, which is what makes a cropped map
+// bigger rather than merely smaller: the same pixel budget spread over 31 blocks
+// instead of 59 gives 38px cells instead of 20, so cutting the radius zooms in.
+//
+// Here rather than in the widget because the key's font is derived from it too, and
+// the two have to agree - a map that scaled up while its key stayed at 12pt was the
+// first version of this.
+func mapCellPx(cfg MapWidgetConfig) int {
+	if cfg.Size > 0 {
+		bw, bh := mapWindowSize(cfg)
+		if side := max(bw, bh); side > 0 {
+			return max(cfg.Size/side, mapMinCell)
+		}
+	}
+	if cfg.CellSize < mapMinCell {
+		return mapMinCell
+	}
+	return cfg.CellSize
+}
+
+// mapListPt is the key's font size in points, scaled with the blocks so that zooming
+// in scales the whole group rather than just the grid. 0 means "leave it to the
+// stylesheet", which is the answer whenever the size was set by hand.
+//
+// 0.6pt per pixel of cell puts a 20px map's key at 12pt, which is where this started,
+// and widget.map.list_scale is the multiplier on that for anyone who wants it bigger or
+// smaller than the blocks imply.
+//
+// The bounds are sanity, not taste: under 8pt nothing is readable, and over 30pt the key
+// is taller than the map it explains. list_scale can reach either end.
+func mapListPt(cfg MapWidgetConfig) float64 {
+	if cfg.FontSize > 0 || cfg.Size <= 0 {
+		return 0
+	}
+	scale := cfg.ListScale
+	if scale <= 0 {
+		scale = 1
+	}
+	pt := 0.6 * float64(mapCellPx(cfg)) * scale
+	return math.Min(math.Max(pt, 8), 30)
+}
+
+// mapWindow is the part of the city the map draws: an origin in block coordinates
+// and a size in blocks. The whole city unless widget.map.radius crops it.
+type mapWindow struct{ X, Y, W, H int }
+
+func (w mapWindow) contains(x, y int) bool {
+	return x >= w.X && y >= w.Y && x < w.X+w.W && y < w.Y+w.H
+}
+
+// mapWindowFor is which blocks to draw, given the config and where the player is.
+//
+// A radius crops the map to a square around you - radius 15 is 31x31 blocks - which
+// is the version worth having while playing: at the full 59x55 most of the city is
+// somewhere you are not going, and the part you might walk to is a sixth of the
+// picture.
+//
+// The window is CLAMPED into the city rather than allowed to hang off the edge. That
+// keeps its size constant, which matters more than keeping you dead centre: the group
+// is centred on the monitor, so a window that shrank near the city's edge would make
+// the whole map jump sideways as you walked. Near an edge you are simply off-centre,
+// which is what every map does.
+//
+// Falls back to the whole city when there is no centre to crop around - no position
+// yet, or standing in Onslaught, whose 3000,3000 is not a place on this grid. A window
+// around a coordinate that is not on the map would be a window around nothing.
+func mapWindowFor(v *View, cfg MapWidgetConfig) mapWindow {
+	whole := mapWindow{theCity.OriginX, theCity.OriginY, theCity.Width, theCity.Height}
+	if cfg.Radius <= 0 || !v.HasPosition || !theCity.IsBlock(v.PositionX, v.PositionY) {
+		return whole
+	}
+	side := 2*cfg.Radius + 1
+	if side >= theCity.Width && side >= theCity.Height {
+		return whole
+	}
+	win := mapWindow{W: min(side, theCity.Width), H: min(side, theCity.Height)}
+	win.X = clampInt(v.PositionX-cfg.Radius, theCity.OriginX, theCity.OriginX+theCity.Width-win.W)
+	win.Y = clampInt(v.PositionY-cfg.Radius, theCity.OriginY, theCity.OriginY+theCity.Height-win.H)
+	return win
+}
+
+// mapWindowSize is the drawn size in blocks without needing to know where the player
+// is, for the widget's size request. Clamping is what makes that possible: the window
+// is the same size wherever you stand.
+func mapWindowSize(cfg MapWidgetConfig) (w, h int) {
+	if cfg.Radius <= 0 {
+		return theCity.Width, theCity.Height
+	}
+	side := 2*cfg.Radius + 1
+	return min(side, theCity.Width), min(side, theCity.Height)
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
 // mapRow is one line of the key beside the map.
 //
 // Marker and Timer are set on an entry's first row and empty on its continuations,
@@ -904,9 +1009,42 @@ type mapRow struct {
 // One line per event when there is one enemy type, which is most of them. A nest
 // carries up to seven, and those get a row each - as a joined label it is 140
 // characters and runs off the side of the screen, taking the dangerous part with it.
-func mapListLines(v *View, cfg MapWidgetConfig) []mapRow {
+func mapListLines(v *View, cfg MapWidgetConfig) []mapRow { return mapFrameFor(v, cfg).Rows }
+
+// mapFrame is one frame of the map: which blocks to draw, what to draw on them, and
+// the key that explains it.
+//
+// The three come from one function because they have to agree exactly. The identifier
+// on a cell and the identifier in the key are the same lookup, and they are assigned
+// HERE rather than upstream in the feed - see below for why that matters.
+type mapFrame struct {
+	Window mapWindow
+	// Marks is every visible location, each carrying this frame's identifier. An event
+	// on six blocks appears six times, all with the same character.
+	Marks []CityMark
+	Rows  []mapRow
+}
+
+// mapFrameFor works out what the map shows.
+//
+// IDENTIFIERS ARE ASSIGNED TO WHAT IS VISIBLE, in the order the key lists them, so the
+// nearest thing is always 1. Two reasons, and the second is why it changed:
+//
+//   - a cropped map showed a sparse scatter of whatever characters the feed's own
+//     order had given those events - G, K, Q, V - which reads as arbitrary, because it
+//     is. Numbering the visible set means the key runs 1, 2, 3 down the page.
+//   - the feed carries about thirty active events, and nine digits plus the capitals
+//     that are not already an outpost's letter is twenty-seven. The tail fell to
+//     lowercase, so a busy cycle drew a lowercase c beside Camp Valcrest's C. Only a
+//     handful are ever visible at once, so numbering the visible set never gets there.
+//
+// The cost is that a boss's character changes as you walk and the order shifts. That is
+// the right trade: the character is a lookup within one glance at one frame, not a name
+// for the boss.
+func mapFrameFor(v *View, cfg MapWidgetConfig) mapFrame {
+	frame := mapFrame{Window: mapWindowFor(v, cfg)}
 	if len(v.CityMarks) == 0 {
-		return nil
+		return frame
 	}
 
 	// Anything off the map has already been filtered out by ActiveMarks unless you
@@ -914,11 +1052,25 @@ func mapListLines(v *View, cfg MapWidgetConfig) []mapRow {
 	// first, because then they are what is in front of you.
 	inOnslaught := v.HasPosition && v.PositionX == onslaughtCoord && v.PositionY == onslaughtCoord
 
-	// Collapse to the nearest mark per event, keeping the feed's order for the ones
-	// that cannot be compared.
-	order := make([]string, 0, len(v.CityMarks))
-	best := map[string]CityMark{}
+	// The key describes the map that is drawn, so a cropped map gets a cropped key:
+	// an event fifty blocks away is not on screen, and listing it would be a row about
+	// somewhere you cannot see. Off-map marks are exempt - they are only ever present
+	// when you are in Onslaught, and no window contains 3000,3000.
+	visible := make([]CityMark, 0, len(v.CityMarks))
 	for _, m := range v.CityMarks {
+		if m.OffMap || frame.Window.contains(m.X, m.Y) {
+			visible = append(visible, m)
+		}
+	}
+	if len(visible) == 0 {
+		return frame
+	}
+
+	// Collapse to the nearest block per event, keeping the feed's order for the ones
+	// that cannot be compared.
+	order := make([]string, 0, len(visible))
+	best := map[string]CityMark{}
+	for _, m := range visible {
 		prev, seen := best[m.Marker]
 		if !seen {
 			order = append(order, m.Marker)
@@ -940,12 +1092,27 @@ func mapListLines(v *View, cfg MapWidgetConfig) []mapRow {
 		return closer(entries[i], entries[j])
 	})
 
-	var rows []mapRow
+	// Renumber, then relabel every visible location of each event with its new
+	// character. The map and the key are now the same numbering by construction.
+	assigned := make(map[string]string, len(entries))
+	for i := range entries {
+		char := "?"
+		if i < len(markerChars) {
+			char = string(markerChars[i])
+		}
+		assigned[entries[i].Marker] = char
+		entries[i].Marker = char
+	}
+	for _, m := range visible {
+		m.Marker = assigned[m.Marker]
+		frame.Marks = append(frame.Marks, m)
+	}
+
 	for i, m := range entries {
 		if cfg.MaxListed > 0 && i == cfg.MaxListed {
 			// Said rather than silently dropped: a list that stops without saying so
 			// reads as "that is everything", which is the one thing it is not.
-			rows = append(rows, mapRow{Text: fmt.Sprintf("+%d more", len(entries)-i)})
+			frame.Rows = append(frame.Rows, mapRow{Text: fmt.Sprintf("+%d more", len(entries)-i)})
 			break
 		}
 		names := m.Enemies
@@ -953,16 +1120,15 @@ func mapListLines(v *View, cfg MapWidgetConfig) []mapRow {
 			// A mission or a QRF, whose name is the thing worth saying.
 			names = []string{m.Label}
 		}
-		head := mapRow{
+		frame.Rows = append(frame.Rows, mapRow{
 			Marker: m.Marker, Color: m.Category().Color().Hex(),
 			Timer: mapTimer(m), Text: names[0],
-		}
-		rows = append(rows, head)
+		})
 		for _, enemy := range names[1:] {
-			rows = append(rows, mapRow{Text: enemy, Sub: true})
+			frame.Rows = append(frame.Rows, mapRow{Text: enemy, Sub: true})
 		}
 	}
-	return rows
+	return frame
 }
 
 // closer orders two marks by how far they are to walk: reachable before not,
@@ -1006,6 +1172,9 @@ func mapTimer(m CityMark) string {
 // is not something you can find at a glance while a boss walks towards you.
 func mapListMarkup(v *View, cfg MapWidgetConfig) string {
 	rows := mapListLines(v, cfg)
+	if len(rows) == 0 {
+		return ""
+	}
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
 		var b strings.Builder

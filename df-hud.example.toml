@@ -380,18 +380,43 @@ center = true
 x = 700
 y = 240
 
-# Pixels per block. 59x55 cells, so 20 gives 1180x1100, and 18 is the size their own
-# map uses. Minimum 6, below which a marker is unreadable and the thing is a coloured
-# smear; no maximum, since a grid bigger than the screen is a mistake you can see.
+# Crop the map to a square around you, in blocks: 15 draws 31x31, 0 is the whole
+# city. The key beside the grid is cropped to match, since a row about a boss you
+# cannot see on the map is a row about nowhere.
 #
-# Centring means this is the only number to change to resize the map: the position
-# follows from it.
+# Worth having: at the full 59x55 most of the picture is somewhere you are not going,
+# and the part you might actually walk to is a sixth of it.
+#
+# The window is clamped into the city rather than hanging off the edge, so its size
+# never changes and the map does not jump sideways as you approach a boundary - near
+# an edge you are simply off-centre, which is what every map does. With no position
+# yet, or in Onslaught (whose 3000,3000 is not a place on the grid), it falls back to
+# the whole city rather than a window around nowhere.
+radius = 0
+
+# How many pixels the map's longest side should take up. This is what makes a cropped
+# map BIGGER rather than merely smaller: the block size is derived from it, so the same
+# budget over 31 blocks gives 38px cells where 59 blocks gives 20. Cutting the radius
+# zooms in instead of shrinking the picture.
+#
+# 1180 is the whole city at 20px per block. Centring means this is the only number to
+# change to resize the map - the position follows from it.
+size = 1180
+
+# Pixels per block, used only when size = 0, for fixing the block size and letting the
+# map's dimensions follow instead. Minimum 6, below which a marker is unreadable and
+# the map is a coloured smear.
 cell_size = 20
 
 # Multiplies the map's own alpha, which is already partial (0.7, their value), so
 # the game shows through the city. The markers are NOT faded: the point is to see
 # through the map, not to make the writing on it hard to read.
 opacity = 1.0
+
+# The key's text is sized from the block size, so zooming the map zooms the whole
+# group. This is the multiplier on that: 1.3 makes the key half again as big, 0.8
+# shrinks it. Setting font_size below pins the text instead and ignores this.
+list_scale = 1.0
 
 # The key beside the grid - which identifier is what, how far away it is to walk,
 # how long is left. Without it the digits in the cells mean nothing.

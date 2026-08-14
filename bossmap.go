@@ -258,13 +258,40 @@ type CityMark struct {
 	Reachable bool
 }
 
-// markerChars is what an active event is drawn with, in the feed's order. Digits
-// first because a digit stays legible in a small cell, then lowercase letters,
-// which cannot be mistaken for the uppercase letters the outposts use.
+// markerChars is what an active event is drawn with, in the feed's order.
+//
+// Digits first because a digit stays legible in a small cell, then capitals, which are
+// easier to read at cell size than lowercase - and lowercase only as overflow, which a
+// real feed does not reach.
+//
+// The seven letters the outposts use are EXCLUDED, and taken from that table rather
+// than typed out again here: an event marked D beside Dogg's Stockade's own D would be
+// two different things drawn the same way. I is excluded as well, because 1 is in use
+// two characters earlier.
 //
 // Deliberately NOT one letter per event type: there are seven boss types on a busy
-// day, and "B" for both Behemoth and Bandits is worse than a number you can look up.
-const markerChars = "123456789abcdefghijklmnopqrstuvwxyz"
+// day, and "B" for both Behemoth and Bandits is worse than a character you can look up.
+var markerChars = buildMarkerChars()
+
+func buildMarkerChars() string {
+	taken := map[byte]bool{'I': true}
+	for _, letter := range outpostLetters {
+		if letter != "" {
+			taken[letter[0]] = true
+		}
+	}
+	var b strings.Builder
+	b.WriteString("123456789")
+	for c := byte('A'); c <= 'Z'; c++ {
+		if !taken[c] {
+			b.WriteByte(c)
+		}
+	}
+	for c := byte('a'); c <= 'z'; c++ {
+		b.WriteByte(c)
+	}
+	return b.String()
+}
 
 // ActiveMarks is everything happening on the map right now.
 //
