@@ -39,6 +39,26 @@ func TestDecideHUDVisible(t *testing.T) {
 	if !strings.Contains(reason, "workspace 7") {
 		t.Errorf("reason = %q, want the workspace named", reason)
 	}
+
+	// THE LAUNCHER. /proc says the game is running, because the launcher is the same
+	// executable, so only the compositor can say otherwise - and when it does, the
+	// answer is to hide rather than to fail open. Getting this wrong put the HUD on
+	// EVERY workspace: excluding the launcher's window made the lookup unknown, and
+	// unknown means "ask again later, keep showing".
+	launcher := windowPlacement{LauncherOnly: true}
+	visible, reason = decideHUDVisible(allRules(), running, launcher)
+	if visible {
+		t.Error("the launcher is not the game, so there is nothing to draw over yet")
+	}
+	if !strings.Contains(reason, "launcher") {
+		t.Errorf("reason = %q, want it to name the launcher", reason)
+	}
+
+	// And an unknown placement that is NOT the launcher still fails open, which is
+	// the case that keeps a wrongly hidden HUD from looking like a broken one.
+	if visible, reason := decideHUDVisible(allRules(), running, windowPlacement{}); !visible {
+		t.Errorf("an unanswerable lookup must fail open, got %q", reason)
+	}
 }
 
 // Both rules can be turned off, and then neither hides anything.

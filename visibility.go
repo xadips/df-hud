@@ -52,6 +52,16 @@ func decideHUDVisible(r visibilityRules, game GameState, place windowPlacement) 
 	if r.OnlyWhenGameRunning && !game.Running {
 		return false, "the game is not running"
 	}
+	// The launcher is not the game, and /proc cannot tell: the configuration dialogs
+	// are the same executable, so the process looks like a running game for as long
+	// as they are open. The compositor CAN tell, and LauncherOnly is it saying so -
+	// every window carrying the game's class or pid was one we ignore by title.
+	//
+	// This refines only_when_game_running with better evidence than a process name,
+	// which is why it is gated on the same switch rather than on the workspace rule.
+	if r.OnlyWhenGameRunning && place.LauncherOnly {
+		return false, "the launcher is open but the game has not started"
+	}
 	// place.Known false means the question could not be answered, not that the
 	// answer is no - see the fail-open note above.
 	if r.FollowGameWorkspace && place.Known && !place.OnActiveWorkspace {
@@ -213,7 +223,10 @@ func (w *visibilityWatcher) refresh(ctx context.Context) {
 			w.queryFailed = true
 			w.mu.Unlock()
 		case !got.Known:
-			// Not an error: the window may not be mapped yet during startup.
+			// Not an error: the window may not be mapped yet during startup, or the
+			// only windows there are belong to the launcher - which got.LauncherOnly
+			// distinguishes, and which is the difference between failing open and
+			// hiding.
 			place = got
 		default:
 			place = got

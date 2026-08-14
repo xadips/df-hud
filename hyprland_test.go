@@ -153,6 +153,52 @@ func TestFindGameWindowSkipsTheLauncher(t *testing.T) {
 	}
 }
 
+// "No window found" and "only the launcher is up" must not look the same, because the
+// caller treats them oppositely: the first fails open and shows the HUD everywhere,
+// which is what excluding the launcher caused until this existed.
+func TestFindGameWindowReportsLauncherOnly(t *testing.T) {
+	ws := struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+	}{ID: 3, Name: "3"}
+	monitors := []hyprMonitor{{ID: 0, Name: "DP-1"}}
+	match := defaultConfig().Game.WindowMatch()
+
+	// The launcher, found by pid.
+	got := findGameWindow([]hyprWindow{
+		{Class: "deadfrontier.exe", Title: "Dead Frontier Configuration", PID: 7, Workspace: ws},
+	}, monitors, 7, match)
+	if got.Known || !got.LauncherOnly {
+		t.Errorf("got %+v, want unknown but flagged as the launcher", got)
+	}
+
+	// The launcher, found by class with a pid that does not match - the Proton case.
+	got = findGameWindow([]hyprWindow{
+		{Class: "deadfrontier.exe", Title: "Input Configuration", PID: 999, Workspace: ws},
+	}, monitors, 7, match)
+	if got.Known || !got.LauncherOnly {
+		t.Errorf("got %+v, want the class match to flag the launcher too", got)
+	}
+
+	// Nothing of the game's at all: still unknown, but NOT the launcher, so the
+	// caller keeps failing open for a window that may not be mapped yet.
+	got = findGameWindow([]hyprWindow{
+		{Class: "kitty", Title: "~", PID: 12, Workspace: ws},
+	}, monitors, 7, match)
+	if got.Known || got.LauncherOnly {
+		t.Errorf("got %+v, want unknown and not the launcher", got)
+	}
+
+	// And once the game is up alongside them, it wins and the flag is clear.
+	got = findGameWindow([]hyprWindow{
+		{Class: "deadfrontier.exe", Title: "Dead Frontier Configuration", PID: 7, Workspace: ws},
+		{Class: "deadfrontier.exe", Title: "Dead Frontier", PID: 7, Workspace: ws},
+	}, monitors, 7, match)
+	if !got.Known || got.LauncherOnly {
+		t.Errorf("got %+v, want the game's own window", got)
+	}
+}
+
 func TestFindGameWindowHandlesSpecialWorkspaces(t *testing.T) {
 	windows := []hyprWindow{{
 		Class: "deadfrontier.exe", PID: 5, Monitor: 0, Mapped: true,

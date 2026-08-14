@@ -396,7 +396,11 @@ Devil Hound".
 
 Not on `M`, which is the game's own map key. A consuming compositor bind should mean
 the game never sees the keypress, but a client that polls raw key state does not care
-what else is held down, so bind it to something the game does nothing with.
+what else is held down, so bind something the game does nothing with - and the game's
+own bindings are readable rather than guessable, in the Wine registry under
+`HKCU\Software\Creaky Corpse\Dead Frontier`. See
+[knowledge/game-keybinds.md](knowledge/game-keybinds.md), which exists because a bare
+`` ` `` looked free and is the game's **chat** key.
 
 `radius` crops it to a square around you - `radius = 15` draws 31x31 blocks - and
 cropping **zooms in rather than shrinking**: `scale` is a pixel budget for the longest

@@ -206,6 +206,20 @@ type windowPlacement struct {
 	// MatchedBy records which strategy found the window, so the log can say how
 	// it was identified rather than leaving it a mystery when it goes wrong.
 	MatchedBy string
+
+	// LauncherOnly is the game's class or pid appearing ONLY on windows that were
+	// ignored by title - which is to say the launcher is open and the game has not
+	// started.
+	//
+	// It exists because "we could not find the window" and "we found only the
+	// launcher" are different answers and Known cannot tell them apart. Known false
+	// fails OPEN, on the grounds that a window may not be mapped yet and a wrongly
+	// hidden HUD is indistinguishable from a broken one - so excluding the launcher
+	// without this made the HUD show on every workspace instead of just the
+	// launcher's, which is worse than the bug it fixed.
+	//
+	// This is positive evidence, so it can be acted on.
+	LauncherOnly bool
 }
 
 // windowMatch is how to recognise the game's window.
@@ -280,24 +294,37 @@ func findGameWindow(windows []hyprWindow, monitors []hyprMonitor, pid int, match
 		return p
 	}
 
+	// Whether anything looked like the game but was ruled out by its title. Tracked
+	// rather than discarded: it is the difference between "no window yet" and "the
+	// launcher is up", and the caller treats those oppositely.
+	launcher := false
+	want := normaliseClass(match.Class)
+
 	if pid > 0 {
 		for _, w := range windows {
-			if w.PID == pid && !match.ignored(w.Title) {
-				return place(w, "process id")
-			}
-		}
-	}
-	if want := normaliseClass(match.Class); want != "" {
-		for _, w := range windows {
-			if match.ignored(w.Title) {
+			if w.PID != pid {
 				continue
 			}
-			if normaliseClass(w.Class) == want || normaliseClass(w.InitialClass) == want {
-				return place(w, "window class")
+			if match.ignored(w.Title) {
+				launcher = true
+				continue
 			}
+			return place(w, "process id")
 		}
 	}
-	return windowPlacement{}
+	if want != "" {
+		for _, w := range windows {
+			if normaliseClass(w.Class) != want && normaliseClass(w.InitialClass) != want {
+				continue
+			}
+			if match.ignored(w.Title) {
+				launcher = true
+				continue
+			}
+			return place(w, "window class")
+		}
+	}
+	return windowPlacement{LauncherOnly: launcher}
 }
 
 // normaliseClass makes "DeadFrontier.exe" and "deadfrontier.exe" the same thing,

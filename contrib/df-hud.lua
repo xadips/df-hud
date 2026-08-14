@@ -76,13 +76,23 @@ local function bind_action(keys, path, description, always)
     return kb
 end
 
--- CHOOSING KEYS. Keep off the function keys and the number row, which the game uses
--- itself, and off anything you type in its chat box - see the consuming note above.
+-- CHOOSING KEYS. The game's own bindings are readable, and worth reading before you
+-- claim a key is free - knowledge/game-keybinds.md has the recipe. They live in the
+-- Wine registry as Unity PlayerPrefs, under
+-- HKCU\Software\Creaky Corpse\Dead Frontier in the Proton prefix's user.reg.
 --
--- The key matters even under a modifier. The map was on M, which is the game's own
--- map key: a consuming compositor bind should stop the game ever seeing the keypress,
--- but a client that polls raw key state does not care what else is held down, so bind
--- something the game does nothing with.
+-- Measured there, the game holds: e f (action), ` and \ (CHAT), [ ] = (weapon cycle
+-- and minimap), mouse 0 and u (fire), z (fire toggle), space and left shift (run),
+-- return escape q (ui), 1 (weapon). The map was briefly on a bare grave here with a
+-- comment saying the game did nothing with it - grave is the chat key.
+--
+-- That list is only what the launcher EXPOSES. M opens the map in game and is not in
+-- it, so some keys are hardcoded: reading it rules a collision in, never out. Keep off
+-- the function keys and the number row too.
+--
+-- The key matters even under a modifier: a consuming compositor bind should stop the
+-- game ever seeing the keypress, but a client that polls raw key state does not care
+-- what else is held down.
 
 -- Start the run clock from now.
 --
