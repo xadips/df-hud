@@ -41,11 +41,12 @@ end
 -- Hyprland has no per-window bind filter, so this is done the same way the click
 -- catcher at the bottom of this file does it: the binds are created, then enabled
 -- and disabled as focus moves. While you are anywhere else they are not there at
--- all, so SUPER + ALT + D is free for whatever your other windows want it for.
+-- all, which is what makes the combinations below affordable: a bare grave for the
+-- map is still a backtick in every terminal you have.
 --
 -- Two things to know before leaving this on:
 --
---   * SUPER + ALT + K stops working when you alt-tab off the game, which is
+--   * the overlay toggle stops working when you alt-tab off the game, which is
 --     sometimes exactly when you want it - the HUD is hidden by workspace, not by
 --     focus, so a browser in front of the game on the same workspace still has the
 --     overlay over it. Pass always = true to bind_action to exempt one key.
@@ -71,13 +72,12 @@ local function bind_action(keys, path, description, always)
     return kb
 end
 
--- SUPER + ALT is used because the game itself uses the function keys, and because
--- everything under it is free here except SUPER + ALT + R.
+-- SUPER is used because the game itself uses the function keys and the number row.
 --
--- The LETTER still matters even under two modifiers. The map was on M, which is the
--- game's own map key: a consuming compositor bind should stop the game ever seeing
--- the keypress, but a client that polls raw key state does not care what else is
--- held down, so the safe choice is a letter the game does nothing with. Hence D.
+-- The KEY still matters even under a modifier. The map was on M, which is the game's
+-- own map key: a consuming compositor bind should stop the game ever seeing the
+-- keypress, but a client that polls raw key state does not care what else is held
+-- down, so anything you bind should be something the game does nothing with.
 
 -- Start the run clock from now.
 --
@@ -110,7 +110,16 @@ bind_action("SUPER + B", "/api/widget/challenges/toggle",
 --
 -- Same endpoint as every other group, because it IS another group: it inherits the
 -- HUD's click-through, so the mouse still reaches the game through it.
-bind_action("SHIFT + D", "/api/widget/map/toggle",
+--
+-- A BARE KEY, with no modifier, which is only reasonable because of the focus gate
+-- above: outside the game this bind does not exist, so ` is still ` in every terminal
+-- and editor you have. Do not copy this into df-hud.hypr.conf - a bind in that
+-- dialect is global, and a global bare grave would eat the backtick everywhere.
+--
+-- Grave is a good pick beyond being one key: the game does nothing with it, and
+-- Hyprland matches the modifier mask exactly, so SHIFT + grave still types ~ at the
+-- game. The one thing it costs is a literal ` in the game's own chat box.
+bind_action("grave", "/api/widget/map/toggle",
     "df-hud: toggle the city map")
 
 -- No bind for /api/console/toggle. The console does not exist yet - the endpoint
