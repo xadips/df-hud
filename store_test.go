@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -374,6 +376,71 @@ func TestStoreDeriveCountdownsNeverGoNegative(t *testing.T) {
 
 	if got := s.Derive(now).BlockSupport; got != 0 {
 		t.Errorf("expired block support = %s, want 0 rather than a negative countdown", got)
+	}
+}
+
+// Every way a run can end says how long it lasted, in the journal.
+//
+// The clock leaving the HUD is otherwise the last you hear of the run, and quitting
+// the game - which is how most runs end - was the path that cleared it silently.
+func TestStoreLogsHowLongEachRunLasted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		end  func(s *Store, now time.Time)
+		want string
+	}{
+		{"closing the game", func(s *Store, now time.Time) {
+			s.SetGame(GameState{Running: false})
+		}, "the game closed"},
+		{"relaunching it", func(s *Store, now time.Time) {
+			s.SetGame(GameState{Running: true, PID: 99, StartedAt: now})
+		}, "the game relaunched"},
+		{"walking into an outpost", func(s *Store, now time.Time) {
+			vars := realPlayerRecord() // which is in an outpost
+			s.ApplyTick(Tick{At: now.Add(time.Minute), Vars: vars, Scheduled: true})
+		}, "the record says outpost"},
+		{"dying", func(s *Store, now time.Time) {
+			vars := realPlayerRecord()
+			vars["df_inoutpost"], vars["df_dead"] = "0", "1"
+			s.ApplyTick(Tick{At: now.Add(time.Minute), Vars: vars, Scheduled: true})
+		}, "you died"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logged bytes.Buffer
+			old := log.Writer()
+			log.SetOutput(&logged)
+			defer log.SetOutput(old)
+
+			s := newStore(loadFixtureCatalog(t))
+			// In the PAST, because two of these paths are triggered by the game
+			// watcher rather than by a poll and so are timed to the real clock: a run
+			// that started in the future ends after a negative duration, which
+			// endRunLocked declines to claim.
+			now := time.Now().Add(-5 * time.Minute)
+			s.SetGame(GameState{Running: true, PID: 1, StartedAt: now.Add(-time.Hour)})
+
+			// A run has to be going before it can end, and the captured record is
+			// IN an outpost - which ends runs and never starts one. So: out in the
+			// city, then a block further on, which is the movement that starts it.
+			inCity := func(x string) map[string]string {
+				vars := realPlayerRecord()
+				vars["df_inoutpost"], vars["df_positionx"] = "0", x
+				return vars
+			}
+			s.ApplyTick(Tick{At: now, Vars: inCity("1040"), Scheduled: true})
+			s.ApplyTick(Tick{At: now.Add(30 * time.Second), Vars: inCity("1042"), Scheduled: true})
+
+			logged.Reset()
+			tc.end(s, now.Add(30*time.Second))
+
+			out := logged.String()
+			if !strings.Contains(out, "run ended after") {
+				t.Errorf("%s left no record of the run: %q", tc.name, out)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("the reason should say %q: %q", tc.want, out)
+			}
+		})
 	}
 }
 
