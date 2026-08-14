@@ -97,7 +97,7 @@ type fakeQuerier struct {
 	calls int
 }
 
-func (f *fakeQuerier) GameWindow(context.Context, int, string) (windowPlacement, error) {
+func (f *fakeQuerier) GameWindow(context.Context, int, windowMatch) (windowPlacement, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++

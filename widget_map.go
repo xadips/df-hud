@@ -95,6 +95,11 @@ func (w *mapWidget) NaturalSize() (int, int) {
 // Centered reports whether the HUD should place this group itself.
 func (w *mapWidget) Centered() bool { return w.cfg.Center }
 
+// CenterOffset nudges the centred position, for a game whose own HUD is not centred
+// either: the map can sit clear of the chat box and the inventory without giving up
+// the centring that makes it survive a change of scale, radius or monitor.
+func (w *mapWidget) CenterOffset() (int, int) { return w.cfg.OffsetX, w.cfg.OffsetY }
+
 func (w *mapWidget) Update(v *View) {
 	w.frame = mapFrameFor(v, w.cfg)
 	w.standing = [2]int{v.PositionX, v.PositionY}

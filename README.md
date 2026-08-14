@@ -53,9 +53,9 @@ is yours:
 
 Ready-made, with the layer rules: [contrib/df-hud.lua](contrib/df-hud.lua) for
 Hyprland's Lua configuration, [contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf)
-for `hyprland.conf`. The defaults keep off the function keys and the number row,
-which Dead Frontier uses itself: `SUPER` plus a letter for the clock, the rate,
-the overlay and the board, and a bare `` ` `` for the map.
+for `hyprland.conf`. Keep off the function keys and the number row, which Dead
+Frontier uses itself; the file itself is where the current combinations live, since
+they are yours to change and any list here goes stale the first time you do.
 
 The Lua one is a module, so it needs a `require` as well as being on
 `package.path`, and nothing happens if you only do one of the two:
@@ -71,8 +71,9 @@ require("df-hud")     -- in hyprland.lua, next to the other require lines
 **The keys exist only while Dead Frontier is focused.** Hyprland has no per-window
 bind filter, so [contrib/df-hud.lua](contrib/df-hud.lua) subscribes to
 `window.active` and calls `set_enabled` on each bind: while you are in a browser they
-are not registered at all. That is what makes a bare `` ` `` affordable for the
-map: outside the game it is still a backtick in every terminal you have. Two
+are not registered at all. That is what makes a BARE key affordable for the map -
+outside the game a lone backtick or tab is still a backtick or a tab in every
+terminal you have, which is why the file uses one. Two
 consequences worth knowing before leaving it on - the overlay toggle stops
 working when you alt-tab off the game, which is sometimes exactly when you want
 it (the overlay is hidden by workspace, not by focus, so a window in front of the
@@ -344,7 +345,7 @@ rather than information - and `show_nearest = false` turns it off.
 
 ## The city map
 
-`` ` `` draws the whole city: one cell per block, shaded by difficulty
+The map key draws the whole city: one cell per block, shaded by difficulty
 band the way DFProfiler's own map shades it, the gaps left empty, the district
 lines heavier, an identifier on every active event and a white ring on the block
 you are standing on.
@@ -395,7 +396,7 @@ Devil Hound".
 
 Not on `M`, which is the game's own map key. A consuming compositor bind should mean
 the game never sees the keypress, but a client that polls raw key state does not care
-what else is held down, so the letter is chosen to be one the game does nothing with.
+what else is held down, so bind it to something the game does nothing with.
 
 `radius` crops it to a square around you - `radius = 15` draws 31x31 blocks - and
 cropping **zooms in rather than shrinking**: `scale` is a pixel budget for the longest
@@ -405,6 +406,11 @@ about nowhere. At the full 59x55 most of the picture is somewhere you are not go
 The window is clamped into the city rather than hanging off the edge, so its size
 never changes and the map does not jump sideways as you approach a boundary; near an
 edge you are simply off-centre.
+
+`offset_x` and `offset_y` nudge it in pixels - negative is left and up - applied **on
+top of** the centring rather than instead of it, so "60 up from centre" keeps meaning
+that when the scale, the radius or the monitor changes. That is the whole reason not to
+use `x`/`y` for it.
 
 **It starts hidden**, and the key brings it up. That is not the same as
 `enabled = false`: this is something you summon to decide where to walk and dismiss
@@ -512,6 +518,20 @@ one is chosen so that being wrong makes it start *late* rather than early:
 The clock ends on entering an outpost or dying, and is discarded when the game
 closes or relaunches. `SUPER + T` and the tray both restart it from now, for
 when it starts before you do.
+
+**Every run is written to the journal as it ends**, since the clock leaving the screen
+is otherwise the last you hear of it:
+
+```
+$ journalctl --user -u df-hud | grep "run ended"
+Aug 14 21:04:12 df-hud[71701]: session: run ended after 23m41s (the game closed)
+Aug 14 22:17:03 df-hud[71701]: session: run ended after 8m12s (you died)
+Aug 14 22:41:55 df-hud[71701]: session: run ended after 31m07s (the record says outpost)
+```
+
+All four endings go through one place, which they did not before: outpost and death
+were logged, while closing the game - the commonest way a run ends - cleared the clock
+silently.
 
 It is persisted with the game's process identity, so restarting df-hud mid-run
 resumes it instead of showing zero for a run that is an hour old.

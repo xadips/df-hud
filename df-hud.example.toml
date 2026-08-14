@@ -105,6 +105,23 @@ process = "DeadFrontier.exe"
 # copying one of them in here.
 window_class = ""
 
+# Titles that are NOT the game even though they carry its class, matched
+# case-insensitively as substrings.
+#
+# The launcher is why. Dead Frontier's configuration dialogs are the same
+# executable, so they report the same class AND the same pid as the game:
+#
+#   class: deadfrontier.exe   title: Dead Frontier Configuration   464x406
+#   class: deadfrontier.exe   title: Input Configuration           215x78
+#
+# Without this the HUD is drawn over a settings box on whatever workspace it
+# opened on. "configuration" catches both by what they are rather than by their
+# exact wording - which is also why this is an ignore list and not a positive
+# match on the game's own title: a required title would break the day they append
+# a version to it, and the failure would be an invisible HUD, which looks exactly
+# like df-hud being broken.
+window_title_ignore = ["configuration"]
+
 # How often /proc is scanned. This is a local read, not a network request, so
 # there is no politeness floor - only sanity limits of 250ms..5m. Under Hyprland
 # a window opening or closing also triggers an immediate rescan, so this is a
@@ -379,6 +396,13 @@ center = true
 # Where the top-left of the grid goes when center = false.
 x = 700
 y = 240
+
+# Nudge the centred map, in pixels: negative is left and up, positive is right and
+# down. Applied on top of the centring rather than instead of it, so "60 up from
+# centre" keeps meaning that when the scale, the radius or the monitor changes -
+# which is the whole reason not to use x/y for this. Ignored when center = false.
+offset_x = 0
+offset_y = 0
 
 # Crop the map to a square around you, in blocks: 15 draws 31x31, 0 is the whole
 # city. The key beside the grid is cropped to match, since a row about a boss you

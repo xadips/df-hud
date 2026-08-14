@@ -197,7 +197,11 @@ func reportWindowDetection(cfg *Config, game GameState) {
 	}
 
 	fmt.Printf("\nWINDOW NOT MATCHED: no window with pid %d, and none whose class looks like %q.\n",
-		game.PID, cfg.Game.WindowMatch())
+		game.PID, cfg.Game.WindowMatch().Class)
+	if ignore := cfg.Game.WindowTitleIgnore; len(ignore) > 0 {
+		fmt.Printf("        (a title containing %q is skipped as the launcher: game.window_title_ignore)\n",
+			strings.Join(ignore, ", "))
+	}
 	if windows, err := client.Windows(ctx); err == nil {
 		fmt.Println("\nWindows the compositor knows about:")
 		for _, w := range windows {

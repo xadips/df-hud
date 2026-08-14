@@ -208,19 +208,50 @@ type windowPlacement struct {
 	MatchedBy string
 }
 
+// windowMatch is how to recognise the game's window.
+//
+// A class alone is not enough, which took a launcher to notice: Dead Frontier's
+// configuration dialogs are the same executable and report the same class, so the
+// class matched a 464x406 settings box and the HUD was drawn over it. IgnoreTitles is
+// what rules those out - see GameConfig.WindowTitleIgnore for why it is an exclusion
+// rather than a positive match on the game's own title.
+type windowMatch struct {
+	Class        string
+	IgnoreTitles []string
+}
+
+// ignored reports whether a title says "this is not the game".
+func (m windowMatch) ignored(title string) bool {
+	low := strings.ToLower(title)
+	for _, skip := range m.IgnoreTitles {
+		skip = strings.ToLower(strings.TrimSpace(skip))
+		if skip != "" && strings.Contains(low, skip) {
+			return true
+		}
+	}
+	return false
+}
+
 // findGameWindow decides which window is the game's.
 //
 // Ordered by how much the strategy can be trusted:
 //
-//  1. The process ID. Exact, and the only one that cannot match something else.
+//  1. The process ID. Exact, and the only one that cannot match another program.
 //  2. The window class, normalised. Needed because a window's PID under
 //     Proton/XWayland is not guaranteed to be the process /proc found.
+//
+// Both are filtered by title first, and the process id needs it as much as the class
+// does: the launcher is not another program, it is the same one, so its window carries
+// the game's pid AND the game's class. Nothing else separates them - it is the title
+// or it is a size heuristic, and a settings box is not always 464x406.
 //
 // There is deliberately NO fall back to matching the window title against
 // "Dead Frontier". A browser tab on the game's site would match it, and the
 // bridge userscript means such a tab is usually open - so the one heuristic that
-// looks most convenient is the one guaranteed to pick the wrong window.
-func findGameWindow(windows []hyprWindow, monitors []hyprMonitor, pid int, class string) windowPlacement {
+// looks most convenient is the one guaranteed to pick the wrong window. Excluding
+// titles is safe in a way requiring one is not: the worst case is that df-hud looks
+// for a window it cannot find, which it already handles by failing open.
+func findGameWindow(windows []hyprWindow, monitors []hyprMonitor, pid int, match windowMatch) windowPlacement {
 	byID := make(map[int]hyprMonitor, len(monitors))
 	for _, m := range monitors {
 		byID[m.ID] = m
@@ -251,13 +282,16 @@ func findGameWindow(windows []hyprWindow, monitors []hyprMonitor, pid int, class
 
 	if pid > 0 {
 		for _, w := range windows {
-			if w.PID == pid {
+			if w.PID == pid && !match.ignored(w.Title) {
 				return place(w, "process id")
 			}
 		}
 	}
-	if want := normaliseClass(class); want != "" {
+	if want := normaliseClass(match.Class); want != "" {
 		for _, w := range windows {
+			if match.ignored(w.Title) {
+				continue
+			}
 			if normaliseClass(w.Class) == want || normaliseClass(w.InitialClass) == want {
 				return place(w, "window class")
 			}
@@ -279,7 +313,7 @@ func normaliseClass(s string) string {
 // compositor involved.
 type hyprClient struct{}
 
-func (hyprClient) GameWindow(ctx context.Context, pid int, class string) (windowPlacement, error) {
+func (hyprClient) GameWindow(ctx context.Context, pid int, match windowMatch) (windowPlacement, error) {
 	clients, err := hyprRequest(ctx, "j/clients")
 	if err != nil {
 		return windowPlacement{}, err
@@ -296,7 +330,7 @@ func (hyprClient) GameWindow(ctx context.Context, pid int, class string) (window
 	if err := json.Unmarshal(monitorsRaw, &monitors); err != nil {
 		return windowPlacement{}, fmt.Errorf("hyprland: could not read the monitor list: %w", err)
 	}
-	return findGameWindow(windows, monitors, pid, class), nil
+	return findGameWindow(windows, monitors, pid, match), nil
 }
 
 // pointerAt is where the cursor is, in coordinates relative to the game's window.
@@ -308,19 +342,25 @@ func (hyprClient) GameWindow(ctx context.Context, pid int, class string) (window
 //
 // ok is false when there is no focused window, when it is not the game, or when
 // the compositor cannot be reached - all of which mean "do not act".
-func (hyprClient) PointerInWindow(ctx context.Context, class string) (x, y int, ok bool) {
+func (hyprClient) PointerInWindow(ctx context.Context, match windowMatch) (x, y int, ok bool) {
 	rawWindow, err := hyprRequest(ctx, "j/activewindow")
 	if err != nil {
 		return 0, 0, false
 	}
 	var window struct {
 		Class string `json:"class"`
+		Title string `json:"title"`
 		At    []int  `json:"at"`
 	}
 	if err := json.Unmarshal(rawWindow, &window); err != nil || len(window.At) < 2 {
 		return 0, 0, false
 	}
-	if want := normaliseClass(class); want != "" && normaliseClass(window.Class) != want {
+	// The launcher carries the game's class, and a click in a settings dialog is not
+	// a click on the Start button.
+	if match.ignored(window.Title) {
+		return 0, 0, false
+	}
+	if want := normaliseClass(match.Class); want != "" && normaliseClass(window.Class) != want {
 		return 0, 0, false
 	}
 

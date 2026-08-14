@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 )
 
@@ -41,7 +42,7 @@ func decodeHyprFixtures(t *testing.T) ([]hyprWindow, []hyprMonitor) {
 func TestFindGameWindowByPID(t *testing.T) {
 	windows, monitors := decodeHyprFixtures(t)
 
-	got := findGameWindow(windows, monitors, 77863, "DeadFrontier.exe")
+	got := findGameWindow(windows, monitors, 77863, windowMatch{Class: "DeadFrontier.exe"})
 	if !got.Known {
 		t.Fatal("the game's window should have been found")
 	}
@@ -61,7 +62,7 @@ func TestFindGameWindowByPID(t *testing.T) {
 func TestFindGameWindowByClassWhenThePIDIsWrong(t *testing.T) {
 	windows, monitors := decodeHyprFixtures(t)
 
-	got := findGameWindow(windows, monitors, 999999, "DeadFrontier.exe")
+	got := findGameWindow(windows, monitors, 999999, windowMatch{Class: "DeadFrontier.exe"})
 	if !got.Known || got.MatchedBy != "window class" {
 		t.Fatalf("got %+v, want a class match", got)
 	}
@@ -77,7 +78,7 @@ func TestFindGameWindowByClassWhenThePIDIsWrong(t *testing.T) {
 func TestFindGameWindowOnAnInactiveWorkspace(t *testing.T) {
 	windows, monitors := decodeHyprFixtures(t)
 	// DP-1 is showing workspace 1; kitty is on 2.
-	got := findGameWindow(windows, monitors, 2695, "")
+	got := findGameWindow(windows, monitors, 2695, windowMatch{Class: ""})
 	if !got.Known {
 		t.Fatal("the window should have been found")
 	}
@@ -92,10 +93,63 @@ func TestFindGameWindowOnAnInactiveWorkspace(t *testing.T) {
 func TestFindGameWindowNeverMatchesOnTitle(t *testing.T) {
 	windows, monitors := decodeHyprFixtures(t)
 
-	got := findGameWindow(windows, monitors, 0, "SomethingElse.exe")
+	got := findGameWindow(windows, monitors, 0, windowMatch{Class: "SomethingElse.exe"})
 	if got.Known {
 		t.Errorf("matched %q (%q) with no pid and no class match; a title must never be enough",
 			got.Class, got.Title)
+	}
+}
+
+// THE LAUNCHER IS NOT THE GAME, and nothing but the title says so.
+//
+// Both windows below are real, copied from a live compositor: Dead Frontier's
+// configuration dialogs report the game's own class AND its pid, because they are the
+// same executable. Class matching found one of them and the HUD was drawn over a
+// settings box on whatever workspace it had opened on.
+func TestFindGameWindowSkipsTheLauncher(t *testing.T) {
+	ws := func(id int) struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+	} {
+		return struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+		}{ID: id, Name: strconv.Itoa(id)}
+	}
+	launcher := []hyprWindow{
+		{Class: "deadfrontier.exe", Title: "Dead Frontier Configuration",
+			PID: 4242, Mapped: true, Workspace: ws(3)},
+		{Class: "deadfrontier.exe", Title: "Input Configuration",
+			PID: 4242, Mapped: true, Workspace: ws(3)},
+	}
+	monitors := []hyprMonitor{{ID: 0, Name: "DP-1"}}
+	match := defaultConfig().Game.WindowMatch()
+
+	// Neither strategy may match while only the launcher is up - not the class, and
+	// not the pid either, which is the part a class-only filter would have missed.
+	if got := findGameWindow(launcher, monitors, 4242, match); got.Known {
+		t.Errorf("matched the launcher: %q via %s", got.Title, got.MatchedBy)
+	}
+	if got := findGameWindow(launcher, monitors, 0, match); got.Known {
+		t.Errorf("matched the launcher by class: %q", got.Title)
+	}
+
+	// The game itself, once it starts, is found as before - here alongside both
+	// dialogs, since the launcher does not always close.
+	game := append(launcher, hyprWindow{
+		Class: "deadfrontier.exe", Title: "Dead Frontier",
+		PID: 4242, Mapped: true, Workspace: ws(3),
+	})
+	got := findGameWindow(game, monitors, 4242, match)
+	if !got.Known || got.Title != "Dead Frontier" {
+		t.Errorf("got %+v, want the game's own window", got)
+	}
+
+	// And with the filter emptied it is whatever the compositor listed first, which
+	// is the behaviour this replaced - worth pinning so the default is doing the work
+	// rather than something else accidentally excluding dialogs.
+	if got := findGameWindow(launcher, monitors, 4242, windowMatch{Class: "DeadFrontier.exe"}); !got.Known {
+		t.Error("with no titles ignored, the launcher should match again")
 	}
 }
 
@@ -121,11 +175,11 @@ func TestFindGameWindowHandlesSpecialWorkspaces(t *testing.T) {
 
 	// Comparing a special workspace against activeWorkspace would say "hidden"
 	// while it is plainly on screen.
-	if got := findGameWindow(windows, monitors, 5, ""); !got.OnActiveWorkspace {
+	if got := findGameWindow(windows, monitors, 5, windowMatch{Class: ""}); !got.OnActiveWorkspace {
 		t.Errorf("an open special workspace is on screen: %+v", got)
 	}
 	monitors[0].SpecialWorkspace.ID = 0
-	if got := findGameWindow(windows, monitors, 5, ""); got.OnActiveWorkspace {
+	if got := findGameWindow(windows, monitors, 5, windowMatch{Class: ""}); got.OnActiveWorkspace {
 		t.Error("with the special workspace closed the window is not on screen")
 	}
 }
@@ -134,7 +188,7 @@ func TestFindGameWindowUnknownMonitor(t *testing.T) {
 	windows, _ := decodeHyprFixtures(t)
 	// No monitor list at all: the window is still identified, but nothing is
 	// claimed about where it is - which must not read as "hidden".
-	got := findGameWindow(windows, nil, 77863, "")
+	got := findGameWindow(windows, nil, 77863, windowMatch{Class: ""})
 	if !got.Known {
 		t.Fatal("the window is still identifiable without the monitor list")
 	}

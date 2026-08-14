@@ -125,6 +125,23 @@ if arm_all then
         check(b ~= nil and b.keybind.enabled == false,
             path .. " is disarmed by focusing something else")
     end
+    -- The launcher carries the game's class, so only the title keeps the keys off a
+    -- settings dialog you might be typing in.
+    active_window = { class = "deadfrontier.exe", title = "Dead Frontier Configuration" }
+    arm_all()
+    for _, path in ipairs(want) do
+        local b = find_post(path)
+        check(b ~= nil and b.keybind.enabled == false, path .. " stays disarmed on the launcher")
+    end
+
+    -- And the game itself still arms them.
+    active_window = { class = "deadfrontier.exe", title = "Dead Frontier" }
+    arm_all()
+    for _, path in ipairs(want) do
+        local b = find_post(path)
+        check(b ~= nil and b.keybind.enabled == true, path .. " arms on the game itself")
+    end
+
     active_window = { class = "kitty" }
 end
 

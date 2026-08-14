@@ -486,15 +486,11 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 	case snap.InOutpost || snap.Dead:
 		// Dying ends a run as surely as extracting does, and df_dead is the
 		// server's own flag rather than an inference from HP.
-		if !s.runStart.IsZero() {
-			why := "the record says outpost"
-			if snap.Dead {
-				why = "you died"
-			}
-			log.Printf("session: run ended after %s (%s)",
-				snap.At.Sub(s.runStart).Round(time.Second), why)
+		why := "the record says outpost"
+		if snap.Dead {
+			why = "you died"
 		}
-		s.runStart = time.Time{}
+		s.endRunLocked(snap.At, why)
 	case s.runStart.IsZero() && (leftOutpost || moved || earned):
 		// Timed from the observation that proves it, not from the one before it:
 		// never claim to have been playing for longer than there is evidence for.
@@ -535,6 +531,29 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 			snap.InOutpost, snap.TradeZone, snap.PositionX, snap.PositionY,
 			s.prevSnap.InOutpost, s.prevSnap.TradeZone)
 	}
+}
+
+// endRunLocked discards the run clock and says how long it had been going.
+//
+// EVERY path that clears the clock goes through here. Three of them did not before -
+// closing the game, relaunching it, and the game simply not being detected any more -
+// so the commonest way a run ends, quitting the game, was the one that left no record
+// of it at all. The clock vanished off the HUD and that was the last you heard.
+//
+// The journal is where you look for yesterday's numbers, so this is the line that has
+// to be there:
+//
+//	session: run ended after 23m41s (the game closed)
+//
+// Guarded on the clock being set, so the repeated "not running" states a scanner
+// produces log once, at the transition, rather than every two seconds.
+func (s *Store) endRunLocked(at time.Time, why string) {
+	if !s.runStart.IsZero() {
+		if elapsed := at.Sub(s.runStart); elapsed > 0 {
+			log.Printf("session: run ended after %s (%s)", elapsed.Round(time.Second), why)
+		}
+	}
+	s.runStart = time.Time{}
 }
 
 // RestartRun starts the clock from now, and why is the caller's to say.
@@ -643,9 +662,12 @@ func (s *Store) SetGame(g GameState) {
 	s.game = g
 	switch {
 	case !g.Running:
-		s.runStart = time.Time{}
+		// The commonest end to a run: you quit. Timed to now rather than to the last
+		// poll, because the run continued until the client went away, and the last
+		// poll can be a whole interval behind that.
+		s.endRunLocked(time.Now(), "the game closed")
 	case prev.Running && !g.SameSession(prev):
-		s.runStart = time.Time{}
+		s.endRunLocked(time.Now(), "the game relaunched")
 	case s.runSeed != nil:
 		// A run persisted by a previous df-hud process, restored only if it
 		// belongs to the game that is running now. Comparing the start time as

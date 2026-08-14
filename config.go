@@ -163,6 +163,26 @@ type GameConfig struct {
 	// discovered from a running game (df-hud -check-game prints it).
 	WindowClass string `toml:"window_class"`
 
+	// WindowTitleIgnore is the titles that are NOT the game even though they carry
+	// its class, matched case-insensitively as substrings.
+	//
+	// The launcher is why. Dead Frontier's configuration dialogs are the same
+	// executable and report the same class as the game - measured live:
+	//
+	//	class: deadfrontier.exe  title: Dead Frontier Configuration  464x406
+	//	class: deadfrontier.exe  title: Input Configuration          215x78
+	//
+	// so class matching alone found one of those and drew the HUD over a settings
+	// dialog on whatever workspace it happened to be on. Even the process id does
+	// not separate them, since it is one process.
+	//
+	// "configuration" catches both, and catches them by what they ARE rather than by
+	// their exact wording - which is also why this is an ignore list and not a
+	// positive match on the game's own title: a title we required would break the
+	// day they append a version number to it, and the failure would be an invisible
+	// HUD, which is indistinguishable from df-hud being broken.
+	WindowTitleIgnore []string `toml:"window_title_ignore"`
+
 	// ScanInterval is how often /proc is scanned. This is a local read costing
 	// a millisecond, not a network request, so it has no politeness floor -
 	// only a sanity one. Hyprland window events trigger an immediate rescan on
@@ -170,12 +190,14 @@ type GameConfig struct {
 	ScanInterval duration `toml:"scan_interval"`
 }
 
-// WindowMatch is the class to look for, falling back to the process name.
-func (g GameConfig) WindowMatch() string {
-	if g.WindowClass != "" {
-		return g.WindowClass
+// WindowMatch is how to recognise the game's window: the class to look for,
+// falling back to the process name, and the titles that mean this is not it.
+func (g GameConfig) WindowMatch() windowMatch {
+	class := g.WindowClass
+	if class == "" {
+		class = g.Process
 	}
-	return g.Process
+	return windowMatch{Class: class, IgnoreTitles: g.WindowTitleIgnore}
 }
 
 type PathsConfig struct {
@@ -504,6 +526,15 @@ type MapWidgetConfig struct {
 	// have to be recomputed by hand every time either changed.
 	Center bool `toml:"center"`
 
+	// OffsetX and OffsetY move the centred map, in pixels: negative is left and up,
+	// positive is right and down. Applied on top of the centring rather than instead
+	// of it, so "60 pixels up from centre" keeps meaning that when the scale, the
+	// radius or the monitor changes - which is the whole reason not to use x/y.
+	//
+	// Ignored when center = false, where x/y already say exactly where it goes.
+	OffsetX int `toml:"offset_x"`
+	OffsetY int `toml:"offset_y"`
+
 	// Radius crops the map to a square around you, measured in blocks: 15 draws
 	// 31x31. 0 is the whole city.
 	//
@@ -624,8 +655,12 @@ func defaultConfig() *Config {
 			BackoffMax:          duration{5 * time.Minute},
 		},
 		Game: GameConfig{
-			Process:      defaultGameProcess,
-			ScanInterval: duration{2 * time.Second},
+			Process: defaultGameProcess,
+			// The launcher's dialogs are both "<something> Configuration" and carry
+			// the game's own class and pid, so this one word is what keeps the HUD
+			// off a 464x406 settings box.
+			WindowTitleIgnore: []string{"configuration"},
+			ScanInterval:      duration{2 * time.Second},
 		},
 		Paths: PathsConfig{DataDir: defaultDataDir()},
 		HUD: HUDConfig{

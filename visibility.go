@@ -67,7 +67,7 @@ func decideHUDVisible(r visibilityRules, game GameState, place windowPlacement) 
 // windowQuerier is the compositor lookup, an interface so the watcher can be
 // tested without Hyprland.
 type windowQuerier interface {
-	GameWindow(ctx context.Context, pid int, class string) (windowPlacement, error)
+	GameWindow(ctx context.Context, pid int, match windowMatch) (windowPlacement, error)
 }
 
 // hudVisibility is the published decision. Monitor travels with it because the

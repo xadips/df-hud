@@ -41,10 +41,10 @@ end
 -- Hyprland has no per-window bind filter, so this is done the same way the click
 -- catcher at the bottom of this file does it: the binds are created, then enabled
 -- and disabled as focus moves. While you are anywhere else they are not there at
--- all, which is what makes the combinations below affordable: a bare grave for the
--- map is still a backtick in every terminal you have.
+-- all, which is what makes the bare keys below affordable at all: outside the game
+-- they are still themselves in every terminal and editor you have.
 --
--- Two things to know before leaving this on:
+-- Three things to know before leaving this on:
 --
 --   * the overlay toggle stops working when you alt-tab off the game, which is
 --     sometimes exactly when you want it - the HUD is hidden by workspace, not by
@@ -52,6 +52,10 @@ end
 --     overlay over it. Pass always = true to bind_action to exempt one key.
 --   * a disabled bind is silent. Pressing it does nothing and says nothing, which
 --     looks identical to df-hud being down. `hyprctl binds` still lists it.
+--   * a bare key is CONSUMED while the game is focused, so the game never sees it -
+--     including in its own chat and trade boxes. Every bare letter below is a letter
+--     you cannot type in game. SHIFT plus the same key still gets through, since
+--     Hyprland matches the modifier mask exactly.
 --
 -- Set this to false to have the keys work everywhere. The click catcher is gated
 -- either way - a global bind on the left mouse button would fork a curl on every
@@ -72,35 +76,36 @@ local function bind_action(keys, path, description, always)
     return kb
 end
 
--- SUPER is used because the game itself uses the function keys and the number row.
+-- CHOOSING KEYS. Keep off the function keys and the number row, which the game uses
+-- itself, and off anything you type in its chat box - see the consuming note above.
 --
--- The KEY still matters even under a modifier. The map was on M, which is the game's
--- own map key: a consuming compositor bind should stop the game ever seeing the
--- keypress, but a client that polls raw key state does not care what else is held
--- down, so anything you bind should be something the game does nothing with.
+-- The key matters even under a modifier. The map was on M, which is the game's own
+-- map key: a consuming compositor bind should stop the game ever seeing the keypress,
+-- but a client that polls raw key state does not care what else is held down, so bind
+-- something the game does nothing with.
 
 -- Start the run clock from now.
 --
 -- Worth having on a key even with the click detector below: nothing in the player
 -- record marks the client taking control, so if the clock ever starts late, this
 -- is the correction.
-bind_action("SUPER + T", "/api/run/start", "df-hud: restart run clock")
+bind_action("t", "/api/run/start", "df-hud: restart run clock")
 
 -- Start the xp/hr average again from now. For after a challenge reward drops a
 -- lump of XP into the window and it stops answering "how fast am I killing".
-bind_action("SUPER + X", "/api/xp/reset", "df-hud: reset xp/hr")
+bind_action("x", "/api/xp/reset", "df-hud: reset xp/hr")
 
 -- Show or hide the overlay by hand. The automatic rules still apply on top: this
 -- cannot make the HUD appear over a game that is not running.
-bind_action("SUPER  + K", "/api/overlay/toggle", "df-hud: toggle overlay")
+bind_action("k", "/api/overlay/toggle", "df-hud: toggle overlay")
 
--- Hide the challenge board without turning it off in the config. B for board.
+-- Hide the challenge board without turning it off in the config.
 --
 -- Per group rather than one key per widget: the endpoint takes the group's name, so
 -- "block", "bosses", "session" and "xp" work the same way if you want keys for
 -- them. The status banner deliberately cannot be hidden - it is how df-hud says it
 -- cannot do its job.
-bind_action("SUPER + B", "/api/widget/challenges/toggle",
+bind_action("tab", "/api/widget/challenges/toggle",
     "df-hud: toggle the challenge board")
 
 -- The city map: the whole 59x55 grid, shaded the way DFProfiler's own map shades
@@ -112,14 +117,14 @@ bind_action("SUPER + B", "/api/widget/challenges/toggle",
 -- HUD's click-through, so the mouse still reaches the game through it.
 --
 -- A BARE KEY, with no modifier, which is only reasonable because of the focus gate
--- above: outside the game this bind does not exist, so ` is still ` in every terminal
--- and editor you have. Do not copy this into df-hud.hypr.conf - a bind in that
--- dialect is global, and a global bare grave would eat the backtick everywhere.
+-- above: outside the game this bind does not exist, so the key is still itself in
+-- every terminal and editor you have. Do not copy a bare key into df-hud.hypr.conf -
+-- a bind in that dialect is global, and it would eat that key everywhere.
 --
--- Grave is a good pick beyond being one key: the game does nothing with it, and
--- Hyprland matches the modifier mask exactly, so SHIFT + grave still types ~ at the
--- game. The one thing it costs is a literal ` in the game's own chat box.
-bind_action("grave", "/api/widget/map/toggle",
+-- Hyprland matches the modifier mask exactly, so SHIFT + the same key still reaches
+-- the game. What a bare key does cost is that key inside the game: it is a consuming
+-- bind, so the game never sees it - including in its own chat box.
+bind_action("v", "/api/widget/map/toggle",
     "df-hud: toggle the city map")
 
 -- No bind for /api/console/toggle. The console does not exist yet - the endpoint
@@ -217,9 +222,26 @@ end
 -- Matched on the class rather than the exact name because Wine reports it
 -- lowercased, and on a substring so a rename to DeadFrontier2.exe or similar does
 -- not silently stop this working.
+-- The LAUNCHER is not the game, and only the title says so. Its dialogs are the same
+-- executable, so they report the same class:
+--
+--     class: deadfrontier.exe   title: Dead Frontier Configuration
+--     class: deadfrontier.exe   title: Input Configuration
+--
+-- Arming a bare grave or tab while you are typing in a settings box would be a poor
+-- trade. The title is checked defensively rather than assumed: if this Hyprland does
+-- not report one, the class alone still decides, which is what this did before.
 local function is_game(window)
-    return window ~= nil and type(window.class) == "string"
-        and window.class:lower():find("deadfrontier", 1, true) ~= nil
+    if window == nil or type(window.class) ~= "string" then
+        return false
+    end
+    if window.class:lower():find("deadfrontier", 1, true) == nil then
+        return false
+    end
+    if type(window.title) == "string" and window.title:lower():find("configuration", 1, true) then
+        return false
+    end
+    return true
 end
 
 if #gated > 0 then

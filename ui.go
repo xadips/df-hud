@@ -464,12 +464,18 @@ func (h *hud) centreGroups(width, height int) {
 		centred, ok := placed.w.(interface {
 			Centered() bool
 			NaturalSize() (int, int)
+			CenterOffset() (int, int)
 		})
 		if !ok || !centred.Centered() {
 			continue
 		}
 		w, hh := centred.NaturalSize()
-		x, y := (width-w)/2, (height-hh)/2
+		// Centred, then nudged. The offset is added after the centring rather than
+		// replacing it so it survives everything centring exists to absorb: change
+		// the scale, crop the radius, plug in a different monitor, and "40 pixels
+		// left of centre" still means that. An x/y would have to be recomputed.
+		dx, dy := centred.CenterOffset()
+		x, y := (width-w)/2+dx, (height-hh)/2+dy
 		h.fixed.Move(placed.w.Root(), float64(max(x, 0)), float64(max(y, 0)))
 	}
 }
