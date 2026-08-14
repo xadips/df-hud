@@ -206,6 +206,24 @@ func (m *cityMap) IsBlock(x, y int) bool {
 	return i >= 0 && m.cells[i] != '.'
 }
 
+// DividesColumn and DividesRow report whether a district line has anything to divide
+// at one point along it: a block on either side of it.
+//
+// The dividers are stored as whole columns and rows because that is how the game
+// counts districts, but THE CITY IS NOT A RECTANGLE. Drawn blindly across the 59x55
+// box, a line carries on over the empty parts - and south of Ground Zero that is
+// eleven consecutive rows of nothing, so what you see is a grey rule hanging in the
+// game with no map on either side of it.
+//
+// The line at x sits between x-1 and x, so those are the two to ask about.
+func (m *cityMap) DividesColumn(x, y int) bool {
+	return m.IsBlock(x-1, y) || m.IsBlock(x, y)
+}
+
+func (m *cityMap) DividesRow(x, y int) bool {
+	return m.IsBlock(x, y-1) || m.IsBlock(x, y)
+}
+
 // Shade is how the map paints a block.
 func (m *cityMap) Shade(x, y int) (cityShade, bool) {
 	i := m.index(x, y)

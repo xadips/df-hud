@@ -84,15 +84,15 @@ end
 -- Worth having on a key even with the click detector below: nothing in the player
 -- record marks the client taking control, so if the clock ever starts late, this
 -- is the correction.
-bind_action("SUPER + ALT + T", "/api/run/start", "df-hud: restart run clock")
+bind_action("SUPER + T", "/api/run/start", "df-hud: restart run clock")
 
 -- Start the xp/hr average again from now. For after a challenge reward drops a
 -- lump of XP into the window and it stops answering "how fast am I killing".
-bind_action("SUPER + ALT + X", "/api/xp/reset", "df-hud: reset xp/hr")
+bind_action("SUPER + X", "/api/xp/reset", "df-hud: reset xp/hr")
 
 -- Show or hide the overlay by hand. The automatic rules still apply on top: this
 -- cannot make the HUD appear over a game that is not running.
-bind_action("SUPER + ALT + K", "/api/overlay/toggle", "df-hud: toggle overlay")
+bind_action("SUPER  + K", "/api/overlay/toggle", "df-hud: toggle overlay")
 
 -- Hide the challenge board without turning it off in the config. B for board.
 --
@@ -100,7 +100,7 @@ bind_action("SUPER + ALT + K", "/api/overlay/toggle", "df-hud: toggle overlay")
 -- "block", "bosses", "session" and "xp" work the same way if you want keys for
 -- them. The status banner deliberately cannot be hidden - it is how df-hud says it
 -- cannot do its job.
-bind_action("SUPER + ALT + B", "/api/widget/challenges/toggle",
+bind_action("SUPER + B", "/api/widget/challenges/toggle",
     "df-hud: toggle the challenge board")
 
 -- The city map: the whole 59x55 grid, shaded the way DFProfiler's own map shades
@@ -110,7 +110,7 @@ bind_action("SUPER + ALT + B", "/api/widget/challenges/toggle",
 --
 -- Same endpoint as every other group, because it IS another group: it inherits the
 -- HUD's click-through, so the mouse still reaches the game through it.
-bind_action("SUPER + ALT + D", "/api/widget/map/toggle",
+bind_action("SHIFT + D", "/api/widget/map/toggle",
     "df-hud: toggle the city map")
 
 -- No bind for /api/console/toggle. The console does not exist yet - the endpoint

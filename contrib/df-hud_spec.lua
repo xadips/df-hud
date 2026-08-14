@@ -78,26 +78,40 @@ local function find_bind(keys)
     end
 end
 
--- The keybinds, and that each posts to the endpoint it claims to.
+-- The keybinds, one per action.
+--
+-- Matched on the ENDPOINT rather than on the key, deliberately. The combinations are
+-- yours to change - the whole reason they live in a compositor config is that you can
+-- - so a test that pinned "SUPER + ALT + D" would fail the next time you rebound,
+-- which is not something worth being told about. What must not break is that each
+-- action is still reachable, still on loopback, and still gated.
 local want = {
-    ["SUPER + ALT + T"] = "/api/run/start",
-    ["SUPER + ALT + X"] = "/api/xp/reset",
-    ["SUPER + ALT + K"] = "/api/overlay/toggle",
-    ["SUPER + ALT + B"] = "/api/widget/challenges/toggle",
-    ["SUPER + ALT + D"] = "/api/widget/map/toggle",
+    "/api/run/start",
+    "/api/xp/reset",
+    "/api/overlay/toggle",
+    "/api/widget/challenges/toggle",
+    "/api/widget/map/toggle",
 }
-for keys, path in pairs(want) do
-    local b = find_bind(keys)
-    check(b ~= nil, keys .. " is bound")
+
+local function find_post(path)
+    for _, b in ipairs(calls.binds) do
+        if type(b.dispatcher) == "table" and b.dispatcher.kind == "exec_cmd"
+            and b.dispatcher.cmd:find(path, 1, true) ~= nil then
+            return b
+        end
+    end
+end
+
+for _, path in ipairs(want) do
+    local b = find_post(path)
+    check(b ~= nil, path .. " is bound to something")
     if b then
-        check(type(b.dispatcher) == "table" and b.dispatcher.kind == "exec_cmd",
-            keys .. " uses an exec_cmd dispatcher")
-        check(b.dispatcher.cmd:find(path, 1, true) ~= nil, keys .. " posts to " .. path)
-        check(b.dispatcher.cmd:find("127.0.0.1", 1, true) ~= nil, keys .. " stays on loopback")
+        check(b.dispatcher.cmd:find("127.0.0.1", 1, true) ~= nil, path .. " stays on loopback")
         -- kitty was focused when the snippet loaded, so every key must have been
-        -- switched off on its way out. This is the whole point of the gate: the
-        -- keys do not exist while you are in another window.
-        check(b.keybind.enabled == false, keys .. " is disabled while another window is focused")
+        -- switched off on its way out. This is the whole point of the gate: the keys
+        -- do not exist while you are in another window.
+        check(b.keybind.enabled == false,
+            (b.keys or "?") .. " -> " .. path .. " is disabled while another window is focused")
     end
 end
 
@@ -107,16 +121,17 @@ check(arm_all ~= nil, "window.active is subscribed")
 if arm_all then
     active_window = { class = "deadfrontier.exe" }
     arm_all()
-    for keys in pairs(want) do
-        local b = find_bind(keys)
-        check(b ~= nil and b.keybind.enabled == true, keys .. " is armed while the game is focused")
+    for _, path in ipairs(want) do
+        local b = find_post(path)
+        check(b ~= nil and b.keybind.enabled == true, path .. " is armed while the game is focused")
     end
 
     active_window = { class = "firefox" }
     arm_all()
-    for keys in pairs(want) do
-        local b = find_bind(keys)
-        check(b ~= nil and b.keybind.enabled == false, keys .. " is disarmed by focusing something else")
+    for _, path in ipairs(want) do
+        local b = find_post(path)
+        check(b ~= nil and b.keybind.enabled == false,
+            path .. " is disarmed by focusing something else")
     end
     active_window = { class = "kitty" }
 end

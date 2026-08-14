@@ -147,7 +147,14 @@ func (w *mapWidget) draw(_ *gtk.DrawingArea, cr *cairo.Context, _, _ int) {
 	}
 
 	// The district lines, which are what df_tradezone counts. Drawn over the blocks
-	// and under everything else.
+	// and under everything else - and only along the parts of themselves that
+	// actually divide two blocks.
+	//
+	// Cell by cell rather than one line per divider, because the city is not a
+	// rectangle and a divider is stored as if it were. Full-length lines put a grey
+	// rule across whatever the window happens to include of the empty ground: crop
+	// to Ground Zero and eleven of the twenty-five rows are nothing at all, so the
+	// divider at x 1041 ran on down through them with no map on either side.
 	cr.SetSourceRGBA(1, 1, 1, 0.35*w.opacity())
 	cr.SetLineWidth(1)
 	for _, bx := range theCity.DividersX {
@@ -155,16 +162,26 @@ func (w *mapWidget) draw(_ *gtk.DrawingArea, cr *cairo.Context, _, _ int) {
 			continue
 		}
 		x := float64(bx-w.frame.Window.X) * cell
-		cr.MoveTo(x, 0)
-		cr.LineTo(x, float64(w.frame.Window.H)*cell)
+		for y := 0; y < w.frame.Window.H; y++ {
+			if !theCity.DividesColumn(bx, w.frame.Window.Y+y) {
+				continue
+			}
+			cr.MoveTo(x, float64(y)*cell)
+			cr.LineTo(x, float64(y+1)*cell)
+		}
 	}
 	for _, by := range theCity.DividersY {
 		if by <= w.frame.Window.Y || by >= w.frame.Window.Y+w.frame.Window.H {
 			continue
 		}
 		y := float64(by-w.frame.Window.Y) * cell
-		cr.MoveTo(0, y)
-		cr.LineTo(float64(w.frame.Window.W)*cell, y)
+		for x := 0; x < w.frame.Window.W; x++ {
+			if !theCity.DividesRow(w.frame.Window.X+x, by) {
+				continue
+			}
+			cr.MoveTo(float64(x)*cell, y)
+			cr.LineTo(float64(x+1)*cell, y)
+		}
 	}
 	cr.Stroke()
 

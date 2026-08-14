@@ -201,6 +201,45 @@ func TestCityMapDistrictDividers(t *testing.T) {
 	}
 }
 
+// A divider is stored as a whole column or row, but it is only a boundary where
+// there is a city on either side of it. Drawn the length of the 59x55 box it becomes
+// a grey rule over empty ground, which is what the cropped map showed south of
+// Ground Zero: eleven rows of nothing with a district line running down them.
+func TestCityDividesOnlyBetweenBlocks(t *testing.T) {
+	// x 1041 is a real boundary at y 1019, the last row built out this far east.
+	if !theCity.DividesColumn(1041, 1019) {
+		t.Error("the divider at x 1041 should divide something at y 1019")
+	}
+	// One row further south the city has ended, and stays ended: sixteen rows of
+	// nothing, twelve of which a radius-12 window at Ground Zero includes.
+	for y := 1020; y <= 1035; y++ {
+		if theCity.DividesColumn(1041, y) {
+			t.Errorf("the divider at x 1041 divides nothing at y %d, but says it does", y)
+		}
+	}
+
+	// The same for a horizontal one: y 1020 is the southern strip's own boundary,
+	// and it runs out east of the city just like the blocks do.
+	if !theCity.DividesRow(1035, 1020) {
+		t.Error("the divider at y 1020 should divide something at x 1035")
+	}
+	if theCity.DividesRow(1005, 1020) {
+		t.Error("the divider at y 1020 has no blocks either side at x 1005")
+	}
+
+	// A block on EITHER side is enough, or every boundary would lose the edge of
+	// whichever district ends first. Both of these are one-sided in the real city:
+	// at y 985 only the west of x 1041 is built, at y 995 only the east.
+	for _, y := range []int{985, 995} {
+		if theCity.IsBlock(1040, y) == theCity.IsBlock(1041, y) {
+			t.Fatalf("this test needs y %d to be built on one side of x 1041 only", y)
+		}
+		if !theCity.DividesColumn(1041, y) {
+			t.Errorf("x 1041 at y %d has a block on one side, so the line belongs there", y)
+		}
+	}
+}
+
 func TestParseCityMapRejectsNonsense(t *testing.T) {
 	// The file is embedded, so a bad one is a build-time mistake - but it is parsed
 	// with a real parser and every branch of it should refuse rather than guess.
