@@ -67,7 +67,25 @@ ln -s ~/Programming/df-hud/contrib/df-hud.lua ~/.config/hypr/conf.d/df-hud.lua
 require("df-hud")     -- in hyprland.lua, next to the other require lines
 ```
 
+**The keys exist only while Dead Frontier is focused.** Hyprland has no per-window
+bind filter, so [contrib/df-hud.lua](contrib/df-hud.lua) subscribes to
+`window.active` and calls `set_enabled` on each bind: while you are in a browser they
+are not registered at all, so `SUPER+ALT+D` is free for whatever else wants it. Two
+consequences worth knowing before leaving it on - `SUPER+ALT+K` stops working when
+you alt-tab off the game, which is sometimes exactly when you want it (the overlay is
+hidden by workspace, not by focus, so a window in front of the game on the same
+workspace still has the HUD over it), and a disabled bind is silent, which looks
+identical to df-hud being down. `only_when_game_focused = false` at the top of that
+file turns the whole thing off; `always = true` on one `bind_action` exempts one key.
+
+The click catcher is gated the same way and not optionally: a global bind on the left
+mouse button forks a curl on every click you make all day. `hyprland.conf` can
+express none of this - see the note at the top of
+[contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf) for the nearest approximation.
+
 Then `hyprctl reload`, and `hyprctl binds -j | grep df-hud` to see the six binds.
+That lists them whether or not they are armed - Hyprland does not report the enabled
+flag - so the way to check the gate is to press one in another window and get nothing.
 There is a stubbed-`hl` check for that file in
 [contrib/df-hud_spec.lua](contrib/df-hud_spec.lua), run by `go test`, because a
 mistake in it is otherwise only visible in the compositor's log.

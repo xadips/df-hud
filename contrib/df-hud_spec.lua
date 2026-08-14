@@ -4,8 +4,9 @@
 -- runs inside the compositor, its API is Hyprland's, and the only way to find out
 -- that a method was misnamed is normally to reload the config and read the log. So
 -- `hl` is stubbed here and the snippet is loaded against it, which pins down the
--- three things that are easy to get silently wrong: the bind is created DISABLED,
--- focusing the game arms it, and the click reporter is rate limited.
+-- things that are easy to get silently wrong: every bind starts DISABLED while
+-- something else is focused, focusing the game arms all of them, and the click
+-- reporter is rate limited.
 --
 -- What this cannot check is whether Hyprland's real API behaves as the stub does.
 -- Only a reload can tell you that.
@@ -93,7 +94,31 @@ for keys, path in pairs(want) do
             keys .. " uses an exec_cmd dispatcher")
         check(b.dispatcher.cmd:find(path, 1, true) ~= nil, keys .. " posts to " .. path)
         check(b.dispatcher.cmd:find("127.0.0.1", 1, true) ~= nil, keys .. " stays on loopback")
+        -- kitty was focused when the snippet loaded, so every key must have been
+        -- switched off on its way out. This is the whole point of the gate: the
+        -- keys do not exist while you are in another window.
+        check(b.keybind.enabled == false, keys .. " is disabled while another window is focused")
     end
+end
+
+-- Focus moving to and from the game arms and disarms all of them together.
+local arm_all = calls.handlers["window.active"]
+check(arm_all ~= nil, "window.active is subscribed")
+if arm_all then
+    active_window = { class = "deadfrontier.exe" }
+    arm_all()
+    for keys in pairs(want) do
+        local b = find_bind(keys)
+        check(b ~= nil and b.keybind.enabled == true, keys .. " is armed while the game is focused")
+    end
+
+    active_window = { class = "firefox" }
+    arm_all()
+    for keys in pairs(want) do
+        local b = find_bind(keys)
+        check(b ~= nil and b.keybind.enabled == false, keys .. " is disarmed by focusing something else")
+    end
+    active_window = { class = "kitty" }
 end
 
 -- The layer rule, which is what keeps the overlay from being animated or blurred.
