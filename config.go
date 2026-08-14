@@ -489,13 +489,14 @@ type MapWidgetConfig struct {
 
 	// Center puts the grid in the middle of the monitor and ignores x/y. On by
 	// default, because the right coordinate depends on both the monitor and
-	// cell_size - 1003 pixels wide at 17px per block, 1062 at 18 - so a number in
+	// cell_size - 1180 pixels wide at 20px per block, 1062 at 18 - so a number in
 	// a file would have to be recomputed by hand every time either changed.
 	Center bool `toml:"center"`
 
-	// CellSize is pixels per block. The whole grid is 59x55 cells, so 17 gives
-	// 1003x935 and 18 - the size their own map uses - gives 1062x990. Below 6 the
-	// markers stop being legible and it is a coloured smear, so 6 is the floor.
+	// CellSize is pixels per block. The whole grid is 59x55 cells, so 20 gives
+	// 1180x1100 - 18 is the size their own map uses. Below 6 the markers stop being
+	// legible and it is a coloured smear, so 6 is the floor. There is no ceiling: a
+	// grid larger than the screen is a mistake you can see.
 	CellSize int `toml:"cell_size"`
 
 	// Opacity multiplies the map's own alpha, which is already partial (0.7, the
@@ -664,7 +665,7 @@ func defaultConfig() *Config {
 				Placement: Placement{X: 700, Y: 240}, Enabled: true,
 				Color:    "#e8e8e8",
 				Center:   true,
-				CellSize: 17, Opacity: 1, ShowList: true, MaxListed: 20,
+				CellSize: 20, Opacity: 1, ShowList: true, MaxListed: 20,
 			},
 			Challenges: ChallengesWidgetConfig{
 				Placement: Placement{X: 10, Y: 190}, Enabled: true,

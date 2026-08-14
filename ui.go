@@ -60,6 +60,9 @@ type hud struct {
 	// show or hide arrives repeatedly and mapping an already-mapped surface is
 	// wasted work at best.
 	visible bool
+	// monitorW and monitorH are the size of the monitor the surface is on, kept so
+	// a config reload can re-centre a group without waiting for the next remap.
+	monitorW, monitorH int
 	// monitorPinned is the connector the surface is currently pinned to, empty
 	// for "the compositor chooses".
 	monitorPinned  string
@@ -267,6 +270,13 @@ func (h *hud) applyConfig(cfg *Config) {
 	h.applyPlacement(cfg)
 	if widgetSignature(cfg) != h.widgetSig {
 		h.rebuildWidgets(cfg)
+		// Re-centre what asked to be centred. A rebuilt group is put back at its
+		// configured x/y, so without this, editing cell_size resized the map and
+		// left it where the file said - which reads as centring being broken rather
+		// than as it not having run yet.
+		if h.monitorW > 0 {
+			h.centreGroups(h.monitorW, h.monitorH)
+		}
 	}
 	// The status label is the HUD's own rather than a widget, so a rebuild does not
 	// reposition it.
@@ -436,6 +446,7 @@ func (h *hud) sizeToMonitor(monitor *gdk.Monitor) {
 	}
 	width, height := geometry.Width(), geometry.Height()
 	if width > 0 && height > 0 {
+		h.monitorW, h.monitorH = width, height
 		h.window.SetDefaultSize(width, height)
 		h.centreGroups(width, height)
 	}

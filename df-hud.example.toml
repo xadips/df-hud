@@ -371,22 +371,22 @@ min_samples = 3
 enabled = true
 
 # Centre the grid on the monitor, ignoring x/y below. On by default: the right
-# coordinate depends on both the monitor and cell_size - the grid is 1003 wide at
-# 17px and 1062 at 18px - so a number here would have to be recomputed by hand
-# every time either changed.
+# coordinate depends on both the monitor and cell_size - the grid is 1180 wide at
+# 20px per block and 1062 at 18 - so a number here would have to be recomputed by
+# hand every time either changed. Editing cell_size re-centres it on the spot.
 center = true
 
 # Where the top-left of the grid goes when center = false.
 x = 700
 y = 240
 
-# Pixels per block. 59x55 cells, so 17 gives 1003x935 and 18 - the size their own
-# map uses - gives 1062x990. Minimum 6, below which a marker is unreadable and the
-# thing is a coloured smear.
+# Pixels per block. 59x55 cells, so 20 gives 1180x1100, and 18 is the size their own
+# map uses. Minimum 6, below which a marker is unreadable and the thing is a coloured
+# smear; no maximum, since a grid bigger than the screen is a mistake you can see.
 #
 # Centring means this is the only number to change to resize the map: the position
 # follows from it.
-cell_size = 17
+cell_size = 20
 
 # Multiplies the map's own alpha, which is already partial (0.7, their value), so
 # the game shows through the city. The markers are NOT faded: the point is to see
