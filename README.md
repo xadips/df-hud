@@ -350,20 +350,55 @@ lines heavier, an identifier on every active event and a white ring on the block
 you are standing on.
 
 ```
-    +---------------------------------------+   g 6m24s  6 x Bandits
-    |  the city, 59 x 55 blocks             |   n 6m24s  1 x Flaming Charred Titan
-    |  gaps are gaps: you walk around them  |   4 6m24s  3 x Evolved Longarms
-    |  N D P F S C Z are the outposts       |             1 x Irradiated Wraith
-    |  g n 4 i mark what is standing where  |             1 x Mega Mother
-    +---------------------------------------+   i 6m24s  4 x Evolved Longarms
+    +---------------------------------------+   B5 6m24s  6 x Bandits
+    |  the city, 59 x 55 blocks             |   DH 6m24s  1 x Devil Hound
+    |  gaps are gaps: you walk around them  |   N7 6m24s  3 x Evolved Longarms
+    |  N D P F S C Z are the outposts       |              1 x Irradiated Wraith
+    |  B5 DH N7 I3 say what is standing     |              1 x Mega Mother
+    +---------------------------------------+   I3 6m24s  4 x Evolved Longarms
 ```
+
+### The legend
+
+**DFProfiler's scheme, because their map is the one people already read.** A letter for
+what sort of place it is, a number for which one:
+
+| | |
+|---|---|
+| `B1`..`B6` | bandit camps, ascending into the endgame |
+| `I1`..`In` | inner city bosses - one enemy type |
+| `N1`..`Nn` | nests - several types on one block |
+| `M1`..`M5` | missions, one per outpost |
+| `Δ` | a QRF, numbered only when more than one is up |
+| `DH` `VL` `BH` `LB` | today's daily: Devil Hound, Volatile Leaper, Behemoth, Legendary Bandits |
+
+The numbers are the **game's own event slots** (`boss_num`), not a ranking of anything
+about you, and that is the point: `B4` means the same camp all cycle, and the same camp
+their map calls `B4`, so it is a thing you can say out loud to another player. Within a
+type the slots ascend with difficulty - measured on a real cycle, the camps sit at
+slots 1, 2, 3, 14, 16 carrying 1, 2, 2, 4 and 6 bandits - so ranking the active ones
+gives `B1..B6` in the order the city gets harder. A mission's slot **is** its outpost
+(0 Nastya's, 1 Fort Pastor, 2 Dogg's, 3 Precinct 13, 4 Secronom), so `M2` is Fort
+Pastor's every time.
+
+This replaced identifiers renumbered nearest-first, which read beautifully and could
+not be said to anyone: they changed as you walked. The **key** is still sorted nearest
+first, because the order of a row is not the name of it.
+
+**A ring only where a ring says something the identifier does not:** today's daily, a
+mission, a QRF. All four dailies share one colour - the question a ring answers is "is
+today's event here", and the initials already say which it is. Bandits, bosses and
+nests have no ring at all now; `B`, `I` and `N` name themselves, and ringing all three
+put a coloured box around two thirds of the map. A nest that happens to contain the
+daily keeps its `N` number and gains the ring, since a nest of six things is not "the
+Devil Hound".
 
 Not on `M`, which is the game's own map key. A consuming compositor bind should mean
 the game never sees the keypress, but a client that polls raw key state does not care
 what else is held down, so the letter is chosen to be one the game does nothing with.
 
 `radius` crops it to a square around you - `radius = 15` draws 31x31 blocks - and
-cropping **zooms in rather than shrinking**: `size` is a pixel budget for the longest
+cropping **zooms in rather than shrinking**: `scale` is a pixel budget for the longest
 side, so the same 1180px over 31 blocks gives 38px cells where 59 blocks gave 20. The
 key is cropped to match, since a row about a boss you cannot see on the map is a row
 about nowhere. At the full 59x55 most of the picture is somewhere you are not going.

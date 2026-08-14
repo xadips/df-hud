@@ -191,31 +191,37 @@ func (w *mapWidget) draw(_ *gtk.DrawingArea, cr *cairo.Context, _, _ int) {
 	font := pango.NewFontDescription()
 	font.SetFamily("monospace")
 	font.SetWeight(pango.WeightBold)
-	font.SetAbsoluteSize(cell * 0.72 * pango.SCALE)
-	layout.SetFontDescription(font)
 
 	for _, o := range outposts {
-		w.drawMarker(cr, layout, cell, o.X, o.Y, outpostLetters[o.Name], 0.75, 1, 0.75)
+		w.drawMarker(cr, layout, font, cell, o.X, o.Y, outpostLetters[o.Name], 0.75, 1, 0.75)
 	}
 	for _, m := range w.frame.Marks {
 		if m.OffMap {
 			continue
 		}
-		// The ring carries the category - a nest, a single boss, a bandit pack, a
-		// mission, a QRF - because those are four different decisions and one colour
-		// for all of them made the map say "something is here" and nothing else. The
-		// same colour is the chip behind that event's letter in the key beside the
-		// grid, so the two are one lookup.
-		r, g, b := m.Category().Color().Floats()
-		w.ring(cr, cell, m.X, m.Y, r, g, b, 1.5)
-		// The letter stays white whatever the ring is: it has to be legible on all
+		// A ring only where a ring says something the identifier does not: today's
+		// daily, a mission, a QRF. B, I and N already name themselves, and ringing all
+		// three drew a box around two thirds of the map in three colours - which is
+		// how a map ends up saying "something is here" and nothing more.
+		//
+		// The colour is the same one the key puts behind that event's identifier, so
+		// the grid and the list are one lookup.
+		if m.ringed() {
+			r, g, b := m.markInk().Floats()
+			w.ring(cr, cell, m.X, m.Y, r, g, b, 1.5)
+		}
+		// The identifier stays white whatever the ring is: it has to be legible on all
 		// sixteen of the map's shades, and a coloured glyph one cell wide is not.
-		w.drawMarker(cr, layout, cell, m.X, m.Y, m.Marker, 1, 1, 1)
+		w.drawMarker(cr, layout, font, cell, m.X, m.Y, m.Marker, 1, 1, 1)
 	}
 	if w.haveStandin {
 		w.ring(cr, cell, w.standing[0], w.standing[1], 1, 1, 1, 2)
 	}
 }
+
+// markerFontRatio is the identifier's size as a fraction of the cell, before any
+// shrinking to fit a second character in.
+const markerFontRatio = 0.72
 
 // ring outlines one block, for an event or for where you are.
 func (w *mapWidget) ring(cr *cairo.Context, cell float64, bx, by int, r, g, b, width float64) {
@@ -231,14 +237,29 @@ func (w *mapWidget) ring(cr *cairo.Context, cell float64, bx, by int, r, g, b, w
 	cr.Stroke()
 }
 
-// drawMarker centres one character in a block.
-func (w *mapWidget) drawMarker(cr *cairo.Context, layout *pango.Layout, cell float64,
-	bx, by int, text string, r, g, b float64) {
+// drawMarker centres an identifier in a block, at whatever size fits inside it.
+//
+// Fitting is measured, not assumed. The identifiers are no longer one character each -
+// B4, N7, DH, Δ2 - and two glyphs at the one-glyph size spill into the neighbouring
+// cell, which on a grid where the cell IS the meaning reads as the marker belonging to
+// the block next door. Pango knows the advance width of whatever "monospace" resolves
+// to on this machine; multiplying by a guessed ratio does not.
+func (w *mapWidget) drawMarker(cr *cairo.Context, layout *pango.Layout,
+	font *pango.FontDescription, cell float64, bx, by int, text string, r, g, b float64) {
 	if text == "" || !theCity.IsBlock(bx, by) || !w.frame.Window.contains(bx, by) {
 		return
 	}
+	font.SetAbsoluteSize(cell * markerFontRatio * pango.SCALE)
+	layout.SetFontDescription(font)
 	layout.SetText(text)
 	tw, th := layout.PixelSize()
+	// 0.9 rather than 1.0 so a two-character marker keeps a hair of the shade visible
+	// either side of it, which is what stops the row reading as one long word.
+	if fit := cell * 0.9; float64(tw) > fit && tw > 0 {
+		font.SetAbsoluteSize(cell * markerFontRatio * (fit / float64(tw)) * pango.SCALE)
+		layout.SetFontDescription(font)
+		tw, th = layout.PixelSize()
+	}
 	x := float64(bx-w.frame.Window.X)*cell + (cell-float64(tw))/2
 	y := float64(by-w.frame.Window.Y)*cell + (cell-float64(th))/2
 	cr.SetSourceRGBA(r, g, b, 1)

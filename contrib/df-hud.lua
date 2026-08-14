@@ -232,14 +232,25 @@ if #gated > 0 then
         end
     end
 
-    -- Once at load, or a reload while you are reading this would leave every bind
-    -- armed until the next time focus moved.
-    arm()
+    -- Subscribe FIRST, then arm once.
+    --
+    -- That order is deliberate, and so is the pcall. This runs during config load,
+    -- and on a fresh compositor start there may be no window to ask about yet - an
+    -- error out of hl.get_active_window would abort the rest of this file, taking the
+    -- subscriptions and the layer rule below with it and leaving every bind in
+    -- whatever state it was created in. Subscribed first, the worst case is that the
+    -- binds are wrong until you next change focus, which fixes itself.
+    --
+    -- Not hypothetical: on the boot of 2026-08-14 the mouse bind below never
+    -- appeared, while all five keys did, which is what a truncated load looks like.
     hl.on("window.active", arm)
     -- Closing the game does not always produce a window.active, so the close is
     -- watched too: a bind left armed with no game focused is the exact thing this
     -- is here to avoid.
     hl.on("window.close", arm)
+    -- And once now, or a reload while you are reading this would leave every bind
+    -- armed until the next time focus moved.
+    pcall(arm)
 end
 
 -- The overlay is text over a game, redrawn every second. It never wants animating,

@@ -30,6 +30,34 @@ value inside an event is a **string**, including numbers and booleans.
 | `isoa` | `"1"` means every outpost is under attack; map-wide, not a block |
 | `started` / `ended` | `ended = "1"` is last cycle's |
 | `start_time` / `end_time` | plain unix seconds |
+| `boss_num` | the game's own event slot, numbered **per event type** - see below |
+
+## boss_num is the legend
+
+`boss_num` is what makes an identifier on the map mean something to another player,
+and it took a capture to see why. Within one `event_type` the slots **ascend with
+difficulty**. From the 30-event capture in `testdata/bossmap.json`:
+
+| slots | what sits there |
+| --- | --- |
+| 1, 2, 3, 14, 16 | bandit camps, carrying 1, 2, 2, 4 and 6 bandits in that order |
+| 4 … 11 | nests, from two Flaming Zombies and a Riot Shield Guy up to a five-type bear pit |
+| 17 … 27 | single-type spawns, Flaming Zombie through Irradiated Titan |
+
+So ranking the *active* events of one category by slot gives `B1..B6` in the order the
+city gets harder, which is what DFProfiler's map means by those numbers - it reads the
+same feed. Onslaught has its own slot space (a nest at slot 1 alongside a bandit camp
+at slot 1), which costs nothing because Onslaught events are filtered out unless you
+are standing in it.
+
+For a **mission** the slot IS the outpost, zero-based: 0 Nastya's, 1 Fort Pastor,
+2 Dogg's, 3 Precinct 13, 4 Secronom. Valcrest and Ground Zero carried none in the
+capture. Hence `M1..M5` with no ranking at all.
+
+**QRFs all arrive on slot 0** - two at once in the capture, `qrf` and `qrfdr` - so they
+cannot be numbered from it and are counted in feed order instead. Worth knowing before
+trusting the slot as a general key: it is unique per type for spawns and missions, and
+useless for QRFs.
 
 ## Three things taken from their own bossmap.js rather than guessed
 

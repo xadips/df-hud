@@ -10,6 +10,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -101,6 +102,21 @@ type CityEvent struct {
 	// formats it.
 	Objectives []string
 	RewardExp  int64
+
+	// Slot is the feed's boss_num: the game's own numbering of its event slots,
+	// counted separately per event type. It is what the identifiers on the map are
+	// built from, and it is worth being precise about why.
+	//
+	// Within a type the slots ascend with difficulty. Measured on a real cycle: the
+	// bandit camps sit at slots 1, 2, 3, 14, 16 carrying 1, 2, 2, 4 and 6 bandits;
+	// the nests run 4 to 11, from a pair of Flaming Zombies up to a bear pit; the
+	// single-type bosses run 17 to 27. So ranking the active events of one category
+	// by slot gives B1..B6 in the order the city gets harder, which is what their
+	// own map means by those numbers - it reads off the same feed.
+	//
+	// For a mission the slot IS the outpost: 0 Nastya's, 1 Fort Pastor, 2 Dogg's,
+	// 3 Precinct 13, 4 Secronom. Hence M1..M5 with no ranking at all.
+	Slot int
 
 	Locations [][2]int
 	Start     time.Time
@@ -258,39 +274,155 @@ type CityMark struct {
 	Reachable bool
 }
 
-// markerChars is what an active event is drawn with, in the feed's order.
+// eventMarkers is the identifier each active event is drawn with, one per event in
+// the order given.
 //
-// Digits first because a digit stays legible in a small cell, then capitals, which are
-// easier to read at cell size than lowercase - and lowercase only as overflow, which a
-// real feed does not reach.
+// The scheme is DFProfiler's, because their map is the one everybody already reads:
+// a letter for what sort of place it is and a number for which one, so B4 means the
+// fourth bandit camp out and everyone means the same camp by it.
 //
-// The seven letters the outposts use are EXCLUDED, and taken from that table rather
-// than typed out again here: an event marked D beside Dogg's Stockade's own D would be
-// two different things drawn the same way. I is excluded as well, because 1 is in use
-// two characters earlier.
+//	B1..B6   bandit camps, ascending with the endgame
+//	I1..In   inner city bosses, one enemy type
+//	N1..Nn   nests, several types on one block
+//	M1..M5   missions, one per outpost
+//	Δ        a QRF, numbered only when there is more than one
+//	DH VL BH LB   today's daily, whichever it is
 //
-// Deliberately NOT one letter per event type: there are seven boss types on a busy
-// day, and "B" for both Behemoth and Bandits is worse than a character you can look up.
-var markerChars = buildMarkerChars()
+// The numbers come from the game's own slots rather than from anything about the
+// player - see CityEvent.Slot - so an identifier means the same place all cycle, and
+// the same place it means on their map. It deliberately does NOT renumber by
+// distance: a marker that changed as you walked could not be said out loud to anyone.
+//
+// The daily takes its own initials instead of a number, but only when it stands
+// alone. A nest that happens to contain today's boss keeps its N number, because a
+// nest of six things is not "the Devil Hound" - the ring around it carries that.
+func eventMarkers(events []CityEvent) []string {
+	// Rank the slots per category first, so that a category present as slots 1, 2, 3,
+	// 14, 16 draws as 1, 2, 3, 4, 5.
+	ranks := make(map[markCategory]map[int]int)
+	for _, e := range events {
+		cat := markCategoryOf(e.Kind, e.Enemies)
+		switch cat {
+		case markBoss, markNest, markBandits:
+			if dailyMarker(e.Enemies) != "" && cat != markNest {
+				continue // takes its initials, so it is not in the numbering
+			}
+		default:
+			// Missions are numbered by their own slot and QRFs are not numbered by
+			// slot at all - see below, they all carry slot 0.
+			continue
+		}
+		if ranks[cat] == nil {
+			ranks[cat] = make(map[int]int)
+		}
+		ranks[cat][e.Slot] = 0
+	}
+	for _, slots := range ranks {
+		ordered := make([]int, 0, len(slots))
+		for slot := range slots {
+			ordered = append(ordered, slot)
+		}
+		sort.Ints(ordered)
+		for i, slot := range ordered {
+			slots[slot] = i + 1
+		}
+	}
 
-func buildMarkerChars() string {
-	taken := map[byte]bool{'I': true}
-	for _, letter := range outpostLetters {
-		if letter != "" {
-			taken[letter[0]] = true
+	// QRFs are counted rather than ranked, because every one of them arrives on slot 0
+	// - measured, two at once in the capture - so a slot ranking would give them both
+	// the same number. Their order is the feed's.
+	qrfTotal, qrfSeen := 0, 0
+	for _, e := range events {
+		if markCategoryOf(e.Kind, e.Enemies) == markQRF {
+			qrfTotal++
 		}
 	}
-	var b strings.Builder
-	b.WriteString("123456789")
-	for c := byte('A'); c <= 'Z'; c++ {
-		if !taken[c] {
-			b.WriteByte(c)
+
+	out := make([]string, len(events))
+	for i, e := range events {
+		cat := markCategoryOf(e.Kind, e.Enemies)
+		daily := dailyMarker(e.Enemies)
+		switch {
+		case daily != "" && cat != markNest:
+			out[i] = daily
+		case cat == markMission:
+			// The slot is the outpost, and it is zero-based on the wire.
+			out[i] = "M" + strconv.Itoa(e.Slot+1)
+		case cat == markQRF:
+			// One QRF is just Δ. A number on the only one of something says there
+			// are others to tell it from.
+			qrfSeen++
+			out[i] = qrfMarker
+			if qrfTotal > 1 {
+				out[i] += strconv.Itoa(qrfSeen)
+			}
+		case cat == markBandits:
+			out[i] = "B" + strconv.Itoa(ranks[cat][e.Slot])
+		case cat == markNest:
+			out[i] = "N" + strconv.Itoa(ranks[cat][e.Slot])
+		case cat == markBoss:
+			out[i] = "I" + strconv.Itoa(ranks[cat][e.Slot])
+		default:
+			out[i] = "?"
 		}
 	}
-	for c := byte('a'); c <= 'z'; c++ {
-		b.WriteByte(c)
+	return out
+}
+
+// qrfMarker is the triangle their map uses for a quick reaction force. Kept as their
+// glyph rather than a letter of our own so that a screenshot of this map and a
+// screenshot of theirs say the same thing.
+const qrfMarker = "Δ"
+
+// dailyBosses are the rotating daily events, each with initials of its own.
+//
+// Initials rather than a number because the whole question about a daily is WHICH one
+// it is - it is the thing you log in for - and "I3" answers it only via the key. They
+// share one ring colour, so the map says "today's boss is here" before you read
+// anything.
+//
+// Matched on the full name as a substring, which is not fussiness: "hound" alone
+// would file every Flaming Flesh Hound as a Devil Hound, and those are seven blocks
+// of walking apart in difficulty. A prefixed variant (a Charred Devil Hound) still
+// matches, which is right.
+var dailyBosses = []struct{ Name, Marker string }{
+	{"devil hound", "DH"},
+	{"volatile leaper", "VL"},
+	{"behemoth", "BH"},
+}
+
+// legendaryBanditPack is the size at which a bandit camp is the daily rather than one
+// of the six standing camps. The daily pack is eight; the largest ordinary camp
+// observed is six.
+const legendaryBanditPack = 8
+
+// dailyMarker returns the initials for today's daily if these enemies are it, or "".
+func dailyMarker(enemies []string) string {
+	for _, e := range enemies {
+		low := strings.ToLower(e)
+		for _, d := range dailyBosses {
+			if strings.Contains(low, d.Name) {
+				return d.Marker
+			}
+		}
+		if strings.Contains(low, "bandit") && enemyCount(e) >= legendaryBanditPack {
+			return "LB"
+		}
 	}
-	return b.String()
+	return ""
+}
+
+// enemyCount is the number at the front of "6 x Bandits", or 0 if there is none.
+func enemyCount(enemy string) int {
+	n, _, ok := strings.Cut(enemy, " x ")
+	if !ok {
+		return 0
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(n))
+	if err != nil {
+		return 0
+	}
+	return count
 }
 
 // ActiveMarks is everything happening on the map right now.
@@ -311,8 +443,12 @@ func (b *BossMap) ActiveMarks(now time.Time, from [2]int, dist []int32) []CityMa
 	inOnslaught := from[0] == onslaughtCoord && from[1] == onslaughtCoord
 
 	server := b.ServerNow(now)
-	var out []CityMark
-	marker := 0
+
+	// Which events count comes first, then their identifiers, then the marks. Two
+	// passes because the identifiers are ranked WITHIN the active set: B1 is the
+	// first bandit camp that is actually up, and that cannot be known while still
+	// walking the list.
+	active := make([]CityEvent, 0, len(b.Events))
 	for _, e := range b.Events {
 		if !e.ActiveAt(server) {
 			continue
@@ -320,11 +456,13 @@ func (b *BossMap) ActiveMarks(now time.Time, from [2]int, dist []int32) []CityMa
 		if e.Onslaught && !inOnslaught {
 			continue
 		}
-		char := "?"
-		if marker < len(markerChars) {
-			char = string(markerChars[marker])
-		}
-		marker++
+		active = append(active, e)
+	}
+	markers := eventMarkers(active)
+
+	var out []CityMark
+	for i, e := range active {
+		char := markers[i]
 		var ends time.Duration
 		if !e.End.IsZero() {
 			if left := e.End.Sub(now); left > 0 {
@@ -452,6 +590,7 @@ type rawBossEvent struct {
 	Title            string     `json:"title"`
 	SpecialEnemyType string     `json:"special_enemy_type"`
 	EventType        string     `json:"event_type"`
+	BossNum          string     `json:"boss_num"`
 	StartTime        string     `json:"start_time"`
 	EndTime          string     `json:"end_time"`
 
@@ -515,6 +654,7 @@ func parseBossMap(data []byte, fetchedAt time.Time) (*BossMap, error) {
 			endedFlag:   re.Ended == "1",
 		}
 		event.RewardExp, _ = strconv.ParseInt(re.RewardExp, 10, 64)
+		event.Slot, _ = strconv.Atoi(re.BossNum)
 		if secs, err := strconv.ParseInt(re.StartTime, 10, 64); err == nil && secs > 0 {
 			event.Start = time.Unix(secs, 0)
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -49,8 +50,9 @@ func TestMapListOrdersByTheWalk(t *testing.T) {
 		mark("b", 2, true, time.Minute, "near"),
 		mark("c", 0, false, time.Minute, "unknown distance"),
 	}}
-	// Identifiers are assigned to the visible set in this order, so the nearest thing
-	// is always 1 - the letters the feed happened to hand out are not what is drawn.
+	// The ROWS are ordered nearest first; the identifiers are not touched. They are
+	// the game's own slots now (B4, N7), so renumbering them by distance would give
+	// the same block a different name every time you walked.
 	rows := mapListLines(v, mapCfg())
 	var order []string
 	for _, r := range rows {
@@ -58,7 +60,7 @@ func TestMapListOrdersByTheWalk(t *testing.T) {
 			order = append(order, r.Marker+" "+r.Text)
 		}
 	}
-	want := []string{"1 near", "2 far", "3 unknown distance"}
+	want := []string{"b near", "a far", "c unknown distance"}
 	if strings.Join(order, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", order, want)
 	}
@@ -87,8 +89,8 @@ func TestMapListPutsOnslaughtFirstWhenYouAreInIt(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("rows = %#v, want both events", rows)
 	}
-	if rows[0].Marker != "1" || !strings.Contains(rows[0].Text, "Mega Wraith") {
-		t.Errorf("first row = %#v, want the Onslaught event as 1", rows[0])
+	if rows[0].Marker != "z" || !strings.Contains(rows[0].Text, "Mega Wraith") {
+		t.Errorf("first row = %#v, want the Onslaught event at the top", rows[0])
 	}
 }
 
@@ -106,8 +108,8 @@ func TestMapListSplitsANest(t *testing.T) {
 	if rows[0].Marker == "" || rows[0].Sub {
 		t.Errorf("the single pack should be one headline row: %#v", rows[0])
 	}
-	// The nest is the second entry, so it is renumbered 2 whatever the feed called it.
-	if rows[1].Marker != "2" || rows[1].Text != "3 x Evolved Longarms" {
+	// The nest is the second entry and keeps its own identifier.
+	if rows[1].Marker != "4" || rows[1].Text != "3 x Evolved Longarms" {
 		t.Errorf("the nest's first type belongs on its headline: %#v", rows[1])
 	}
 	for _, r := range rows[2:] {
@@ -378,32 +380,186 @@ func TestMapListCropsWithTheMap(t *testing.T) {
 	}
 }
 
-// The identifiers on the map must not collide with the letters the outposts are drawn
-// with: an event marked D beside Dogg's Stockade's own D is two different things drawn
-// the same way. Capitals otherwise, since they read better at cell size.
-func TestMarkerCharsAvoidTheOutposts(t *testing.T) {
-	taken := map[string]string{}
-	for name, letter := range outpostLetters {
-		taken[letter] = name
+// The identifiers, against the real capture. This is the whole scheme in one test,
+// and it is against a fixture rather than hand-built events on purpose: the claim
+// being made is about what the FEED contains - that boss_num ascends with difficulty
+// within a type, and that a mission's slot is its outpost - so events written here to
+// suit the code would prove nothing.
+func TestEventMarkersFollowTheFeedsOwnSlots(t *testing.T) {
+	m := loadFixtureBossMap(t)
+	marks := m.ActiveMarks(fixtureNow(t, m), [2]int{1020, 1000}, nil)
+
+	// One identifier per event, whatever it is called, at every one of its blocks.
+	got := map[string]string{} // marker -> what is standing there
+	for _, mk := range marks {
+		if mk.OffMap {
+			continue
+		}
+		if was, seen := got[mk.Marker]; seen && was != strings.Join(mk.Enemies, " + ") {
+			t.Errorf("marker %q is on two different events: %q and %q",
+				mk.Marker, was, strings.Join(mk.Enemies, " + "))
+		}
+		got[mk.Marker] = strings.Join(mk.Enemies, " + ")
 	}
-	for i := 0; i < len(markerChars); i++ {
-		c := string(markerChars[i])
-		if name, clash := taken[c]; clash {
-			t.Errorf("marker %q is also %s's letter on the map", c, name)
+
+	// No event identifier is a bare letter, which is what keeps them apart from the
+	// outposts: those are drawn as single letters, and Nastya's N beside a nest's N
+	// would be two different things drawn the same way. A prefix plus a number is
+	// always two characters, and Δ is not a letter at all.
+	for marker := range got {
+		if len([]rune(marker)) < 2 && marker != qrfMarker {
+			t.Errorf("marker %q is a bare letter, which is what an outpost is drawn as", marker)
 		}
 	}
-	if strings.Contains(markerChars, "I") {
-		t.Error("I is too close to 1, which is the first marker of all")
+
+	// The bandit camps, ascending with the endgame. In this capture they sit at slots
+	// 1, 2, 3, 14, 16 carrying 1, 2, 2, 4 and 6 bandits, so the numbers must come out
+	// 1..5 in that order - which is what makes B4 mean the same camp as it does on
+	// their map.
+	for marker, want := range map[string]string{
+		"B1": "1 x Bandits", "B2": "2 x Bandits", "B3": "2 x Bandits",
+		"B4": "4 x Bandits", "B5": "6 x Bandits",
+	} {
+		if got[marker] != want {
+			t.Errorf("%s = %q, want %q", marker, got[marker], want)
+		}
 	}
-	// Digits first, then capitals: the common case should not be lowercase.
-	if markerChars[0] != '1' {
-		t.Errorf("the first marker is %q, want 1", markerChars[0])
+	if _, over := got["B6"]; over {
+		t.Errorf("B6 exists but the capture has five camps: %v", got["B6"])
 	}
-	if got := markerChars[9]; got < 'A' || got > 'Z' {
-		t.Errorf("the tenth marker is %q, want a capital", string(got))
+
+	// Missions are one per outpost, numbered by the slot the game gives them rather
+	// than by anything about the player. M1 is Nastya's, whose mission is at 1002,1000.
+	for _, mk := range marks {
+		if mk.Kind == EventMission && mk.X == 1002 && mk.Y == 1000 && mk.Marker != "M1" {
+			t.Errorf("Nastya's mission is %q, want M1", mk.Marker)
+		}
+		if mk.Kind == EventMission && mk.X == 1047 && mk.Y == 987 && mk.Marker != "M5" {
+			t.Errorf("Secronom's mission is %q, want M5", mk.Marker)
+		}
 	}
-	// And there are enough for a busy cycle: a live capture carried 31 active events.
-	if len(markerChars) < 40 {
-		t.Errorf("%d markers is not enough for a busy feed", len(markerChars))
+
+	// Nests are multi-type spawns, numbered the same way. The capture has eight,
+	// slots 4 to 11.
+	for _, want := range []string{"N1", "N8"} {
+		if got[want] == "" {
+			t.Errorf("%s is missing; markers were %v", want, sortedKeys(got))
+		}
+	}
+	if _, over := got["N9"]; over {
+		t.Error("N9 exists but the capture has eight nests")
+	}
+
+	// Single-type bosses take I. Seven of them here: eight in the capture, less the
+	// Devil Hound, which is the daily and takes its initials instead.
+	if got["I1"] == "" || got["I7"] == "" {
+		t.Errorf("inner city bosses should run I1..I7, got %v", sortedKeys(got))
+	}
+	if _, over := got["I8"]; over {
+		t.Error("I8 exists but the capture has seven plain bosses and one daily")
+	}
+
+	// Both QRFs are triangles, and numbered BECAUSE there are two of them.
+	qrf := 0
+	for _, mk := range marks {
+		if mk.Kind == EventQRF {
+			qrf++
+			if !strings.HasPrefix(mk.Marker, qrfMarker) {
+				t.Errorf("a QRF is marked %q, want a %s", mk.Marker, qrfMarker)
+			}
+			if mk.Marker == qrfMarker {
+				t.Errorf("with two QRFs up, %q needs a number", mk.Marker)
+			}
+		}
+	}
+	if qrf == 0 {
+		t.Error("the capture has two QRF events and neither was marked")
+	}
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Today's daily takes its own initials, and a nest that merely contains it does not.
+//
+// The capture is a Devil Hound day: one standing alone at 1017,1024, and one inside a
+// four-type nest at 1019,1021. Those are two different things to a player - a boss you
+// can kill and a nest you probably cannot - so they must not be drawn the same way.
+func TestDailyBossMarkers(t *testing.T) {
+	m := loadFixtureBossMap(t)
+	marks := m.ActiveMarks(fixtureNow(t, m), [2]int{1020, 1000}, nil)
+
+	var alone, inNest *CityMark
+	for i, mk := range marks {
+		switch {
+		case mk.X == 1017 && mk.Y == 1024:
+			alone = &marks[i]
+		case mk.X == 1019 && mk.Y == 1021:
+			inNest = &marks[i]
+		}
+	}
+	if alone == nil || inNest == nil {
+		t.Fatal("the fixture should have a lone Devil Hound and one in a nest")
+	}
+	if alone.Marker != "DH" {
+		t.Errorf("the lone Devil Hound is %q, want DH", alone.Marker)
+	}
+	if !strings.HasPrefix(inNest.Marker, "N") {
+		t.Errorf("the nest containing one is %q, want an N number", inNest.Marker)
+	}
+	// Both are today's boss, so both are ringed in the daily colour - that is what
+	// says "the daily is here" before you have read anything.
+	for _, mk := range []*CityMark{alone, inNest} {
+		if !mk.IsDaily() || !mk.ringed() {
+			t.Errorf("%q at %d,%d should be flagged as the daily", mk.Marker, mk.X, mk.Y)
+		}
+		if mk.markInk() != dailyColor {
+			t.Errorf("%q is not in the daily colour", mk.Marker)
+		}
+	}
+
+	// The daily is out of the numbering it would otherwise have taken, so the plain
+	// bosses stay 1..n with no gap where it was.
+	for _, mk := range marks {
+		if mk.Marker == "I0" {
+			t.Error("the boss numbering starts at 1")
+		}
+	}
+}
+
+// A name is not a substring match away from another name. "hound" would file every
+// Flaming Flesh Hound as the Devil Hound, and those are a world apart to walk to.
+func TestDailyMarkerDoesNotOvermatch(t *testing.T) {
+	for _, enemies := range [][]string{
+		{"1 x Flaming Flesh Hound"},
+		{"4 x Flaming Rumblers"},
+		{"6 x Bandits"},
+		{"1 x Mother"},
+	} {
+		if got := dailyMarker(enemies); got != "" {
+			t.Errorf("%v was filed as the daily %q", enemies, got)
+		}
+	}
+	for enemies, want := range map[string]string{
+		"1 x Devil Hound":         "DH",
+		"1 x Charred Devil Hound": "DH",
+		"2 x Volatile Leaper":     "VL",
+		"1 x Behemoth":            "BH",
+		"8 x Bandits":             "LB",
+		"12 x Bandits":            "LB",
+	} {
+		if got := dailyMarker([]string{enemies}); got != want {
+			t.Errorf("dailyMarker(%q) = %q, want %q", enemies, got, want)
+		}
+	}
+	// Seven bandits is still one of the standing camps, not the legendary pack.
+	if got := dailyMarker([]string{"7 x Bandits"}); got != "" {
+		t.Errorf("7 x Bandits = %q, want a plain camp", got)
 	}
 }

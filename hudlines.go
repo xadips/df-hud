@@ -1102,21 +1102,15 @@ func mapFrameFor(v *View, cfg MapWidgetConfig) mapFrame {
 		return closer(entries[i], entries[j])
 	})
 
-	// Renumber, then relabel every visible location of each event with its new
-	// character. The map and the key are now the same numbering by construction.
-	assigned := make(map[string]string, len(entries))
-	for i := range entries {
-		char := "?"
-		if i < len(markerChars) {
-			char = string(markerChars[i])
-		}
-		assigned[entries[i].Marker] = char
-		entries[i].Marker = char
-	}
-	for _, m := range visible {
-		m.Marker = assigned[m.Marker]
-		frame.Marks = append(frame.Marks, m)
-	}
+	// The identifiers are NOT renumbered here, which is a change from what this file
+	// used to do. They are B4, N7, M2 now - the game's own event slots, ranked once in
+	// bossmap.go - so one means the same block all cycle, and the same block that
+	// DFProfiler's map calls B4. Renumbering nearest-first read beautifully and could
+	// not be said out loud to another player, because it changed as you walked.
+	//
+	// The key is still SORTED nearest first, which is the part worth having and costs
+	// nothing: the order of a row is not the name of it.
+	frame.Marks = append(frame.Marks, visible...)
 
 	for i, m := range entries {
 		if cfg.MaxListed > 0 && i == cfg.MaxListed {
@@ -1131,7 +1125,7 @@ func mapFrameFor(v *View, cfg MapWidgetConfig) mapFrame {
 			names = []string{m.Label}
 		}
 		frame.Rows = append(frame.Rows, mapRow{
-			Marker: m.Marker, Color: m.Category().Color().Hex(),
+			Marker: m.Marker, Color: m.markInk().Hex(),
 			Timer: mapTimer(m), Text: names[0],
 		})
 		for _, enemy := range names[1:] {
@@ -1273,11 +1267,44 @@ var markColors = map[markCategory]markColor{
 	markOther:   {0xc0, 0xc0, 0xc0},
 }
 
+// dailyColor is ONE colour for every daily, whichever it is today, because the
+// question it answers is not "which boss" - the initials say that - but "is today's
+// event here". Orange, which is the one loud colour the palette above had left.
+var dailyColor = markColor{0xff, 0x8a, 0x00}
+
 func (c markCategory) Color() markColor {
 	if col, ok := markColors[c]; ok {
 		return col
 	}
 	return markColors[markOther]
+}
+
+// markInk is the colour a mark is drawn in, on the map and behind its identifier in
+// the key: the daily's own colour when today's boss is standing there, and the
+// category's otherwise.
+func (m CityMark) markInk() markColor {
+	if m.IsDaily() {
+		return dailyColor
+	}
+	return m.Category().Color()
+}
+
+// ringed reports whether this mark gets a ring drawn around its block.
+//
+// Only the ones a ring earns. Bandits, bosses and nests no longer have one: their
+// identifier already says which of the three they are - B, I or N - so the ring was
+// repeating the letter in colour and putting a box around two thirds of the map. What
+// is left is what a ring is for, which is "this one is different": today's daily, a
+// mission, and a QRF.
+func (m CityMark) ringed() bool {
+	if m.IsDaily() {
+		return true
+	}
+	switch m.Category() {
+	case markMission, markQRF:
+		return true
+	}
+	return false
 }
 
 // Category classifies one mark.
@@ -1286,8 +1313,18 @@ func (c markCategory) Color() markColor {
 // by one: a block with several kinds of boss standing on it. Bandits are recognised
 // by name because the feed gives no other handle on them - they arrive as
 // "6 x Bandits" in the same field a boss does.
-func (m CityMark) Category() markCategory {
-	switch m.Kind {
+func (m CityMark) Category() markCategory { return markCategoryOf(m.Kind, m.Enemies) }
+
+// IsDaily reports whether today's daily boss is standing here - which is a different
+// question from what sort of place this is, and the reason it is separate: a nest can
+// contain the daily, and then it is both a nest and the thing you logged in for.
+func (m CityMark) IsDaily() bool { return dailyMarker(m.Enemies) != "" }
+
+// markCategoryOf is the classification, shared by the mark and the event it came from so
+// that the identifier assigned in bossmap.go and the colour chosen here cannot
+// disagree about what something is.
+func markCategoryOf(kind CityEventKind, enemies []string) markCategory {
+	switch kind {
 	case EventMission:
 		return markMission
 	case EventQRF:
@@ -1295,10 +1332,10 @@ func (m CityMark) Category() markCategory {
 	case EventUnknown:
 		return markOther
 	}
-	if len(m.Enemies) > 1 {
+	if len(enemies) > 1 {
 		return markNest
 	}
-	if len(m.Enemies) == 1 && strings.Contains(strings.ToLower(m.Enemies[0]), "bandit") {
+	if len(enemies) == 1 && strings.Contains(strings.ToLower(enemies[0]), "bandit") {
 		return markBandits
 	}
 	return markBoss

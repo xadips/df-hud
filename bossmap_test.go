@@ -646,8 +646,10 @@ func TestNearestMarkIgnoresOnslaught(t *testing.T) {
 	}
 }
 
-// Markers are assigned in the feed's order and are unique per event, which is what
-// makes the character on the map and the line in the list mean the same thing.
+// One identifier per event, the same at every block that event occupies, and no two
+// events sharing one. That is what makes the marker on the map and the row in the key
+// mean the same thing. Which identifier it is - B4, N7, DH - is
+// TestEventMarkersFollowTheFeedsOwnSlots.
 func TestActiveMarksNumberEventsInOrder(t *testing.T) {
 	m := loadFixtureBossMap(t)
 	now := fixtureNow(t, m)
@@ -665,8 +667,13 @@ func TestActiveMarksNumberEventsInOrder(t *testing.T) {
 			t.Error("with no distance table nothing can be reachable")
 		}
 	}
-	if marks[0].Marker != "1" {
-		t.Errorf("the first marker is %q, want 1", marks[0].Marker)
+	// Every event got one, and none fell through to the "we do not recognise this"
+	// marker - which would mean the feed grew a category this does not classify.
+	for _, mark := range marks {
+		if mark.Marker == "" || mark.Marker == "?" {
+			t.Errorf("event %q at %d,%d has no identifier (%q)",
+				mark.Label, mark.X, mark.Y, mark.Marker)
+		}
 	}
 }
 

@@ -202,6 +202,26 @@ if catch then
     end
 end
 
+-- A FAILURE AT LOAD MUST NOT TRUNCATE THE FILE.
+--
+-- On a fresh compositor start there may be no focused window to ask about yet, and
+-- everything after the point of failure is silently lost: the focus subscriptions that
+-- gate the keys, and the layer rule that keeps the overlay from being animated and
+-- blurred. Loading the snippet again against a stub that throws is the only way to
+-- check it, since the real thing only fails at the one moment nobody is watching.
+do
+    local saved, saved_window = calls, hl.get_active_window
+    calls = { binds = {}, layer_rules = {}, execs = {}, handlers = {} }
+    hl.get_active_window = function() error("no window focused yet") end
+
+    check(pcall(loadfile(snippet)), "the snippet survives get_active_window failing at load")
+    check(calls.handlers["window.active"] ~= nil, "the focus subscription still happened")
+    check(calls.handlers["window.close"] ~= nil, "the close subscription still happened")
+    check(#calls.layer_rules == 1, "the layer rule still reached the compositor")
+
+    calls, hl.get_active_window = saved, saved_window
+end
+
 if failures > 0 then
     io.stderr:write(failures .. " check(s) failed\n")
     os.exit(1)
