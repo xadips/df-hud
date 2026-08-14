@@ -519,7 +519,7 @@ type MapWidgetConfig struct {
 
 	// Scale sizes the whole group - the grid AND the key beside it - from one number.
 	// 1.0 is the map this started as: 1180 pixels across the longest side, 20 per
-	// block at the full 59x55, and a 12pt key. 1.25 is a quarter bigger, both halves
+	// block at the full 59x55, and a 13pt key. 1.25 is a quarter bigger, both halves
 	// of it.
 	//
 	// It is a pixel budget for the longest side rather than a size per block, which
@@ -708,7 +708,7 @@ func defaultConfig() *Config {
 				// time you open it, and cropping is a preference you arrive at.
 				Radius: 0,
 				// 1.0 is the map this started as - 1180 pixels across, 20 per block
-				// at the full city, a 12pt key - and it holds that screen size at
+				// at the full city, a 13pt key - and it holds that screen size at
 				// any radius.
 				Scale:   1,
 				Opacity: 1, ShowList: true, MaxListed: 40,

@@ -102,6 +102,12 @@ type groupStyle struct {
 	name  string
 	place Placement
 	color string
+
+	// fontPt is a size the group works out for ITSELF, used when font_size did not
+	// pin one. Only the map has one: its key is sized from the blocks beside it, so
+	// that widget.map.scale moves the grid and the key together instead of scaling
+	// the picture and leaving the writing at 12pt. See mapListPt.
+	fontPt float64
 }
 
 func groupStyles(cfg *Config) []groupStyle {
@@ -112,7 +118,8 @@ func groupStyles(cfg *Config) []groupStyle {
 		{name: "session", place: cfg.Widget.Session.Placement, color: cfg.Widget.Session.Color},
 		{name: "xp", place: cfg.Widget.XP.Placement, color: cfg.Widget.XP.Color},
 		{name: "challenges", place: cfg.Widget.Challenges.Placement, color: cfg.Widget.Challenges.Color},
-		{name: "map", place: cfg.Widget.Map.Placement, color: cfg.Widget.Map.Color},
+		{name: "map", place: cfg.Widget.Map.Placement, color: cfg.Widget.Map.Color,
+			fontPt: mapListPt(cfg.Widget.Map)},
 	}
 }
 
@@ -139,8 +146,12 @@ func widgetStyleCSS(cfg *Config) string {
 		if g.place.FontFamily != "" {
 			decls += fmt.Sprintf("  font-family: %s;\n", g.place.FontFamily)
 		}
-		if g.place.FontSize > 0 {
-			decls += fmt.Sprintf("  font-size: %.1fpt;\n", g.place.FontSize)
+		// A pinned font_size wins over a derived one, which is the whole point of
+		// setting it: mapListPt returns 0 precisely so that it does.
+		if pt := g.place.FontSize; pt > 0 {
+			decls += fmt.Sprintf("  font-size: %.1fpt;\n", pt)
+		} else if g.fontPt > 0 {
+			decls += fmt.Sprintf("  font-size: %.1fpt;\n", g.fontPt)
 		}
 		if g.color != "" {
 			decls += fmt.Sprintf("  color: %s;\n", g.color)

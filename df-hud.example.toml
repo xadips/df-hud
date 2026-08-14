@@ -396,7 +396,7 @@ radius = 0
 
 # The size of the whole thing, grid AND the key beside it, from one number. 1.0 is
 # the map this shipped as: 1180 pixels across the longest side, 20 per block at the
-# full 59x55, a 12pt key. 1.25 is a quarter bigger, both halves of it.
+# full 59x55, a 13pt key. 1.25 is a quarter bigger, both halves of it.
 #
 # It is a pixel budget for the longest side rather than a size per block, which is
 # what makes a cropped map BIGGER rather than merely smaller: the same budget over 31

@@ -305,30 +305,30 @@ func TestMapWindow(t *testing.T) {
 func TestMapScaleSizesTheGridAndTheKeyTogether(t *testing.T) {
 	cfg := mapCfg()
 
-	// Scale 1.0 is the map this shipped as: the full 59-block city at 20px a block,
-	// with a 12pt key.
+	// Scale 1.0 is the full 59-block city at 20px a block, with a 13pt key.
 	if got := mapCellPx(cfg); got != 20 {
 		t.Errorf("cell at scale 1 = %dpx, want 20", got)
 	}
-	if got := mapListPt(cfg); got != 12 {
-		t.Errorf("key at scale 1 = %gpt, want 12", got)
+	if got := mapListPt(cfg); got != 13 {
+		t.Errorf("key at scale 1 = %gpt, want 13", got)
 	}
 
 	// A bigger scale moves both, in step.
 	cfg.Scale = 1.5
 	bigCell, bigPt := mapCellPx(cfg), mapListPt(cfg)
-	if bigCell != 30 || bigPt != 18 {
-		t.Errorf("at scale 1.5: cell %dpx / key %gpt, want 30 and 18", bigCell, bigPt)
+	if bigCell != 30 || bigPt != 19.5 {
+		t.Errorf("at scale 1.5: cell %dpx / key %gpt, want 30 and 19.5", bigCell, bigPt)
 	}
 
 	// So does cropping, because the scale is a budget for the window rather than a
-	// size per block - which is the whole point of it.
+	// size per block - which is the whole point of it. This is the one the key used
+	// to miss: the grid zoomed and the writing beside it did not.
 	cfg.Scale, cfg.Radius = 1, 15
 	if got := mapCellPx(cfg); got != 38 {
 		t.Errorf("cell at radius 15 = %dpx, want 38 (1180 over 31 blocks)", got)
 	}
-	if got := mapListPt(cfg); got <= 12 {
-		t.Errorf("key at radius 15 = %gpt, want more than the uncropped 12", got)
+	if got := mapListPt(cfg); got != 24.7 {
+		t.Errorf("key at radius 15 = %gpt, want 24.7, up from the uncropped 13", got)
 	}
 
 	// Both ends clamp. A tight radius divides the budget by very few blocks, and a

@@ -345,7 +345,7 @@ right coordinate depends on both the monitor and `scale`.
 
 `scale` is the only size key: **one number sizes the grid and the key beside it**, so
 the two cannot drift apart. It is a pixel budget for the longest side rather than a
-size per block - 1.0 is 1180px across, 20 per block at the full city, a 12pt key -
+size per block - 1.0 is 1180px across, 20 per block at the full city, a 13pt key -
 which is what makes `radius` zoom in: the same budget over 31 blocks gives 38px cells.
 
 Everything about it follows from being **a widget group rather than a window**, and

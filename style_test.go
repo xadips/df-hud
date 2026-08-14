@@ -8,15 +8,38 @@ import (
 // Only what is actually set gets a rule. A rule emitted for every group would be
 // six rules overriding [hud] with the same values it already has - harmless until
 // someone changes hud.font_size and finds it does nothing.
-func TestWidgetStyleCSSOnlyEmitsWhatIsSet(t *testing.T) {
+func TestWidgetStyleCSSOnlyEmitsWhatIsSetOrDerived(t *testing.T) {
 	bare := defaultConfig()
 	bare.Widget.Block.Color = ""
 	bare.Widget.Session.Color = ""
 	bare.Widget.XP.Color = ""
 	bare.Widget.Challenges.Color = ""
 	bare.Widget.Map.Color = ""
-	if got := widgetStyleCSS(bare); got != "" {
-		t.Errorf("widgetStyleCSS = %q, want nothing when no group overrides anything", got)
+	// Every group but one now sets nothing at all. The map is the exception, and it
+	// is not an accident: its key's size is DERIVED from the blocks beside it rather
+	// than configured (mapListPt), so it emits a font-size from a file that says
+	// nothing about the map. That is the whole point of one scale key - the grid and
+	// the writing beside it move together, and the sheet is how the writing hears
+	// about it.
+	want := ".group-map, .group-map label {\n  font-size: 13.0pt;\n}\n"
+	if got := widgetStyleCSS(bare); got != want {
+		t.Errorf("widgetStyleCSS =\n%q\nwant only the map's derived size:\n%q", got, want)
+	}
+
+	// And it follows the scale. Cropping to 31 blocks spends the same pixel budget on
+	// fewer of them, so the blocks grow and the key has to grow with them.
+	cropped := defaultConfig()
+	cropped.Widget.Map.Radius = 15
+	if got := widgetStyleCSS(cropped); !strings.Contains(got, "font-size: 24.7pt") {
+		t.Errorf("a cropped map's key did not grow with its blocks:\n%s", got)
+	}
+
+	// Pinning font_size turns the derivation off, so the file wins.
+	pinned := defaultConfig()
+	pinned.Widget.Map.FontSize = 11
+	if got := widgetStyleCSS(pinned); !strings.Contains(got, "font-size: 11.0pt") ||
+		strings.Contains(got, "13.0pt") {
+		t.Errorf("font_size did not beat the derived size:\n%s", got)
 	}
 
 	// The defaults DO set two colours - white for the clock, off-white for the

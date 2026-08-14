@@ -898,8 +898,21 @@ func mapCellPx(cfg MapWidgetConfig) int {
 // scale sizes the whole group rather than just the grid. 0 means "leave it to the
 // stylesheet", which is the answer when font_size pinned it by hand.
 //
-// 0.6pt per pixel of cell puts a 20px map's key at 12pt, which is where this started,
-// so scale 1.0 is the map and the key it shipped with.
+// This is reached through groupStyles, as the map group's derived font size, so it
+// lands in the same CSS every other group's font_size does. Computing it and never
+// applying it was the first version, and it looked exactly like the bug it was: the
+// grid zoomed with the scale and the key stayed at whatever [hud] said.
+//
+// 0.65pt per pixel of cell puts a 20px map's key at 13pt. That factor was measured by
+// looking at it, from both directions: 0.6 was small enough to squint at beside 28px
+// blocks, 0.75 was bigger than every other group on the HUD. It stays a little ABOVE
+// the marker it explains - the glyph in a cell is cell*0.72 pixels, which works out at
+// 0.54pt per pixel - because the two are not the same job: a marker only has to be
+// told apart from twenty others, while the key is a column you read while something
+// walks towards you.
+//
+// Rounded to a tenth because that is what reaches the stylesheet anyway (%.1fpt), and
+// a value that survives the trip is a value a test can state exactly.
 //
 // The bounds are sanity, not taste: under 8pt nothing is readable, and over 30pt the key
 // is taller than the map it explains.
@@ -907,7 +920,7 @@ func mapListPt(cfg MapWidgetConfig) float64 {
 	if cfg.FontSize > 0 {
 		return 0
 	}
-	pt := 0.6 * float64(mapCellPx(cfg))
+	pt := math.Round(0.65*float64(mapCellPx(cfg))*10) / 10
 	return math.Min(math.Max(pt, 8), 30)
 }
 
