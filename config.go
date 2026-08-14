@@ -509,6 +509,13 @@ type MapWidgetConfig struct {
 	ShowList bool `toml:"show_list"`
 	// MaxListed caps that list, 0 for no cap. What is dropped is counted rather
 	// than silently omitted.
+	//
+	// 40 is high enough never to trigger on a real feed - a busy cycle carries about
+	// thirty events - and low enough that the list cannot run off the bottom of the
+	// screen: beside a 1100px map on a 1440px monitor there is room for about sixty
+	// rows at the default font, and 40 entries plus a nest's extra rows is under
+	// that. The cap exists so that overflow is COUNTED rather than clipped by the
+	// edge of the screen, which would drop rows with nothing to say it had.
 	MaxListed int `toml:"max_listed"`
 }
 
@@ -665,7 +672,7 @@ func defaultConfig() *Config {
 				Placement: Placement{X: 700, Y: 240}, Enabled: true,
 				Color:    "#e8e8e8",
 				Center:   true,
-				CellSize: 20, Opacity: 1, ShowList: true, MaxListed: 20,
+				CellSize: 20, Opacity: 1, ShowList: true, MaxListed: 40,
 			},
 			Challenges: ChallengesWidgetConfig{
 				Placement: Placement{X: 10, Y: 190}, Enabled: true,

@@ -400,7 +400,12 @@ opacity = 1.0
 # can I get to". max_listed caps it, 0 for no cap, and what is dropped is counted
 # rather than silently left out.
 show_list = true
-max_listed = 20
+
+# Cap on entries, 0 for no cap. 40 never triggers on a real feed - a busy cycle
+# carries about thirty events - and keeps the list from running off the bottom of
+# the screen, so what does not fit is COUNTED ("+3 more") rather than clipped by
+# the screen edge with nothing to say so.
+max_listed = 40
 
 # Font and colour for that list. Empty inherits from [hud].
 font_family = ""
