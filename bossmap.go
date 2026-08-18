@@ -195,18 +195,24 @@ func (e CityEvent) Label() string {
 
 // BossMap is one fetch of the feed, indexed by block.
 type BossMap struct {
-	FetchedAt  time.Time
+	FetchedAt time.Time
+
+	// ServerTime is the feed's own servertime, which is NOT a clock to compare
+	// against - it is how fresh their data is. Measured 2026-08-17 against an
+	// NTP-synced local clock: 19s behind, then 53s behind 14 minutes later, so
+	// it is when their backend last synced with the game rather than what time
+	// it is there.
+	//
+	// Every timestamp in the feed is an absolute unix second landing on the
+	// game's own schedule (Onslaught's are all `unix % 300 == 2`), so the local
+	// clock is what they are compared against. Treating this field as a clock
+	// offset delayed every changeover by however stale the data was.
 	ServerTime time.Time
+
 	// Hash is the feed's own change marker (bosshash). Their page uses it to
 	// decide whether anything moved; df-hud uses it only to log that it did.
 	Hash   string
 	Events []CityEvent
-
-	// skew is the feed's clock minus ours at the moment of the fetch. Every
-	// boundary in the feed is in their time, so comparing against our clock
-	// without this makes a changeover land early or late by however far the two
-	// have drifted.
-	skew time.Duration
 
 	// OutpostAttack is the feed's isoa flag: every outpost is under attack. It is
 	// map-wide rather than per-block, and it is the sort of thing worth knowing
@@ -216,14 +222,6 @@ type BossMap struct {
 	byBlock map[[2]int][]int
 }
 
-// ServerNow converts a local instant into the feed's clock.
-func (b *BossMap) ServerNow(now time.Time) time.Time {
-	if b == nil {
-		return now
-	}
-	return now.Add(b.skew)
-}
-
 // At returns the events happening on one block at a given instant.
 //
 // Upcoming ones are deliberately excluded: "a titan will be here in forty
@@ -231,8 +229,7 @@ func (b *BossMap) ServerNow(now time.Time) time.Time {
 // is being chased. They are still in the map, which is what lets a cached fetch
 // become correct on its own when their start time arrives.
 func (b *BossMap) At(x, y int, now time.Time) []CityEvent {
-	server := b.ServerNow(now)
-	return b.eventsAt(x, y, func(e CityEvent) bool { return e.ActiveAt(server) })
+	return b.eventsAt(x, y, func(e CityEvent) bool { return e.ActiveAt(now) })
 }
 
 // AtEnded returns the previous cycle's events on one block.
@@ -243,8 +240,7 @@ func (b *BossMap) At(x, y int, now time.Time) []CityEvent {
 // whether to ask - out in the city, where cycles are hourly, the previous cycle is
 // a boss that has gone, and reporting it would send you somewhere for nothing.
 func (b *BossMap) AtEnded(x, y int, now time.Time) []CityEvent {
-	server := b.ServerNow(now)
-	return b.eventsAt(x, y, func(e CityEvent) bool { return e.EndedRecentlyAt(server) })
+	return b.eventsAt(x, y, func(e CityEvent) bool { return e.EndedRecentlyAt(now) })
 }
 
 // CityMark is one active event at one place, ready to draw. Both the map group and
@@ -442,15 +438,13 @@ func (b *BossMap) ActiveMarks(now time.Time, from [2]int, dist []int32) []CityMa
 	// map would have gaps in them, which looks like something failed to draw.
 	inOnslaught := from[0] == onslaughtCoord && from[1] == onslaughtCoord
 
-	server := b.ServerNow(now)
-
 	// Which events count comes first, then their identifiers, then the marks. Two
 	// passes because the identifiers are ranked WITHIN the active set: B1 is the
 	// first bandit camp that is actually up, and that cannot be known while still
 	// walking the list.
 	active := make([]CityEvent, 0, len(b.Events))
 	for _, e := range b.Events {
-		if !e.ActiveAt(server) {
+		if !e.ActiveAt(now) {
 			continue
 		}
 		if e.Onslaught && !inOnslaught {
@@ -546,10 +540,9 @@ func (b *BossMap) NextBoundary(now time.Time, withOnslaught bool) time.Time {
 	if b == nil {
 		return time.Time{}
 	}
-	server := b.ServerNow(now)
 	var best time.Time
 	consider := func(t time.Time) {
-		if t.IsZero() || !t.After(server) {
+		if t.IsZero() || !t.After(now) {
 			return
 		}
 		if best.IsZero() || t.Before(best) {
@@ -566,7 +559,7 @@ func (b *BossMap) NextBoundary(now time.Time, withOnslaught bool) time.Time {
 	if best.IsZero() {
 		return time.Time{}
 	}
-	return best.Add(-b.skew) // back into local time
+	return best
 }
 
 // Age is how stale this fetch is, for deciding whether to trust it.
@@ -615,15 +608,14 @@ func parseBossMap(data []byte, fetchedAt time.Time) (*BossMap, error) {
 	if raw, ok := top["bosshash"]; ok {
 		_ = json.Unmarshal(raw, &out.Hash)
 	}
-	// The feed's own clock decides what is active. Using ours would make every
-	// event's state depend on local clock skew against their server.
+	// Kept for what it says about the data's age, not used for timing. See the
+	// field.
 	var serverTime int64
 	if raw, ok := top["servertime"]; ok {
 		_ = json.Unmarshal(raw, &serverTime)
 	}
 	if serverTime > 0 {
 		out.ServerTime = time.Unix(serverTime, 0)
-		out.skew = out.ServerTime.Sub(fetchedAt)
 	} else {
 		out.ServerTime = fetchedAt
 	}

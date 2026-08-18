@@ -199,13 +199,13 @@ func TestBossMapPreviousCycle(t *testing.T) {
 	}
 	now := fixtureNow(t, m)
 	for _, e := range past {
-		if e.ActiveAt(m.ServerNow(now)) {
+		if e.ActiveAt(now) {
 			t.Error("an ended event must not also be active")
 		}
 	}
 	// And the current cycle is still separate from it.
 	for _, e := range m.At(onslaughtCoord, onslaughtCoord, now) {
-		if e.EndedRecentlyAt(m.ServerNow(now)) {
+		if e.EndedRecentlyAt(now) {
 			t.Error("At must return only the live cycle")
 		}
 	}
@@ -714,5 +714,53 @@ func TestNearestLine(t *testing.T) {
 	cfg.ShowNearest = false
 	if _, ok := nearestLine(v, cfg); ok {
 		t.Error("show_nearest = false must silence it")
+	}
+}
+
+// The feed's servertime is not a clock, so adding it must not move when an event
+// becomes active. It lags real time by however long ago their backend last synced
+// with the game: measured 19s behind, then 53s behind 14 minutes later, against an
+// NTP-synced local clock. The event timestamps themselves are absolute unix
+// seconds on the game's own schedule, so the local clock is what decides.
+//
+// Fixtures elsewhere in this file pass fetchedAt == servertime, which is exactly
+// the case that hid this. Here they are 53s apart.
+func TestAStaleServertimeDoesNotDelayAChangeover(t *testing.T) {
+	// Two back-to-back cycles on one block: the first ends at 1300, the second
+	// runs from there.
+	raw := `{
+	  "0":{"event_id":"a","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"3 x Mega Mother","special_enemy_amount":"3","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"1000","end_time":"1300"},
+	  "1":{"event_id":"b","isoa":"0","locations":[["1000","1000"]],"started":"0","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"3 x Eldritch Horror","special_enemy_amount":"3","boss_num":"17",
+	       "event_type":"","dfp_objectives":[],"start_time":"1300","end_time":"1600"},
+	  "bosshash":"abc","servertime":1147,"version":"1"}`
+	m, err := parseBossMap([]byte(raw), time.Unix(1200, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	names := func(events []CityEvent) string {
+		var out []string
+		for _, e := range events {
+			out = append(out, e.Enemies...)
+		}
+		return strings.Join(out, "+")
+	}
+
+	// A second before the boundary the first cycle is still the live one.
+	if got := names(m.At(1000, 1000, time.Unix(1299, 0))); got != "3 x Mega Mother" {
+		t.Errorf("before the boundary: active = %q", got)
+	}
+	// On the boundary the second cycle is live and the first has ended, both at
+	// once. With the servertime added, neither had happened yet.
+	if got := names(m.At(1000, 1000, time.Unix(1300, 0))); got != "3 x Eldritch Horror" {
+		t.Errorf("on the boundary: active = %q, want the cycle starting there", got)
+	}
+	if got := names(m.AtEnded(1000, 1000, time.Unix(1300, 0))); got != "3 x Mega Mother" {
+		t.Errorf("on the boundary: ended = %q, want the cycle that just finished", got)
 	}
 }

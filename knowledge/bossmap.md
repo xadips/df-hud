@@ -108,4 +108,23 @@ The schedule that falls out of this: fetch shortly after the next boundary in th
 data, on arriving at a new block (which is the only question the feed answers),
 and otherwise on a heartbeat for the random spawns. The minimum gap is a floor
 none of those can breach, and jitter is applied before the floor rather than
-after, so it can never reduce it.
+after, so it can never reduce it.\n\n
+
+## `servertime` is not a clock. It is how stale the data is.
+
+Measured 2026-08-17 against an NTP-synced local clock: 19s behind, and 53s behind
+on a fetch 14 minutes later, so it drifts rather than sitting at an offset - it is
+when their backend last synced with the game. `cf-cache-status` is `DYNAMIC`, so
+nothing in between is caching it; the lag is theirs.
+
+So nothing here adjusts by it, and every comparison is against the local clock.
+Two things justify that. The feed's timestamps are absolute unix seconds sitting
+on the game's own schedule - every Onslaught boundary is `unix % 300 == 2`, e.g.
+`19:25:02` then `19:30:02` - so they are computed from the cycle rather than
+observed on a wonky clock. And the local clock is NTP-synced, which makes it the
+better reading of absolute time of the two.
+
+Adding it delayed every changeover by the data's age: up to a minute of an event
+still reading as active after it had ended, worst on the five-minute cycle where a
+minute is a fifth of it. `ServerTime` is still parsed, because how fresh the feed
+is remains worth knowing; it just decides nothing.
