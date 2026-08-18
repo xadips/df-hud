@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -297,5 +299,153 @@ func TestNoForbiddenEndpointsInSource(t *testing.T) {
 				return true
 			})
 		}
+	}
+}
+
+// The whole point of the change: the credential must not leave the machine on
+// the polling path. This asserts it against the bytes actually sent.
+func TestGetValuesSendsNoCredentialByDefault(t *testing.T) {
+	const secret = "hunter2-password"
+	var got struct {
+		method, url, body, cookie string
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		got.method, got.url, got.body = r.Method, r.URL.String(), string(raw)
+		got.cookie = r.Header.Get("Cookie")
+		fmt.Fprint(w, "&id_member=1234567&df_level=415&df_exptotal=10000000")
+	}))
+	defer srv.Close()
+
+	c := &Client{HTTP: srv.Client(), BaseURL: srv.URL, UserAgent: "df-hud/test", Cookie: "session=abc"}
+	vars, err := c.GetValues(context.Background(),
+		Credentials{UserID: "1234567", Password: secret, SC: "sc-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vars["df_level"] != "415" {
+		t.Fatalf("record not parsed: %v", vars)
+	}
+	if got.method != http.MethodGet {
+		t.Errorf("method %s, want GET", got.method)
+	}
+	if got.body != "" {
+		t.Errorf("sent a request body: %q", got.body)
+	}
+	// Belt and braces: search everything that left, not just the body.
+	for what, s := range map[string]string{"url": got.url, "body": got.body, "cookie": got.cookie} {
+		for _, forbidden := range []string{secret, "sc-value", "password"} {
+			if strings.Contains(s, forbidden) {
+				t.Errorf("%s carried %q: %s", what, forbidden, s)
+			}
+		}
+	}
+	if !strings.Contains(got.url, "userID=1234567") {
+		t.Errorf("url %q does not identify the account", got.url)
+	}
+}
+
+// The GET form is undocumented, so a server that stops answering it must not
+// stop the HUD: the authenticated call takes over by itself.
+func TestGetValuesFallsBackToTheAuthenticatedCall(t *testing.T) {
+	var sawPost bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			http.Error(w, "gone", http.StatusNotFound)
+			return
+		}
+		sawPost = true
+		raw, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(raw), "password=hunter2") {
+			t.Errorf("the fallback did not authenticate: %q", raw)
+		}
+		fmt.Fprint(w, "&id_member=1&df_level=415")
+	}))
+	defer srv.Close()
+
+	c := &Client{HTTP: srv.Client(), BaseURL: srv.URL, UserAgent: "df-hud/test"}
+	if _, err := c.GetValues(context.Background(),
+		Credentials{UserID: "1", Password: "hunter2", SC: "sc"}); err != nil {
+		t.Fatal(err)
+	}
+	if !sawPost {
+		t.Fatal("a failed GET did not fall back to the authenticated call")
+	}
+}
+
+// A 200 that is not the record must not be accepted as one - an empty body, a
+// courtesy page, anything that happens to parse.
+func TestGetValuesRejectsAReplyThatIsNotARecord(t *testing.T) {
+	var posted bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			fmt.Fprint(w, "&something=else&unrelated=1")
+			return
+		}
+		posted = true
+		fmt.Fprint(w, "&id_member=1&df_level=415")
+	}))
+	defer srv.Close()
+
+	c := &Client{HTTP: srv.Client(), BaseURL: srv.URL, UserAgent: "df-hud/test"}
+	if _, err := c.GetValues(context.Background(),
+		Credentials{UserID: "1", Password: "p", SC: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	if !posted {
+		t.Fatal("a 200 that was not a record was accepted")
+	}
+}
+
+// The id is interpolated into a URL, so it is checked rather than escaped.
+func TestGetValuesRefusesAUserIDThatIsNotANumber(t *testing.T) {
+	var sawGet bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			sawGet = true
+		}
+		io.ReadAll(r.Body)
+		fmt.Fprint(w, "&id_member=1&df_level=415")
+	}))
+	defer srv.Close()
+
+	c := &Client{HTTP: srv.Client(), BaseURL: srv.URL, UserAgent: "df-hud/test"}
+	if _, err := c.GetValues(context.Background(),
+		Credentials{UserID: "1&evil=1", Password: "p", SC: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	if sawGet {
+		t.Fatal("a user id that is not a number was interpolated into the URL")
+	}
+}
+
+// One probe per process. A server that has stopped answering the GET must not
+// mean two requests per poll forever.
+func TestTheCredentialFreeProbeIsTriedOnlyOnce(t *testing.T) {
+	var gets, posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			gets++
+			http.Error(w, "gone", http.StatusNotFound)
+			return
+		}
+		posts++
+		io.ReadAll(r.Body)
+		fmt.Fprint(w, "&id_member=1&df_level=415")
+	}))
+	defer srv.Close()
+
+	c := &Client{HTTP: srv.Client(), BaseURL: srv.URL, UserAgent: "df-hud/test"}
+	cr := Credentials{UserID: "1", Password: "p", SC: "s"}
+	for i := 0; i < 5; i++ {
+		if _, err := c.GetValues(context.Background(), cr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if gets != 1 {
+		t.Errorf("probed the GET %d times, want exactly 1", gets)
+	}
+	if posts != 5 {
+		t.Errorf("made %d authenticated calls, want 5", posts)
 	}
 }

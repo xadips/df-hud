@@ -7,9 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 // Dead Frontier's wire protocol, ported from the game's own client
@@ -196,6 +200,19 @@ type Client struct {
 	// check the site session rather than only the credential triple. Empty is
 	// fine for get_values.
 	Cookie string
+
+	// fellBack keeps the "the credential-free form did not work" line to one,
+	// since the alternative is one per poll. publicFailed latches the decision:
+	// without it, a server that had stopped answering the GET would mean TWO
+	// requests per poll forever - a failed probe and then the real one - which is
+	// the opposite of being polite about someone else's bandwidth. One probe per
+	// process, then settle on whatever works.
+	//
+	// This is also the seam the poller's tests use to pin the authenticated
+	// request shape, which is why there is no config key for it: the fallback is
+	// automatic and one wasted request per process is not worth a knob.
+	fellBack     sync.Once
+	publicFailed atomic.Bool
 }
 
 // Call posts to one endpoint and parses the response. salt is only consulted
@@ -236,6 +253,13 @@ func (c *Client) Call(ctx context.Context, call string, p orderedParams, hashed 
 		req.Header.Set("Cookie", c.Cookie)
 	}
 
+	return c.do(req, call)
+}
+
+// do sends a prepared request and parses the reply. Split out from Call so the
+// credential-free GET below shares every bit of the response handling - the size
+// limit, the HTML detection and the flsh parse - rather than reimplementing it.
+func (c *Client) do(req *http.Request, call string) (map[string]string, error) {
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		// Wrap without the URL-embedded body: url.Error stringifies the
@@ -272,14 +296,61 @@ func (c *Client) Call(ctx context.Context, call string, p orderedParams, hashed 
 	return vars, nil
 }
 
-// GetValues fetches the full player record. Unhashed: userID+password+sc is
-// the whole requirement (bank.js:47, inventory.js:1114, df_api.js:706).
+// GetValues fetches the full player record, WITHOUT credentials.
+//
+// get_values answers a plain `GET ?userID=<id>` with the same 342 fields the
+// authenticated POST returns (measured 2026-08-17). The record is polled every
+// 10s, so the old path put an account-equivalent triple in ~360 request bodies an
+// hour to read data the server hands to anyone - and stopped polling entirely
+// when a re-login elsewhere rotated `sc`.
+//
+// The POST stays as an automatic fallback since the GET form is undocumented.
 func (c *Client) GetValues(ctx context.Context, cr Credentials) (map[string]string, error) {
+	if !c.publicFailed.Load() {
+		vars, err := c.getValuesPublic(ctx, cr.UserID)
+		switch {
+		case err == nil && recordLooksReal(vars):
+			return vars, nil
+		case err == nil:
+			err = errors.New("the reply was not a player record")
+		}
+		c.publicFailed.Store(true)
+		c.fellBack.Do(func() {
+			log.Printf("df: the credential-free record fetch did not work (%v); "+
+				"using the authenticated call for the rest of this run", err)
+		})
+	}
 	return c.Call(ctx, endpointGetValues, orderedParams{
 		{"userID", cr.UserID},
 		{"password", cr.Password},
 		{"sc", cr.SC},
 	}, false, "")
+}
+
+// getValuesPublic is the credential-free form: one query parameter, no body, no
+// cookie.
+func (c *Client) getValuesPublic(ctx context.Context, userID string) (map[string]string, error) {
+	if !numericID.MatchString(userID) {
+		// Interpolated into a URL, so it is checked rather than escaped. Every
+		// real user id is a plain number.
+		return nil, fmt.Errorf("%q is not a user id", userID)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.BaseURL+"/"+endpointGetValues+".php?userID="+userID, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", c.UserAgent)
+	return c.do(req, endpointGetValues)
+}
+
+var numericID = regexp.MustCompile(`^[0-9]{1,20}$`)
+
+// recordLooksReal guards against a 200 that is not the record - an empty body, a
+// courtesy page, an error envelope that parsed. Both fields are present in every
+// observed reply and neither is optional for a real account.
+func recordLooksReal(vars map[string]string) bool {
+	return vars["df_level"] != "" && vars["id_member"] != ""
 }
 
 // LoadChallenge fetches every challenge. Hashed, and the parameter order below

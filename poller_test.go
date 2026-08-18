@@ -117,6 +117,10 @@ func testPoller(t *testing.T, f *fakeDF, tune func(*Config)) (*Poller, *credStor
 		t.Fatal(err)
 	}
 	client := &Client{HTTP: f.srv.Client(), BaseURL: f.srv.URL, UserAgent: "df-hud-test"}
+	// Pin the authenticated shape: these tests are about the poller's scheduling
+	// and credential handling, and they assert the request body. Which HTTP form
+	// get_values uses is dfclient_test.go's business.
+	client.publicFailed.Store(true)
 	game := newGameWatcher("DeadFrontier.exe", time.Hour)
 	p := newPoller(client, store, game, func() *Config { return cfg })
 	// Millisecond intervals with the production 5s floor would make every

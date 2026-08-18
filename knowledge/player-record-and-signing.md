@@ -5,6 +5,41 @@ Everything here was read off the live server on 2026-08-11 with
 game schema; values below are either public (the signing salt, served in a public
 JS file) or harmless (a level number).
 
+## `get_values` needs no credentials
+
+Measured 2026-08-17:
+
+```
+GET https://fairview.deadfrontier.com/onlinezombiemmo/get_values.php?userID=<id>
+-> 342 fields, the same count the credential-carrying POST returns
+```
+
+No password, no `sc`, no cookie. Every field df-hud reads is present, and nothing
+credential-shaped comes back. SilverOverlays has used this form all along, at a
+31s cadence with User-Agent `Silver`; finding it there is what prompted checking.
+
+df-hud now polls this way. It matters because the record is read every 10s while
+you play: the old path put an account-equivalent triple in roughly 360 request
+bodies an hour to read data the server hands to anyone who asks, and it coupled
+the HUD's main loop to a browser session that a re-login elsewhere can rotate.
+
+The credentials are still needed - the user id comes from them, and
+`hotrods/load_challenge` genuinely requires the triple plus a cookie. This
+narrows what travels; it does not remove the dependency.
+
+The form is undocumented, so the authenticated POST stays as a fallback. It is
+probed **once per process**: a server that stopped answering the GET would
+otherwise mean two requests per poll forever, which is the opposite of polite.
+
+There is deliberately no setting for this. The fallback is automatic, so a switch
+would only ever save that one probe - and the failure it would otherwise guard
+against, the public form returning plausible-but-wrong data, is ruled out by two
+consecutive GETs returning different XP values, so nothing is caching it.
+
+It also confirms the record is readable by anyone who knows a member id. That was
+already true via DFProfiler's public feed; it is worth stating rather than
+implying.
+
 ## `get_values` returns 342 fields
 
 Far more than df-hud uses. The ones that matter, with their verified meanings:
