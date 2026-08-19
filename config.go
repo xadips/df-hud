@@ -13,22 +13,17 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Configuration. Three rules shape everything here, and each one exists
-// because the alternative bites somebody later:
+// Configuration. Three rules, each because the alternative bites later:
 //
-//  1. Unknown keys are an ERROR, not a warning. A typo'd key in a silently
-//     ignoring parser means you spend an evening wondering why
-//     `only_when_game_runing` does nothing.
+//  1. Unknown keys are an ERROR. A silently ignored typo means an evening spent
+//     wondering why `only_when_game_runing` does nothing.
 //  2. An interval below its floor is a STARTUP ERROR, never a silent clamp.
-//     These intervals decide how often we hit somebody else's game server;
-//     quietly "fixing" a too-low value teaches you that the number you wrote
-//     is the number in use, which is the wrong lesson to learn about a
-//     service that temp-bans for bursty traffic.
-//  3. Validation reports every problem at once (errors.Join), so fixing a
-//     config is one pass rather than a guessing game.
+//     Quietly "fixing" it teaches you the number you wrote is the number in use,
+//     which is the wrong lesson about a service that temp-bans bursty traffic.
+//  3. Every problem is reported at once (errors.Join), so fixing a config is one
+//     pass rather than a guessing game.
 //
-// A missing config file is fine: the defaults below are the intended setup,
-// and df-hud must be useful before you have written a line of TOML.
+// A missing file is fine: the defaults below are the intended setup.
 
 const (
 	defaultBaseURL     = "https://fairview.deadfrontier.com/onlinezombiemmo"
@@ -36,32 +31,34 @@ const (
 	defaultListen      = "127.0.0.1:9275"
 )
 
-// Interval floors. Politeness, not taste: the game server is not ours, and
-// the account has previously been temp-banned for bursty request patterns.
-// The active floor is set so that at worst we look like a busy human playing
-// the game, which is roughly what one get_values every few seconds is.
+// Interval floors. Politeness, not taste: the game server is not ours, and the
+// account has previously been temp-banned for bursty request patterns. The
+// active floor is set so that at worst we look like a busy human playing.
 const (
 	floorActiveInterval = 5 * time.Second
 	floorIdleInterval   = 30 * time.Second
-	// 30s while playing is ~120 requests/hour for the board, which is a small
-	// fraction of what the game client itself sends during normal play. Below
-	// that the board is not changing fast enough to be worth asking.
+	// 30s while playing is ~120 requests/hour for the board, a small fraction of
+	// what the game client itself sends. Below that the board is not changing
+	// fast enough to be worth asking.
 	floorChallengeInterval = 30 * time.Second
 	floorCatalogInterval   = time.Hour
-	// The boss map is somebody else's site, so the floor is set by what that site
-	// already does to itself: dfprofiler's own bossmap page re-fetches this
-	// endpoint every 30 seconds per open tab (bossmap.js). Matching that is the
-	// hard limit - df-hud must never cost the operator more than their own page
-	// does - and the default sits at twice it.
-	floorBossMapInterval = 30 * time.Second
+	// dfprofiler's own bossmap page re-fetches every 30s per open tab
+	// (bossmap.js), and the defaults stay at or under that: 1m in the city, 30s
+	// in Onslaught.
+	//
+	// The FLOOR is 15s, deliberately below their page's rate - set where a human
+	// tuning this can reach a faster cadence in Onslaught, whose 300s cycle is
+	// coarse at 30s granularity, while stopping well short of hammering. Nothing
+	// is fetched unless the game is running, so even the floor is bounded by
+	// playing time rather than uptime.
+	floorBossMapInterval = 15 * time.Second
 	floorRequestTimeout  = 2 * time.Second
 	ceilRequestTimeout   = 60 * time.Second
 	ceilJitter           = 0.5
 )
 
-// duration lets intervals be written the way humans write them ("10s", "24h").
-// time.Duration is an int64, so without this the TOML would have to carry a
-// nanosecond count.
+// duration lets intervals be written the way humans write them ("10s", "24h"),
+// rather than as the nanosecond count time.Duration would otherwise need.
 type duration struct{ time.Duration }
 
 func (d *duration) UnmarshalText(text []byte) error {
@@ -100,10 +97,10 @@ type DFConfig struct {
 	UserAgent   string   `toml:"user_agent"`
 	Timeout     duration `toml:"timeout"`
 
-	// SKeyGen is the fallback signing salt for hashed calls. Normally leave
-	// this empty: the bridge userscript reports the live value from page
-	// context and a reported salt wins, which is what makes hashed calls
-	// survive the game rotating it. Set it only to work without the bridge.
+	// SKeyGen is the fallback signing salt for hashed calls. Normally leave it
+	// empty: the bridge userscript reports the live value from page context and a
+	// reported salt wins, which is what makes hashed calls survive the game
+	// rotating it. Set it only to work without the bridge.
 	SKeyGen string `toml:"skeygen"`
 }
 
@@ -114,79 +111,74 @@ type BridgeConfig struct {
 
 type PollConfig struct {
 	// Active applies while the game process is running; Idle when it is not.
-	// With OnlyWhenGameRunning set (the default), Idle never applies at all
-	// and closing the game takes traffic to zero.
+	// With OnlyWhenGameRunning set (the default), Idle never applies at all.
 	//
-	// See the comment on minRequestGap in poller.go for why this is not
-	// refined further by df_inoutpost: it would be one poll stale by
-	// construction, and would delay the outpost-to-city transition by a whole
-	// idle interval at exactly the moment the HUD matters.
+	// See minRequestGap in poller.go for why this is not refined further by
+	// df_inoutpost: it would be one poll stale by construction, and would delay
+	// the outpost-to-city transition by a whole idle interval at exactly the
+	// moment the HUD matters.
 	ActiveInterval duration `toml:"active_interval"`
 	IdleInterval   duration `toml:"idle_interval"`
 
-	// ChallengeInterval is the challenge board's cadence WHILE PLAYING. With the
-	// game closed it stretches to at least IdleInterval - see
+	// ChallengeInterval is the board's cadence WHILE PLAYING. With the game
+	// closed it stretches to at least IdleInterval - see
 	// EffectiveChallengeInterval - so turning only_when_game_running off cannot
 	// leave a 30s poll running all night.
 	ChallengeInterval duration `toml:"challenge_interval"`
 	CatalogInterval   duration `toml:"catalog_interval"`
 
-	// Jitter spreads requests so a restart loop cannot line up into a
-	// thundering herd, and so our traffic never looks metronomic.
+	// Jitter spreads requests so a restart loop cannot line up into a thundering
+	// herd, and so our traffic never looks metronomic.
 	Jitter float64 `toml:"jitter"`
 
-	// OnlyWhenGameRunning takes traffic to exactly zero when you are not
-	// playing. Turning it off means df-hud polls around the clock; the idle
-	// floor is what keeps that defensible.
+	// OnlyWhenGameRunning takes traffic to exactly zero when you are not playing.
+	// Turning it off means polling around the clock; the idle floor is what keeps
+	// that defensible.
 	OnlyWhenGameRunning bool `toml:"only_when_game_running"`
 
-	// BackoffMax caps the exponential backoff after transport failures. Note
-	// that a rejected credential is NOT a failure to back off from: it stops
-	// polling outright (see ErrStaleCredentials).
+	// BackoffMax caps the exponential backoff after transport failures. A
+	// rejected credential is NOT a failure to back off from: it stops polling
+	// outright (see ErrStaleCredentials).
 	BackoffMax duration `toml:"backoff_max"`
 }
 
 type GameConfig struct {
-	// Process is the client executable's name, matched against argv[0]'s
-	// basename only - see procScanner.scan for why the whole command line is
-	// not searched.
+	// Process is the client executable's name, matched against argv[0]'s basename
+	// only - see procScanner.scan for why the whole command line is not searched.
 	Process string `toml:"process"`
 
 	// WindowClass identifies the game's WINDOW to the compositor, which is a
-	// separate question from identifying its process: it decides where the HUD
-	// is drawn (hud.follow_game_workspace and monitor = "auto"), never whether
+	// separate question from identifying its process: it decides where the HUD is
+	// drawn (hud.follow_game_workspace and monitor = "auto"), never whether
 	// df-hud polls.
 	//
 	// Empty means "derive it from Process", which is right when Wine reports the
-	// executable name as the class. It exists as a key because the alternative
-	// to a one-line config fix would be a rebuild, and the value can only be
-	// discovered from a running game (df-hud -check-game prints it).
+	// executable name as the class. It is a key because the value can only be
+	// discovered from a running game (df-hud -check-game prints it), and the
+	// alternative to a one-line config fix would be a rebuild.
 	WindowClass string `toml:"window_class"`
 
-	// WindowTitleIgnore is the titles that are NOT the game even though they carry
-	// its class, matched case-insensitively as substrings.
+	// WindowTitleIgnore is the titles that are NOT the game even though they
+	// carry its class, matched case-insensitively as substrings.
 	//
-	// The launcher is why. Dead Frontier's configuration dialogs are the same
-	// executable and report the same class as the game - measured live:
+	// The launcher is why. Its dialogs are the same executable and report the same
+	// class - measured live:
 	//
 	//	class: deadfrontier.exe  title: Dead Frontier Configuration  464x406
 	//	class: deadfrontier.exe  title: Input Configuration          215x78
 	//
-	// so class matching alone found one of those and drew the HUD over a settings
-	// dialog on whatever workspace it happened to be on. Even the process id does
-	// not separate them, since it is one process.
+	// so class matching alone drew the HUD over a settings dialog. Even the
+	// process id does not separate them, since it is one process.
 	//
-	// "configuration" catches both, and catches them by what they ARE rather than by
-	// their exact wording - which is also why this is an ignore list and not a
-	// positive match on the game's own title: a title we required would break the
-	// day they append a version number to it, and the failure would be an invisible
-	// HUD, which is indistinguishable from df-hud being broken.
+	// An ignore list rather than a positive match on the game's own title: a title
+	// we required would break the day they append a version number, and the
+	// failure would be an invisible HUD - indistinguishable from df-hud being
+	// broken.
 	WindowTitleIgnore []string `toml:"window_title_ignore"`
 
-	// ScanInterval is how often /proc is scanned. This is a local read costing
-	// a millisecond, not a network request, so it has no politeness floor -
-	// only a sanity one. Hyprland window events trigger an immediate rescan on
-	// top of this, so the interval is a backstop rather than the main path.
+	// ScanInterval is how often /proc is scanned. A local read costing a
+	// millisecond, so it has no politeness floor, only a sanity one. Hyprland
+	// window events trigger an immediate rescan on top of this.
 	ScanInterval duration `toml:"scan_interval"`
 }
 
@@ -208,47 +200,39 @@ type PathsConfig struct {
 type HUDConfig struct {
 	Enabled bool `toml:"enabled"`
 
-	// OnlyWhenGameRunning hides the HUD entirely while the game is not running.
-	// Named to match poll.only_when_game_running, and separate from it on
-	// purpose: one governs traffic to somebody else's server, this one governs
-	// pixels on your own screen.
+	// OnlyWhenGameRunning hides the HUD while the game is not running. Named to
+	// match poll.only_when_game_running and separate from it on purpose: one
+	// governs traffic to somebody else's server, this one governs your pixels.
 	OnlyWhenGameRunning bool `toml:"only_when_game_running"`
 
 	// FollowGameWorkspace shows the HUD only while the game's own workspace is
-	// the one being displayed. The layer-shell protocol has no per-workspace
-	// concept, so this is emulated from the compositor's window list - see
-	// visibility.go, including why it fails open.
+	// displayed. Layer-shell has no per-workspace concept, so this is emulated
+	// from the compositor's window list - see visibility.go, including why it
+	// fails open.
 	FollowGameWorkspace bool `toml:"follow_game_workspace"`
 
 	// Monitor is a connector name ("DP-1") or "auto".
 	//
-	// "auto" follows the GAME: the surface is pinned to whichever monitor the
-	// game's window is on, re-checked each time the HUD is shown. If the window
-	// cannot be identified, the compositor chooses, which in practice means the
-	// focused monitor.
+	// "auto" follows the GAME: pinned to whichever monitor the game's window is
+	// on, re-checked each time the HUD is shown. If the window cannot be
+	// identified the compositor chooses, which means the focused monitor.
 	Monitor string `toml:"monitor"`
 
-	// Layer must be "overlay" for the HUD to be visible over a fullscreen
-	// game: "top" sits BELOW fullscreen surfaces. The other values are
-	// accepted for debugging and warned about.
+	// Layer must be "overlay" to be visible over a fullscreen game: "top" sits
+	// BELOW fullscreen surfaces. The others are accepted for debugging and warned
+	// about.
 	Layer string `toml:"layer"`
 
 	// The margins inset the surface from each edge of the monitor, which makes
-	// the top-left one the ORIGIN every widget.*.x/y is measured from.
-	//
-	// There used to be an anchors key here, deciding which corner a single stack
-	// of rows grew from. It went when each group gained its own coordinates: the
-	// surface is now anchored to all four edges so that it covers the monitor and
-	// a coordinate means the same thing as it does in a screenshot. Keep these at
-	// zero unless you want everything shifted at once.
+	// the top-left one the ORIGIN every widget.*.x/y is measured from. Keep these
+	// at zero unless you want everything shifted at once.
 	MarginTop    int `toml:"margin_top"`
 	MarginRight  int `toml:"margin_right"`
 	MarginBottom int `toml:"margin_bottom"`
 	MarginLeft   int `toml:"margin_left"`
 
 	// ClickThrough must stay true in normal use - the HUD sits on top of the
-	// game, so any pointer event it keeps is one the game does not get. It is
-	// configurable only so the surface can be poked at while debugging.
+	// game, so any pointer event it keeps is one the game does not get.
 	ClickThrough bool `toml:"click_through"`
 
 	FontFamily string  `toml:"font_family"`
@@ -256,27 +240,40 @@ type HUDConfig struct {
 	TextColor  string  `toml:"text_color"`
 	Opacity    float64 `toml:"opacity"`
 
-	// CSS is an optional path to a stylesheet loaded after the built-in one,
-	// so appearance can be changed without a rebuild.
+	// CSS is an optional stylesheet loaded after the built-in one, so appearance
+	// can be changed without a rebuild.
 	CSS string `toml:"css"`
 }
 
 // BossMapConfig is the third-party event feed: what has spawned on your block.
-//
-// It is the only thing df-hud fetches from a site that is not the game's own, so
-// it gets its own switch and its own interval rather than being folded into the
-// poll section. Turning it off costs the threat line and nothing else.
+// The only thing df-hud fetches from a site that is not the game's own, so it
+// gets its own switch and intervals. Turning it off costs the threat line.
 type BossMapConfig struct {
 	Enabled bool   `toml:"enabled"`
 	URL     string `toml:"url"`
 
 	// Interval is the MINIMUM gap between fetches, not the cadence. The schedule
-	// itself comes from the feed's own event boundaries plus arriving on a new
-	// block; this is the floor none of that can breach.
+	// comes from the feed's own event boundaries plus arriving on a new block;
+	// this is the floor none of that can breach.
 	Interval duration `toml:"interval"`
-	// MaxInterval is the heartbeat, for the events that follow no cycle: the
-	// once-a-day random spawns that nothing in the data predicts.
+	// MaxInterval is the heartbeat, for the once-a-day random spawns that nothing
+	// in the data predicts.
 	MaxInterval duration `toml:"max_interval"`
+
+	// The same two numbers for while you are standing in Onslaught, and tighter,
+	// because the pair above is sized for the city's 3600s cycle. Against
+	// Onslaught's 300s one that heartbeat is a whole cycle wide and can miss a
+	// turnover outright.
+	OnslaughtInterval    duration `toml:"onslaught_interval"`
+	OnslaughtMaxInterval duration `toml:"onslaught_max_interval"`
+}
+
+// Intervals is the floor and the heartbeat for where you are standing.
+func (c BossMapConfig) Intervals(onslaught bool) (min, max time.Duration) {
+	if onslaught {
+		return c.OnslaughtInterval.Duration, c.OnslaughtMaxInterval.Duration
+	}
+	return c.Interval.Duration, c.MaxInterval.Duration
 }
 
 // RunStartConfig turns a passed-through click on the game's own Start button into
@@ -319,9 +316,8 @@ func (r RunStartConfig) ButtonContains(x, y int) bool {
 // TrayConfig is the StatusNotifierItem in the system tray.
 //
 // It exists because hiding the HUD when the game is closed leaves df-hud with no
-// presence at all: a running background process with nothing on screen, no window
-// to close and no way to tell whether it is even alive. The tray icon is the
-// answer to "is it running, is it getting data, and how do I quit it".
+// presence at all: a background process with nothing on screen, no window to
+// close and no way to tell whether it is alive.
 type TrayConfig struct {
 	Enabled bool `toml:"enabled"`
 }
@@ -338,22 +334,15 @@ type WidgetConfig struct {
 
 // Placement is where one group of rows sits, and how its text is drawn.
 //
-// x and y are in pixels from the top-left of the HUD surface, which spans the
-// whole monitor, so they are screen coordinates - the same numbers you would read
-// off a screenshot. (The hud.margin_* keys move that origin if you want
-// everything shifted, e.g. clear of a bar.)
+// x and y are pixels from the top-left of the HUD surface, which spans the whole
+// monitor - so they are the same numbers you would read off a screenshot. The
+// hud.margin_* keys move that origin if you want everything shifted, e.g. clear
+// of a bar.
 //
-// This replaced a single stack of rows in one corner with an `order` key. That
-// was the wrong model: the four groups answer unrelated questions and want to
-// live in different parts of the screen, near whatever they relate to. The clock
-// belongs next to the game's own clock, block info belongs on the side you look
-// at for it, and neither wants to be third in a list.
+// A zero font_size or empty font_family means "inherit from [hud]".
 //
-// A zero font_size or empty font_family means "inherit from [hud]", so a group
-// only needs the keys it actually differs on.
-//
-// Coordinates are logical pixels. On a scaled monitor they are not device pixels,
-// so a HiDPI setup wants the numbers you see rather than the panel's own.
+// Coordinates are logical pixels, so a scaled monitor wants the numbers you see
+// rather than the panel's own.
 type Placement struct {
 	X int `toml:"x"`
 	Y int `toml:"y"`
@@ -362,10 +351,9 @@ type Placement struct {
 	FontSize   float64 `toml:"font_size"`
 }
 
-// StatusWidgetConfig places the HUD's own error banner - stale credentials, a
-// board that cannot be fetched. It has no enabled key on purpose: it is how
-// df-hud reports that it cannot do its job, and a hidden one would leave the HUD
-// simply looking broken.
+// StatusWidgetConfig places the HUD's own error banner. No enabled key on
+// purpose: it is how df-hud reports that it cannot do its job, and a hidden one
+// would leave the HUD simply looking broken.
 type StatusWidgetConfig struct {
 	Placement
 }
@@ -377,38 +365,27 @@ type BlockWidgetConfig struct {
 	// Color is this group's normal text colour, empty to follow hud.text_color.
 	Color string `toml:"color"`
 
-	// ShowPosition prints the raw coordinates: as the head out in the city, and
-	// under the name of an outpost.
-	//
-	// Off by default because the game already shows them, under its own minimap -
-	// two identical coordinate readouts an inch apart is not information. With it
-	// off, the city head becomes the region name instead, which the game does not
-	// show anywhere.
-	//
-	// It replaced show_coords, which did this for outposts only and left the city
-	// head with no way to turn it off at all.
+	// ShowPosition prints the raw coordinates. Off by default because the game
+	// already shows them under its own minimap; with it off the city head becomes
+	// the region name, which the game does not show anywhere.
 	ShowPosition bool `toml:"show_position"`
 }
 
-// BossesWidgetConfig is what the city event feed says is where you are: bosses,
-// bandit packs, missions, QRF events, and the map-wide outpost attack.
+// BossesWidgetConfig is what the city event feed says is where you are.
 //
-// Its own group rather than part of Block Info, because the two answer different
-// questions and want different amounts of room. Block Info is two short rows that
-// change when you walk; this is a list that can be seven rows long on a boss nest
-// and empty on most of the map, so anything placed under a combined group would
-// move up and down as you travelled.
+// Its own group rather than part of Block Info: that is two short rows, while
+// this can be seven rows long on a nest and empty on most of the map, so
+// anything under a combined group would move as you travelled.
 type BossesWidgetConfig struct {
 	Placement
 	Enabled bool `toml:"enabled"`
 
-	// Color is the normal colour for these rows. The amber that says "something is
-	// standing here" and the red of an outpost attack still win over it.
+	// Color is the normal colour for these rows. The amber that says "something
+	// is standing here" and the red of an outpost attack still win over it.
 	Color string `toml:"color"`
 
-	// ShowNearest reports which way to walk when your own block is empty, which is
-	// most blocks. Without it the group is simply absent there - honest, but it
-	// wastes the one thing the feed knows that you cannot see for yourself.
+	// ShowNearest reports which way to walk when your own block is empty, which
+	// is most blocks.
 	ShowNearest bool `toml:"show_nearest"`
 }
 
@@ -420,8 +397,8 @@ type SessionWidgetConfig struct {
 
 	Color string `toml:"color"`
 
-	// Prefix labels the number. A bare clock on an overlay is ambiguous - the
-	// game has its own clocks - so it says what it is timing.
+	// Prefix labels the number. A bare clock on an overlay is ambiguous, since
+	// the game has its own clocks.
 	Prefix string `toml:"prefix"`
 }
 
@@ -429,35 +406,31 @@ type XPWidgetConfig struct {
 	Placement
 	Enabled bool `toml:"enabled"`
 
-	// Color is the rate's normal colour. The stability amber and red still win:
-	// a rate averaged over a window with a hole in it looks just as
-	// authoritative as one that is not, and the colour is how it admits that.
+	// Color is the rate's normal colour. The stability amber and red still win: a
+	// rate averaged over a window with a hole in it looks just as authoritative as
+	// one that is not, and the colour is how it admits that.
 	Color string `toml:"color"`
 
 	Prefix string `toml:"prefix"`
 
-	// Window is the averaging span. MinSamples is the number of usable
-	// samples below which the rate is blanked rather than guessed at - two
-	// points a few seconds apart extrapolate to a nonsense hourly figure.
+	// Window is the averaging span. MinSamples is the number of usable samples
+	// below which the rate is blanked rather than guessed at - two points a few
+	// seconds apart extrapolate to a nonsense hourly figure.
 	Window     duration `toml:"window"`
 	MinSamples int      `toml:"min_samples"`
 }
 
 // ChallengesWidgetConfig is the whole board, filtered.
 //
-// The board splits into three sources that are worth different amounts to
-// different people, so each is its own switch rather than a "max_shown" that
-// crops arbitrarily:
+// Three sources worth different amounts to different people, so each is its own
+// switch rather than a max_shown that crops arbitrarily:
 //
-//   - event challenges, which the wire marks `repeatable` (verified live: it is 1
-//     on exactly the three Summer ones and 0 on everything else). They pay event
-//     currency rather than XP, so they are the first thing someone not chasing
-//     tickets wants gone.
+//   - event challenges, which the wire marks `repeatable` (verified live: 1 on
+//     exactly the three Summer ones). They pay event currency rather than XP.
 //   - clan challenges, which are the clan's progress and not yours.
-//   - everything else: the ordinary daily and weekly ones.
+//   - everything else: the ordinary dailies and weeklies.
 //
-// ShowCompleted cuts across all three: a finished challenge is a row that will
-// not change again this cycle.
+// ShowCompleted cuts across all three.
 type ChallengesWidgetConfig struct {
 	Placement
 	Enabled bool `toml:"enabled"`
@@ -469,51 +442,45 @@ type ChallengesWidgetConfig struct {
 	ShowPersonal   bool `toml:"show_personal"`
 	ShowCompleted  bool `toml:"show_completed"`
 
-	// ShowSections draws a divider naming each category, and moves a prefix the
-	// whole category shares up into it - so five clan entries say "Weekly
-	// Challenge" once between them instead of once each.
-	//
-	// Only ever drawn when more than one category is on screen: with a single
-	// category it is a label on the only thing there.
+	// ShowSections draws a divider naming each category and moves a shared prefix
+	// up into it, so five clan entries say "Weekly Challenge" once between them.
+	// Only drawn when more than one category is on screen.
 	ShowSections bool `toml:"show_sections"`
 
-	// MaxShown caps the rows. 0 means no cap, which is the point of the window:
-	// the whole board, in the board's own order.
+	// MaxShown caps the rows. 0 means no cap, which is the point of the window.
 	MaxShown int `toml:"max_shown"`
 
-	// UrgentWithin is how close a deadline has to be for an unfinished challenge to
-	// be drawn in the alarm colour. 0 turns that off.
+	// UrgentWithin is how close a deadline has to be for an unfinished challenge
+	// to be drawn in the alarm colour. 0 turns that off.
 	//
 	// A display threshold, not a request interval, so it has no politeness floor -
-	// but it is a key rather than a constant because "soon" depends on how you play:
-	// two hours is plenty for a daily kill count and nowhere near enough for a
-	// weekly you have not started.
+	// but a key rather than a constant because "soon" depends on how you play.
 	UrgentWithin duration `toml:"urgent_within"`
 }
 
-// mapMinCell is the smallest cell worth drawing: below this a marker character stops
-// being legible and the map is a coloured smear. mapMaxCell is the other end, which
-// exists because the scale is a budget for the WHOLE window: a tight radius divides
-// it by very few blocks, and radius 2 would otherwise ask for 236px cells.
+// mapMinCell is the smallest cell worth drawing: below it a marker character
+// stops being legible. mapMaxCell exists because the scale is a budget for the
+// WHOLE window, so a tight radius divides it by very few blocks - radius 2 would
+// otherwise ask for 236px cells.
 //
-// mapBaseSize is what scale 1.0 means - the pixel budget for the map's longest side,
+// mapBaseSize is what scale 1.0 means: the pixel budget for the longest side,
 // which at the full 59-block city is 20 pixels a block.
 //
-// Here rather than beside the drawing code because the config has to reject what it
-// cannot draw, and the config compiles without GTK.
+// Here rather than beside the drawing code because the config has to reject what
+// it cannot draw, and the config compiles without GTK.
 const (
 	mapMinCell  = 6
 	mapMaxCell  = 96
 	mapBaseSize = 1180
 )
 
-// MapWidgetConfig is the whole city drawn as a grid, in the shape DFProfiler's map
-// draws it: a block per cell, shaded by difficulty band, the gaps left empty.
+// MapWidgetConfig is the whole city drawn as a grid, in the shape DFProfiler's
+// map draws it: a block per cell, shaded by difficulty band, gaps left empty.
 //
 // It starts HIDDEN even when enabled, and a key brings it up
-// (POST /api/widget/map/toggle). That is not the same as enabled = false: this is a
-// thing you summon to decide where to walk and dismiss ten seconds later, and a thousand pixels of city permanently over the game is not a HUD, it is a wall. `enabled`
-// still means "do I ever want this", so turning it off costs the key as well.
+// (POST /api/widget/map/toggle) - this is something you summon to decide where
+// to walk and dismiss ten seconds later. `enabled` still means "do I ever want
+// this", so turning it off costs the key as well.
 type MapWidgetConfig struct {
 	Placement
 	Enabled bool `toml:"enabled"`
@@ -522,42 +489,33 @@ type MapWidgetConfig struct {
 
 	// Center puts the grid in the middle of the monitor and ignores x/y. On by
 	// default, because the right coordinate depends on both the monitor and the
-	// scale - 1180 pixels wide at 1.0, 1475 at 1.25 - so a number in a file would
-	// have to be recomputed by hand every time either changed.
+	// scale - 1180 pixels wide at 1.0, 1475 at 1.25.
 	Center bool `toml:"center"`
 
-	// OffsetX and OffsetY move the centred map, in pixels: negative is left and up,
-	// positive is right and down. Applied on top of the centring rather than instead
-	// of it, so "60 pixels up from centre" keeps meaning that when the scale, the
-	// radius or the monitor changes - which is the whole reason not to use x/y.
+	// OffsetX and OffsetY move the centred map, in pixels. Applied on top of the
+	// centring rather than instead of it, so "60 pixels up from centre" keeps
+	// meaning that when the scale, radius or monitor changes.
 	//
-	// Ignored when center = false, where x/y already say exactly where it goes.
+	// Ignored when center = false, where x/y already say where it goes.
 	OffsetX int `toml:"offset_x"`
 	OffsetY int `toml:"offset_y"`
 
-	// Radius crops the map to a square around you, measured in blocks: 15 draws
-	// 31x31. 0 is the whole city.
+	// Radius crops the map to a square around you, in blocks: 15 draws 31x31, 0
+	// is the whole city. At the full 59x55 most of the picture is somewhere you
+	// are not going. The key beside the grid crops to match.
 	//
-	// Worth having because at the full 59x55 most of the picture is somewhere you are
-	// not going, and the part you might actually walk to is a sixth of it. The key
-	// beside the grid is cropped to match - a row about a boss you cannot see on the
-	// map is a row about nowhere.
-	//
-	// The window is clamped into the city rather than hanging off the edge, so its
-	// size never changes and the group does not jump sideways as you approach a
-	// boundary; near an edge you are simply off-centre.
+	// The window is clamped into the city rather than hanging off the edge, so
+	// its size never changes and the group does not jump sideways as you approach
+	// a boundary; near an edge you are simply off-centre.
 	Radius int `toml:"radius"`
 
-	// Scale sizes the whole group - the grid AND the key beside it - from one number.
-	// 1.0 is the map this started as: 1180 pixels across the longest side, 20 per
-	// block at the full 59x55, and a 13pt key. 1.25 is a quarter bigger, both halves
-	// of it.
+	// Scale sizes the whole group - grid AND key - from one number. 1.0 is 1180
+	// pixels across the longest side, 20 per block at the full city, a 13pt key.
 	//
-	// It is a pixel budget for the longest side rather than a size per block, which
-	// is what makes a cropped map BIGGER rather than merely smaller: the same budget
-	// spread over 31 blocks instead of 59 gives 38px cells, so cutting the radius
-	// zooms in. The key's font is derived from the cell size that falls out of it, so
-	// there is nothing to keep in step by hand - one knob moves the lot.
+	// A pixel budget for the longest side rather than a size per block, which is
+	// what makes a cropped map BIGGER rather than merely smaller: the same budget
+	// over 31 blocks gives 38px cells, so cutting the radius zooms in. The key's
+	// font is derived from the cell size, so one knob moves the lot.
 	//
 	// FontSize still pins the key's text if you want it fixed while the map moves.
 	Scale float64 `toml:"scale"`
@@ -567,27 +525,23 @@ type MapWidgetConfig struct {
 	// see the game through the city, not to make the writing on it faint.
 	Opacity float64 `toml:"opacity"`
 
-	// ShowList draws the key beside the grid - which marker is what, how far away,
-	// how long is left. Without it the digits in the cells mean nothing.
+	// ShowList draws the key beside the grid. Without it the digits in the cells
+	// mean nothing.
 	ShowList bool `toml:"show_list"`
 	// MaxListed caps that list, 0 for no cap. What is dropped is counted rather
-	// than silently omitted.
-	//
-	// 40 is high enough never to trigger on a real feed - a busy cycle carries about
-	// thirty events - and low enough that the list cannot run off the bottom of the
-	// screen: beside a 1100px map on a 1440px monitor there is room for about sixty
-	// rows at the default font, and 40 entries plus a nest's extra rows is under
-	// that. The cap exists so that overflow is COUNTED rather than clipped by the
-	// edge of the screen, which would drop rows with nothing to say it had.
+	// than silently omitted - which is the point of the cap: overflow COUNTED
+	// rather than clipped by the edge of the screen. 40 never triggers on a real
+	// feed (a busy cycle carries about thirty events) and still fits beside a
+	// 1100px map on a 1440px monitor.
 	MaxListed int `toml:"max_listed"`
 }
 
 // EffectiveChallengeInterval is the board's cadence for the current state.
 //
-// The configured value is the playing cadence. With the game closed there is
-// nothing generating challenge progress, so it stretches to the idle cadence:
-// a short interval chosen for play must not become an all-night poll for someone
-// who has turned only_when_game_running off.
+// The configured value is the playing cadence. With the game closed nothing
+// generates challenge progress, so it stretches to the idle cadence: a short
+// interval chosen for play must not become an all-night poll for someone who has
+// turned only_when_game_running off.
 func (p PollConfig) EffectiveChallengeInterval(gameRunning bool) time.Duration {
 	if gameRunning {
 		return p.ChallengeInterval.Duration
@@ -599,16 +553,14 @@ func (p PollConfig) EffectiveChallengeInterval(gameRunning bool) time.Duration {
 }
 
 // EffectiveWindow widens the averaging window when it is too short to ever hold
-// min_samples at the current poll cadence - otherwise the rate would sit on
-// "not enough data" forever and look broken.
+// min_samples at the current poll cadence - otherwise the rate would sit on "not
+// enough data" forever and look broken.
 //
-// This is deliberately a derivation rather than a validation error, unlike the
-// interval floors. Those are politeness limits on somebody else's server, where
-// silently changing the number teaches the wrong lesson. This one is a local
-// display setting whose worst failure is a blank widget, and raising the poll
-// interval to be *more* polite should not be rejected because of a widget
-// default the user never touched. The caller logs the adjustment at startup, so
-// it is derived, not hidden.
+// Deliberately a derivation rather than a validation error, unlike the interval
+// floors: those are politeness limits on somebody else's server, while this is a
+// local display setting whose worst failure is a blank widget. Raising the poll
+// interval to be MORE polite should not be rejected because of a widget default
+// nobody touched. The caller logs the adjustment at startup.
 func (x XPWidgetConfig) EffectiveWindow(activeInterval time.Duration) time.Duration {
 	if x.MinSamples < 2 || activeInterval <= 0 {
 		return x.Window.Duration
@@ -623,16 +575,16 @@ func (x XPWidgetConfig) EffectiveWindow(activeInterval time.Duration) time.Durat
 }
 
 type ConsoleConfig struct {
-	// The console is an ordinary toplevel window, for the things a HUD group
-	// cannot be: the full challenge list with every objective, diagnostics.
-	// NOT BUILT YET - /api/console/toggle answers 503 - but the size is
-	// validated so it is yours when it lands.
+	// An ordinary toplevel window, for the things a HUD group cannot be: the full
+	// challenge list with every objective, diagnostics. NOT BUILT YET -
+	// /api/console/toggle answers 503 - but the size is validated so it is yours
+	// when it lands.
 	Width  int `toml:"width"`
 	Height int `toml:"height"`
 }
 
-// defaultConfig is the shipped setup, and is what runs when no file exists.
-// The example TOML must agree with it; config_test.go checks that.
+// defaultConfig is the shipped setup, and what runs when no file exists. The
+// example TOML must agree with it; config_test.go checks that.
 func defaultConfig() *Config {
 	return &Config{
 		DF: DFConfig{
@@ -656,9 +608,9 @@ func defaultConfig() *Config {
 		},
 		Game: GameConfig{
 			Process: defaultGameProcess,
-			// The launcher's dialogs are both "<something> Configuration" and carry
-			// the game's own class and pid, so this one word is what keeps the HUD
-			// off a 464x406 settings box.
+			// The launcher's dialogs are both "<something> Configuration" and
+			// carry the game's own class and pid, so this one word is what keeps
+			// the HUD off a 464x406 settings box.
 			WindowTitleIgnore: []string{"configuration"},
 			ScanInterval:      duration{2 * time.Second},
 		},
@@ -669,7 +621,7 @@ func defaultConfig() *Config {
 			FollowGameWorkspace: true,
 			Monitor:             "auto",
 			Layer:               "overlay",
-			// Zero: each group carries its own coordinates now, so the surface
+			// Margins zero: each group carries its own coordinates, so the surface
 			// covers the monitor and a margin would only shift every group at once.
 			ClickThrough: true,
 			FontFamily:   "Courier New, monospace",
@@ -681,11 +633,18 @@ func defaultConfig() *Config {
 			Enabled: true,
 			URL:     defaultBossMapURL,
 			// One minute: half of what dfprofiler's own page costs them per open
-			// tab, and enough to notice a spawn within a minute of the hour
-			// turning over, which is when they appear.
+			// tab, and enough to notice a spawn within a minute of the hour.
 			Interval:    duration{time.Minute},
 			MaxInterval: duration{5 * time.Minute},
+			// In Onslaught, at their page's own rate rather than half of it. It
+			// applies only while standing on 3000,3000 with the game running, and
+			// it is the difference between seeing the next cycle when their page
+			// does and seeing it a minute later.
+			OnslaughtInterval:    duration{30 * time.Second},
+			OnslaughtMaxInterval: duration{time.Minute},
 		},
+		// On by default: it needs no credentials, no network and no Discord, and
+		// where it cannot bind it simply stands down.
 		RunStart: RunStartConfig{
 			ClickEnabled: true,
 			// Measured in the game at 2560x1440. Wrong for any other resolution,
@@ -693,66 +652,54 @@ func defaultConfig() *Config {
 			ButtonX: 1230, ButtonY: 660, ButtonWidth: 100, ButtonHeight: 40,
 		},
 		Tray: TrayConfig{Enabled: true},
-		// The default positions are measured at 2560x1440 against the game's own
+		// Default positions measured at 2560x1440 against the game's own
 		// interface: the clock beside the game's clock, the rate under it, the
-		// board down the left where there is nothing to cover, and block info on
-		// the right. Anything else on another resolution, which is why they are
-		// config keys.
+		// board down the left where there is nothing to cover, block info right.
 		Widget: WidgetConfig{
 			Status: StatusWidgetConfig{Placement{X: 10, Y: 10}},
 			// Cool blue, because the amber below it means "something here can kill
-			// you". Where you are standing is not a warning and should not borrow the
-			// colour of one.
+			// you" and where you are standing is not a warning.
 			Block: BlockWidgetConfig{
 				Placement: Placement{X: 2340, Y: 300}, Enabled: true, Color: "#9ecbff",
 			},
-			// Close under block info, and further left than it: the longest row this
-			// group can draw is now "nearest 12 up 12 left  1054, 1015", and a small
-			// gap between the two is what makes them read as one column.
+			// Further left than block info: the longest row here is "nearest 12 up
+			// 12 left  1054, 1015", and a small gap makes the two read as one column.
 			Bosses: BossesWidgetConfig{
 				Placement: Placement{X: 2240, Y: 344}, Enabled: true, ShowNearest: true,
 			},
-			// White for the clock and off-white for the board: the game's own HUD is
-			// already yellow and green, so the readings that are neither a warning nor
-			// a status read as ours rather than as more of the game's.
+			// White, because the game's own HUD is already yellow and green: a
+			// reading that is neither a warning nor a status should read as ours.
 			Session: SessionWidgetConfig{
 				Placement: Placement{X: 350, Y: 60}, Enabled: true,
 				Color: "#ffffff", Prefix: "IC Time: ",
 			},
-			// Five minutes, not thirty seconds. XP arrives in lumps - a kill, a
-			// challenge - so a window short enough to contain no lump reads as a
-			// rate of zero, and a HUD that flips between 20M/hr and nothing is
-			// worse than useless: it is actively misleading about how the run is
-			// going. Five minutes is long enough to smooth the gaps between kills
-			// and short enough to still respond when you change what you are doing.
+			// Five minutes, not thirty seconds. XP arrives in lumps, so a window
+			// short enough to contain no lump reads as a rate of zero, and a HUD
+			// flipping between 20M/hr and nothing is actively misleading.
 			XP: XPWidgetConfig{
-				// White to match the clock, and because this row sits beside the game's
-				// own "LV 415: 8,122,281,000" and is meant to read as its continuation.
+				// White to match the clock, and because this sits beside the game's
+				// own "LV 415: 8,122,281,000" and reads as its continuation.
 				Placement: Placement{X: 160, Y: 85}, Enabled: true,
 				Color: "#ffffff", Prefix: "Xp/Hr: ",
 				Window: duration{5 * time.Minute}, MinSamples: 3,
 			},
 			Map: MapWidgetConfig{
 				// Middle of a 2560-wide screen, clear of the board on the left and
-				// the boss column on the right. It is hidden until a key asks for
-				// it, so this is where it appears rather than where it lives.
+				// the boss column on the right. Hidden until a key asks for it, so
+				// this is where it appears rather than where it lives.
 				Placement: Placement{X: 700, Y: 240}, Enabled: true,
 				Color:  "#e8e8e8",
 				Center: true,
 				// The whole city by default: it is what the map is FOR the first
 				// time you open it, and cropping is a preference you arrive at.
-				Radius: 0,
-				// 1.0 is the map this started as - 1180 pixels across, 20 per block
-				// at the full city, a 13pt key - and it holds that screen size at
-				// any radius.
+				Radius:  0,
 				Scale:   1,
 				Opacity: 1, ShowList: true, MaxListed: 40,
 			},
 			Challenges: ChallengesWidgetConfig{
 				Placement: Placement{X: 10, Y: 190}, Enabled: true,
-				// Off-white rather than white: the board is the longest column on
-				// screen, and the green and red it marks its own rows with need
-				// somewhere quieter to stand out from.
+				// Off-white: the longest column on screen, and the green and red it
+				// marks rows with need somewhere quieter to stand out from.
 				Color:          "#e8e8e8",
 				ShowRepeatable: true, ShowClan: true, ShowPersonal: true, ShowCompleted: true,
 				ShowSections: true,
@@ -785,8 +732,8 @@ func defaultDataDir() string {
 	return filepath.Join(home, ".local", "share", "df-hud")
 }
 
-// expandHome turns a leading ~ into the home directory. Paths in a hand-edited
-// config get written with ~ whatever we document.
+// expandHome turns a leading ~ into the home directory, because paths in a
+// hand-edited config get written with ~ whatever we document.
 func expandHome(p string) string {
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -837,8 +784,8 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// validate normalises then checks. Every problem is collected so one run
-// reports the whole list.
+// validate normalises then checks, collecting every problem so one run reports
+// the whole list.
 func (c *Config) validate() error {
 	var errs []error
 
@@ -859,8 +806,8 @@ func (c *Config) validate() error {
 		}
 	}
 	if strings.TrimSpace(c.DF.UserAgent) == "" {
-		// An honest, identifiable UA is the difference between a tool the
-		// server operator can contact and one that just looks like abuse.
+		// An honest, identifiable UA is the difference between a tool the server
+		// operator can contact and one that just looks like abuse.
 		errs = append(errs, errors.New("df.user_agent is empty: identify this tool honestly to the server"))
 	}
 	errs = appendRange(errs, "df.timeout", c.DF.Timeout.Duration, floorRequestTimeout, ceilRequestTimeout)
@@ -897,13 +844,25 @@ func (c *Config) validate() error {
 		errs = append(errs, errors.New("game.process is empty: df-hud would never detect the game"))
 	}
 	if strings.ContainsAny(c.Game.Process, `/\`) {
-		// Only the basename is compared, so a path here would never match and
-		// the failure would be silent.
+		// Only the basename is compared, so a path here would never match and the
+		// failure would be silent.
 		errs = append(errs, fmt.Errorf("game.process %q must be a bare executable name, not a path",
 			c.Game.Process))
 	}
 	c.Game.WindowClass = strings.TrimSpace(c.Game.WindowClass)
 	errs = appendRange(errs, "game.scan_interval", c.Game.ScanInterval.Duration, 250*time.Millisecond, 5*time.Minute)
+
+	// --- game_keys ---
+	if c.RunStart.ClickEnabled {
+		if c.RunStart.ButtonWidth <= 0 || c.RunStart.ButtonHeight <= 0 {
+			errs = append(errs, fmt.Errorf("run_start button is %dx%d: a zero-sized button can never be clicked",
+				c.RunStart.ButtonWidth, c.RunStart.ButtonHeight))
+		}
+		if c.RunStart.ButtonX < 0 || c.RunStart.ButtonY < 0 {
+			errs = append(errs, fmt.Errorf("run_start button at %d,%d must be inside the window",
+				c.RunStart.ButtonX, c.RunStart.ButtonY))
+		}
+	}
 
 	// --- paths ---
 	c.Paths.DataDir = expandHome(strings.TrimSpace(c.Paths.DataDir))
@@ -918,6 +877,12 @@ func (c *Config) validate() error {
 			errs = append(errs, fmt.Errorf("bossmap.url %q must be an absolute https URL", c.BossMap.URL))
 		}
 		errs = appendFloor(errs, "bossmap.interval", c.BossMap.Interval.Duration, floorBossMapInterval)
+		errs = appendFloor(errs, "bossmap.onslaught_interval", c.BossMap.OnslaughtInterval.Duration, floorBossMapInterval)
+		if c.BossMap.OnslaughtMaxInterval.Duration < c.BossMap.OnslaughtInterval.Duration {
+			errs = append(errs, fmt.Errorf(
+				"bossmap.onslaught_max_interval %s is below bossmap.onslaught_interval %s - the heartbeat cannot be shorter than the floor it has to respect",
+				c.BossMap.OnslaughtMaxInterval, c.BossMap.OnslaughtInterval))
+		}
 		if c.BossMap.MaxInterval.Duration < c.BossMap.Interval.Duration {
 			errs = append(errs, fmt.Errorf("bossmap.max_interval (%s) is shorter than bossmap.interval (%s): "+
 				"the heartbeat cannot be tighter than the minimum gap",
@@ -926,16 +891,6 @@ func (c *Config) validate() error {
 	}
 
 	// --- run_start ---
-	if c.RunStart.ClickEnabled {
-		if c.RunStart.ButtonWidth <= 0 || c.RunStart.ButtonHeight <= 0 {
-			errs = append(errs, fmt.Errorf("run_start button is %dx%d: a zero-sized button can never be clicked",
-				c.RunStart.ButtonWidth, c.RunStart.ButtonHeight))
-		}
-		if c.RunStart.ButtonX < 0 || c.RunStart.ButtonY < 0 {
-			errs = append(errs, fmt.Errorf("run_start button at %d,%d must be inside the window",
-				c.RunStart.ButtonX, c.RunStart.ButtonY))
-		}
-	}
 
 	// --- hud ---
 	if c.HUD.Enabled {
@@ -977,10 +932,10 @@ func (c *Config) validate() error {
 		errs = append(errs, fmt.Errorf("widget.challenges.max_shown %d cannot be negative (0 means no cap)",
 			c.Widget.Challenges.MaxShown))
 	}
-	// Placement and appearance, for every group. Negative coordinates would put a
-	// group off the top or left of its own surface, where it is not clipped so much
-	// as simply absent - which looks like the group being broken rather than
-	// misplaced. The same list drives the generated CSS (see groupStyles).
+	// Negative coordinates would put a group off the top or left of its own
+	// surface, where it is not clipped so much as simply absent - which looks like
+	// the group being broken rather than misplaced. The same list drives the
+	// generated CSS (see groupStyles).
 	for _, g := range groupStyles(c) {
 		if g.place.X < 0 || g.place.Y < 0 {
 			errs = append(errs, fmt.Errorf("widget.%s position %d, %d cannot be negative: "+
@@ -991,10 +946,10 @@ func (c *Config) validate() error {
 				g.name, g.place.FontSize))
 		}
 		// Caught here rather than at render time: GTK skips a rule it cannot parse
-		// without a word, so a malformed colour would just leave the group looking
-		// untouched with nothing to grep for. Note this catches bad hex and
-		// stylesheet injection, not a misspelled colour NAME - validateColor stays
-		// permissive there rather than shipping a list of CSS names to go stale.
+		// without a word, so a malformed colour would leave the group looking
+		// untouched with nothing to grep for. This catches bad hex and stylesheet
+		// injection, not a misspelled colour NAME - validateColor stays permissive
+		// there rather than shipping a list of CSS names to go stale.
 		if g.color != "" {
 			if err := validateColor(g.color); err != nil {
 				errs = append(errs, fmt.Errorf("widget.%s.color: %w", g.name, err))
@@ -1004,7 +959,7 @@ func (c *Config) validate() error {
 
 	// --- map ---
 	//
-	// A cell too small to read is not a smaller map, it is a coloured smear, and an
+	// A cell too small to read is not a smaller map but a coloured smear, and an
 	// opacity of 0 is an invisible group that looks exactly like a broken one.
 	if c.Widget.Map.Enabled {
 		if c.Widget.Map.Scale <= 0 {
@@ -1039,12 +994,12 @@ func (c *Config) validate() error {
 }
 
 // appendFloor is the politeness check. The message says what the floor is and
-// why it exists, because the natural reaction to a rejected interval is to
-// wonder whether the number is arbitrary.
+// why, because the natural reaction to a rejected interval is to wonder whether
+// the number is arbitrary.
 func appendFloor(errs []error, key string, got, floor time.Duration) []error {
 	if got < floor {
 		return append(errs, fmt.Errorf("%s is %s, below the %s minimum: this decides how often df-hud "+
-			"hits the game server, so it is rejected rather than quietly raised", key, got, floor))
+			"hits somebody's server, so it is rejected rather than quietly raised", key, got, floor))
 	}
 	return errs
 }
@@ -1056,9 +1011,9 @@ func appendRange(errs []error, key string, got, lo, hi time.Duration) []error {
 	return errs
 }
 
-// parseLayer maps the config name to the protocol value. Only "overlay" is
-// above a fullscreen window; NonFullscreen reports whether the choice will hide
-// under the game so the caller can say so out loud at startup.
+// parseLayer maps the config name to the protocol value. Only "overlay" is above
+// a fullscreen window; HidesUnderFullscreen reports whether the choice will hide
+// under the game so the caller can say so at startup.
 func parseLayer(s string) (Layer, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "overlay", "":
@@ -1088,9 +1043,9 @@ func (h HUDConfig) LayerValue() Layer {
 	return l
 }
 
-// validateColor accepts what GTK's CSS accepts in the places we substitute it:
-// #rgb, #rrggbb, #rrggbbaa, or a bare name. It exists to catch a typo at
-// startup instead of as a GTK parse warning and a HUD that renders black.
+// validateColor accepts what GTK's CSS accepts where we substitute it: #rgb,
+// #rrggbb, #rrggbbaa, or a bare name. It catches a typo at startup instead of as
+// a GTK parse warning and a HUD that renders black.
 func validateColor(s string) error {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -1111,23 +1066,23 @@ func validateColor(s string) error {
 		return nil
 	}
 	// A CSS colour name or function. Anything with a quote or brace is a
-	// stylesheet injection rather than a colour, since this gets interpolated
-	// into CSS.
+	// stylesheet injection rather than a colour, since this is interpolated into
+	// CSS.
 	if strings.ContainsAny(s, `{}"';`) {
 		return fmt.Errorf("%q is not a colour", s)
 	}
 	return nil
 }
 
-// Paths derived from DataDir. Kept as methods so there is one definition of
-// each filename and the poller/store cannot drift from the bridge.
+// Paths derived from DataDir. Methods so there is one definition of each
+// filename and the poller/store cannot drift from the bridge.
 func (c *Config) CredentialsPath() string { return filepath.Join(c.Paths.DataDir, "credentials.json") }
 func (c *Config) StatePath() string       { return filepath.Join(c.Paths.DataDir, "state.json") }
 func (c *Config) CatalogPath() string     { return filepath.Join(c.Paths.DataDir, "catalog.json") }
 
-// EnsureDataDir creates the data directory and proves it is writable at
-// startup, rather than discovering at the first save that nothing persists.
-// 0700 because credentials.json lives here.
+// EnsureDataDir creates the data directory and proves it is writable at startup,
+// rather than discovering at the first save that nothing persists. 0700 because
+// credentials.json lives here.
 func (c *Config) EnsureDataDir() error {
 	if err := os.MkdirAll(c.Paths.DataDir, 0o700); err != nil {
 		return fmt.Errorf("paths.data_dir %q: %w", c.Paths.DataDir, err)
@@ -1139,9 +1094,9 @@ func (c *Config) EnsureDataDir() error {
 	return os.Remove(probe)
 }
 
-// SigningSalt is the salt to use for hashed calls: whatever the bridge last
-// reported, falling back to the configured value. Reported wins because it
-// comes from live page context, so a game-side rotation heals itself.
+// SigningSalt is the salt for hashed calls: whatever the bridge last reported,
+// falling back to the configured value. Reported wins because it comes from live
+// page context, so a game-side rotation heals itself.
 func (c *Config) SigningSalt(store *credStore) string {
 	if store != nil {
 		if salt := store.Salt(); salt != "" {
@@ -1152,8 +1107,8 @@ func (c *Config) SigningSalt(store *credStore) string {
 }
 
 // RequestsPerHour is the documented traffic budget, printed at startup. Being
-// able to state the number is what makes "is this polite?" an answerable
-// question instead of a feeling.
+// able to state the number is what makes "is this polite?" answerable instead of
+// a feeling.
 func (c *Config) RequestsPerHour(activeFraction float64) float64 {
 	if activeFraction < 0 {
 		activeFraction = 0
@@ -1175,22 +1130,26 @@ func (c *Config) RequestsPerHour(activeFraction float64) float64 {
 	}
 	total += perHour(c.Poll.CatalogInterval.Duration)
 	if c.BossMap.Enabled {
-		// Counted in the same number even though it is a different server: the
-		// point of the budget is to be able to answer "how much traffic does this
-		// thing make", and an honest answer includes everybody's.
+		// Counted here even though it is a different server: the point of the
+		// budget is to answer "how much traffic does this thing make", and an
+		// honest answer includes everybody's. The minimum interval is used, so
+		// this is the WORST case - a player changing block continuously.
 		//
-		// The minimum interval is used, so this is the WORST case - a player who
-		// changes block continuously. Standing still costs the heartbeat instead.
+		// onslaught_interval is deliberately NOT counted, though it is tighter.
+		// This number is what an hour of normal play costs, and an hour spent
+		// entirely inside Onslaught is a different activity - folding its floor in
+		// would double the figure quoted for everybody to describe a case almost
+		// nobody is in. The ceiling it implies: while standing on 3000,3000 this
+		// feed is fetched at up to 120/h, parity with one open tab of their page.
 		total += activeFraction * perHour(c.BossMap.Interval.Duration)
 	}
 	return total
 }
 
 // reloadableFrom returns cfg with the fields that cannot change at runtime
-// copied back from old, plus the names of any that the user tried to change.
-// Rebinding a listener or moving the data directory under a running poller is
-// not worth the failure modes, so those need a restart - said plainly rather
-// than pretended to.
+// copied back from old, plus the names of any that were changed. Rebinding a
+// listener or moving the data directory under a running poller is not worth the
+// failure modes, so those need a restart - said plainly rather than pretended to.
 func (cfg *Config) reloadableFrom(old *Config) []string {
 	var frozen []string
 	if cfg.Bridge.Listen != old.Bridge.Listen {

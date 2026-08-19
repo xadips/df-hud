@@ -211,23 +211,209 @@ func TestBossMapPreviousCycle(t *testing.T) {
 	}
 }
 
-func TestThreatLineMarksThePreviousCycle(t *testing.T) {
+// The panel always shows all three sections, in the order the cycles
+// themselves happen in - prev, now, next - each carrying the class its colour
+// comes from.
+func TestOnslaughtPanelOrdersPrevNowNext(t *testing.T) {
 	v := &View{
 		HaveData: true, HasPosition: true,
 		PositionX: onslaughtCoord, PositionY: onslaughtCoord,
-		BlockEvents:     []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Charred Giant Spider"}}},
-		BlockEventsPast: []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Irradiated Wraith"}}},
+		BlockEventsPast:     []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Irradiated Wraith"}}},
+		BlockEvents:         []CityEvent{{Kind: EventSpawn, Enemies: []string{"3 x Charred Giant Spider"}}},
+		BlockEventsUpcoming: []CityEvent{{Kind: EventSpawn, Enemies: []string{"2 x Titan"}}},
 	}
-	rows := threatLines(v)
-	if len(rows) != 2 {
-		t.Fatalf("rows = %v, want the current cycle and the previous one", rows)
+	rows, ok := onslaughtPanel(v)
+	if !ok {
+		t.Fatal("onslaughtPanel should apply while standing in Onslaught")
 	}
-	if rows[0] != "3 x Charred Giant Spider" {
-		t.Errorf("rows = %v, want the current cycle first", rows)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %+v, want exactly prev/now/next, one line each", rows)
 	}
-	// Prefixed, because "might still be there" is a different claim from "is".
-	if rows[1] != "last: 3 x Irradiated Wraith" {
-		t.Errorf("rows = %v, want the previous cycle marked as such", rows)
+	want := []struct{ label, content, class string }{
+		{"prev", "3 x Irradiated Wraith", onslaughtPrevClass},
+		{"now", "3 x Charred Giant Spider", onslaughtNowClass},
+		{"next", "2 x Titan", onslaughtNextClass},
+	}
+	for i, w := range want {
+		if rows[i].Label != w.label {
+			t.Errorf("row %d label = %q, want %q", i, rows[i].Label, w.label)
+		}
+		if rows[i].Content != w.content {
+			t.Errorf("row %d content = %q, want %q", i, rows[i].Content, w.content)
+		}
+		if rows[i].ContentClass != w.class {
+			t.Errorf("row %d class = %q, want %q", i, rows[i].ContentClass, w.class)
+		}
+	}
+}
+
+// Confirmed live: an Onslaught event listing several enemy types is not a
+// real multi-type nest, it is the feed bundling two different cycles' own
+// single bosses into one entry, with the one listed last being current - so
+// only that one is shown, not both.
+func TestOnslaughtPanelKeepsOnlyTheLastBundledName(t *testing.T) {
+	v := &View{
+		HaveData: true, HasPosition: true,
+		PositionX: onslaughtCoord, PositionY: onslaughtCoord,
+		BlockEventsPast: []CityEvent{{
+			Kind:    EventSpawn,
+			Enemies: []string{"3 x Irradiated Giant Spider", "3 x Mega Giant Spider"},
+		}},
+	}
+	rows, ok := onslaughtPanel(v)
+	if !ok {
+		t.Fatal("onslaughtPanel should apply while standing in Onslaught")
+	}
+	// now/next still get their own placeholder rows - only the bundling
+	// within prev's own event is what collapses.
+	prev := rows[0]
+	if prev.Content != "3 x Mega Giant Spider" {
+		t.Errorf("prev content = %q, want only the LAST-listed (more recent) name", prev.Content)
+	}
+}
+
+// Every section always gets a row, even with nothing in it - an empty prev or
+// next IS the answer to a question, not the absence of one.
+func TestOnslaughtPanelShowsPlaceholdersWhenEmpty(t *testing.T) {
+	v := &View{
+		HaveData: true, HasPosition: true,
+		PositionX: onslaughtCoord, PositionY: onslaughtCoord,
+	}
+	rows, ok := onslaughtPanel(v)
+	if !ok {
+		t.Fatal("onslaughtPanel should apply while standing in Onslaught")
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %+v, want a placeholder row for each of prev/now/next", rows)
+	}
+	for _, want := range []string{"cleared", "nothing this cycle", "not announced"} {
+		found := false
+		for _, r := range rows {
+			if r.Content == want {
+				found = true
+				if r.ContentClass != onslaughtEmptyClass {
+					t.Errorf("row %q has class %q, want %q", r.Content, r.ContentClass, onslaughtEmptyClass)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("rows = %+v, want one of them to say %q", rows, want)
+		}
+	}
+}
+
+// Onslaught skips slots often enough that "prev" is regularly not the slot
+// that just ended, so its age is shown rather than left to be misread as when
+// it started - the same reason the userscript this is ported from added it.
+func TestOnslaughtPanelShowsAgeOfThePreviousCycle(t *testing.T) {
+	now := time.Unix(10000, 0)
+	v := &View{
+		HaveData: true, HasPosition: true, Now: now,
+		PositionX: onslaughtCoord, PositionY: onslaughtCoord,
+		BlockEventsPast: []CityEvent{{
+			Kind: EventSpawn, Enemies: []string{"1 x Titan"},
+			End: now.Add(-3 * time.Minute),
+		}},
+	}
+	rows, ok := onslaughtPanel(v)
+	if !ok {
+		t.Fatal("onslaughtPanel should apply while standing in Onslaught")
+	}
+	found := false
+	for _, r := range rows {
+		if r.Content == "ended 3m ago" {
+			found = true
+			if r.ContentClass != onslaughtEmptyClass {
+				t.Errorf("age row class = %q, want %q (a fact, not a threat)", r.ContentClass, onslaughtEmptyClass)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("rows = %+v, want an \"ended 3m ago\" row", rows)
+	}
+}
+
+// A bundled entry's window covers only the FIRST cycle in it, so the age of
+// the boss actually displayed (the last one listed) is that many cycles later.
+// The live capture this reproduces: start 00:15:01, end 00:20:01, two names,
+// read at 00:28:51 - the second boss ran 00:20-00:25 and is 3m gone, not 8m.
+func TestOnslaughtPanelAgesTheDisplayedBossNotTheBundle(t *testing.T) {
+	start := time.Unix(1786828501, 0) // 00:15:01
+	now := start.Add(13*time.Minute + 50*time.Second)
+	v := &View{
+		HaveData: true, HasPosition: true, Now: now,
+		PositionX: onslaughtCoord, PositionY: onslaughtCoord,
+		BlockEventsPast: []CityEvent{{
+			Kind:  EventSpawn,
+			Start: start,
+			End:   start.Add(5 * time.Minute),
+			// The one displayed is "3 x Irradiated Mother", whose own cycle
+			// is 00:20-00:25.
+			Enemies: []string{"3 x Mega Giant Spider", "3 x Irradiated Mother"},
+		}},
+	}
+	rows, ok := onslaughtPanel(v)
+	if !ok {
+		t.Fatal("onslaughtPanel should apply while standing in Onslaught")
+	}
+	var ages []string
+	for _, r := range rows {
+		if strings.HasPrefix(r.Content, "ended ") {
+			ages = append(ages, r.Content)
+		}
+	}
+	if len(ages) != 1 || ages[0] != "ended 3m ago" {
+		t.Errorf("age rows = %v, want exactly [\"ended 3m ago\"] - 8m is the bundle's own end, which is when this boss STARTED", ages)
+	}
+}
+
+// A bundle whose last cycle has not finished yet has no age to report - the
+// shifted end is in the future, and "ended just now" would be a false claim.
+func TestOnslaughtPanelOmitsTheAgeWhenTheBundleIsStillRunning(t *testing.T) {
+	start := time.Unix(1786828501, 0)
+	v := &View{
+		HaveData: true, HasPosition: true, Now: start.Add(7 * time.Minute),
+		PositionX: onslaughtCoord, PositionY: onslaughtCoord,
+		BlockEventsPast: []CityEvent{{
+			Kind:    EventSpawn,
+			Start:   start,
+			End:     start.Add(5 * time.Minute),
+			Enemies: []string{"3 x Mega Giant Spider", "3 x Irradiated Mother"},
+		}},
+	}
+	rows, _ := onslaughtPanel(v)
+	for _, r := range rows {
+		if strings.HasPrefix(r.Content, "ended ") {
+			t.Errorf("rows carry %q, want no age row while the displayed cycle is still running", r.Content)
+		}
+	}
+}
+
+// Onslaught only - a city block's own prev/next fields are always empty
+// anyway (the store never fills them there), but the position guard is what
+// keeps this from ever firing for one by accident.
+func TestOnslaughtPanelOnlyAppliesInOnslaught(t *testing.T) {
+	v := &View{
+		HaveData: true, HasPosition: true, PositionX: 1058, PositionY: 1016,
+		BlockEvents: []CityEvent{{Kind: EventSpawn, Enemies: []string{"6 x Bandits"}}},
+	}
+	if _, ok := onslaughtPanel(v); ok {
+		t.Error("onslaughtPanel must not apply outside Onslaught")
+	}
+}
+
+func TestOnslaughtHeaderTimer(t *testing.T) {
+	text, show := onslaughtHeaderTimer(&View{HaveData: true, HasOnslaughtCountdown: true, OnslaughtCountdown: 3*time.Minute + 59*time.Second})
+	if !show || text != "3:59" {
+		t.Errorf("onslaughtHeaderTimer = %q, %v, want \"3:59\"", text, show)
+	}
+	// No countdown known (not in Onslaught, or no boundary yet): no row.
+	if _, show := onslaughtHeaderTimer(&View{HaveData: true}); show {
+		t.Error("no countdown must not take a row")
+	}
+	// No data at all means no claim either way, same as the other lines.
+	if _, show := onslaughtHeaderTimer(&View{HasOnslaughtCountdown: true, OnslaughtCountdown: time.Minute}); show {
+		t.Error("HaveData=false must suppress the row")
 	}
 }
 
@@ -258,6 +444,180 @@ func TestParseBossMapKeepsEndedEventsOutOfAt(t *testing.T) {
 	}
 	if got := m.AtEnded(1000, 1000, at); len(got) != 1 || got[0].Label() != "9 x Titan" {
 		t.Errorf("got %+v, want the previous cycle available separately", got)
+	}
+}
+
+// Onslaught skips slots often enough that bossMapPastWindow can span more than
+// one finished cycle. Mixing an older cycle's spawns into "the previous one"
+// with no way to tell them apart is worse than only ever showing the nearest,
+// so AtEnded narrows to whichever event(s) ended most recently.
+func TestAtEndedNarrowsToTheMostRecentCycle(t *testing.T) {
+	raw := `{
+	  "0":{"event_id":"older","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"1",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Bear","special_enemy_amount":"1","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"100"},
+	  "1":{"event_id":"newer","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"1",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"2",
+	       "event_type":"","dfp_objectives":[],"start_time":"101","end_time":"200"},
+	  "bosshash":"abc","servertime":250,"version":"1"}`
+
+	m, err := parseBossMap([]byte(raw), time.Unix(250, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := m.AtEnded(1000, 1000, time.Unix(250, 0))
+	if len(got) != 1 || got[0].Label() != "1 x Titan" {
+		t.Errorf("got %+v, want only the more recently ended cycle", got)
+	}
+}
+
+// The reverse of the above: two events ending at the SAME instant (Onslaught
+// spawning several enemy types in one slot) must both survive the narrowing,
+// not just the first one seen.
+func TestAtEndedKeepsTheWholeGroupWhenTied(t *testing.T) {
+	raw := `{
+	  "0":{"event_id":"a","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"1",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Bear","special_enemy_amount":"1","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"200"},
+	  "1":{"event_id":"b","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"1",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"2",
+	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"200"},
+	  "bosshash":"abc","servertime":250,"version":"1"}`
+
+	m, err := parseBossMap([]byte(raw), time.Unix(250, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := m.AtEnded(1000, 1000, time.Unix(250, 0))
+	if len(got) != 2 {
+		t.Errorf("got %+v, want both events that ended at the same instant", got)
+	}
+}
+
+// The forward-looking mirror of AtEnded: the feed carries the next cycle
+// before it starts (see NextBoundary), and out of two upcoming events,
+// AtUpcoming reports only the one arriving soonest.
+func TestAtUpcomingReturnsTheSoonestCycle(t *testing.T) {
+	raw := `{
+	  "0":{"event_id":"later","isoa":"0","locations":[["1000","1000"]],"started":"0","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Bear","special_enemy_amount":"1","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"500","end_time":"800"},
+	  "1":{"event_id":"sooner","isoa":"0","locations":[["1000","1000"]],"started":"0","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"2",
+	       "event_type":"","dfp_objectives":[],"start_time":"400","end_time":"700"},
+	  "bosshash":"abc","servertime":100,"version":"1"}`
+
+	m, err := parseBossMap([]byte(raw), time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := m.AtUpcoming(1000, 1000, time.Unix(100, 0))
+	if len(got) != 1 || got[0].Label() != "1 x Titan" {
+		t.Errorf("got %+v, want only the soonest-starting cycle", got)
+	}
+	// And it must not also show up as active or ended.
+	for _, e := range got {
+		if e.ActiveAt(time.Unix(100, 0)) || e.EndedRecentlyAt(time.Unix(100, 0)) {
+			t.Errorf("an upcoming event must not also read as active or ended: %+v", e)
+		}
+	}
+}
+
+// BlockBoundary is what drives the Onslaught countdown: the current cycle's
+// own end while something is up, the next one's start once it isn't - both
+// scoped to one block, unlike NextBoundary which schedules polling across the
+// whole map and would happily answer with a city boundary instead.
+func TestBlockBoundaryIsTheNearestStartOrEnd(t *testing.T) {
+	raw := `{
+	  "0":{"event_id":"active","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"200"},
+	  "bosshash":"abc","servertime":100,"version":"1"}`
+	m, err := parseBossMap([]byte(raw), time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := m.BlockBoundary(1000, 1000, time.Unix(100, 0)); !b.Equal(time.Unix(200, 0)) {
+		t.Errorf("BlockBoundary = %s, want the active event's own end", b)
+	}
+	// A block with nothing at all: zero, not a boundary from somewhere else.
+	if b := m.BlockBoundary(2000, 2000, time.Unix(100, 0)); !b.IsZero() {
+		t.Errorf("BlockBoundary = %s, want zero for an empty block", b)
+	}
+}
+
+// The reported bug: the countdown ticked out and restarted at 5:00, but the
+// panel kept last cycle's boss as "now" for seconds afterwards.
+//
+// The cause was two clocks. BlockBoundary compares against the local clock
+// while At/AtEnded/AtUpcoming went through the feed's servertime, which is not
+// a clock at all - it is how stale their data is, measured 19s and then 53s
+// behind within 14 minutes. So the rows waited out the staleness after the
+// countdown had already rolled over.
+//
+// Pinned with a feed 53s stale, back-to-back cycles, and no give at all: one
+// second before the boundary and exactly on it. Everything shifts on the same
+// instant or this fails.
+func TestOnslaughtCyclesShiftWhenTheCountdownRollsOver(t *testing.T) {
+	raw := `{
+	  "0":{"event_id":"a","isoa":"0","locations":[["3000","3000"]],"started":"1","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"3 x Mega Mother","special_enemy_amount":"3","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"1000","end_time":"1300"},
+	  "1":{"event_id":"b","isoa":"0","locations":[["3000","3000"]],"started":"0","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"3 x Eldritch Horror","special_enemy_amount":"3","boss_num":"17",
+	       "event_type":"","dfp_objectives":[],"start_time":"1300","end_time":"1600"},
+	  "bosshash":"abc","servertime":1147,"version":"1"}`
+	// fetchedAt 1200 against a servertime of 1147: the 53s measured live.
+	m, err := parseBossMap([]byte(raw), time.Unix(1200, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cycles := func(now time.Time) (prev, cur, next string, countdown time.Duration) {
+		names := func(events []CityEvent) string {
+			var out []string
+			for _, e := range events {
+				out = append(out, e.Enemies...)
+			}
+			return strings.Join(out, "+")
+		}
+		return names(m.AtEnded(onslaughtCoord, onslaughtCoord, now)),
+			names(m.At(onslaughtCoord, onslaughtCoord, now)),
+			names(m.AtUpcoming(onslaughtCoord, onslaughtCoord, now)),
+			m.BlockBoundary(onslaughtCoord, onslaughtCoord, now).Sub(now)
+	}
+
+	prev, cur, next, left := cycles(time.Unix(1299, 0))
+	if prev != "" || cur != "3 x Mega Mother" || next != "3 x Eldritch Horror" {
+		t.Errorf("a second before the boundary: prev=%q now=%q next=%q", prev, cur, next)
+	}
+	if left != time.Second {
+		t.Errorf("countdown a second out = %s, want 1s", left)
+	}
+
+	// The instant it rolls over: the list moves along by one, and "next" empties
+	// because the cycle after this one is not published until ~100s before it.
+	prev, cur, next, left = cycles(time.Unix(1300, 0))
+	if prev != "3 x Mega Mother" {
+		t.Errorf("prev = %q, want the cycle that just ended", prev)
+	}
+	if cur != "3 x Eldritch Horror" {
+		t.Errorf("now = %q, want what was next a second ago - the whole bug", cur)
+	}
+	if next != "" {
+		t.Errorf("next = %q, want nothing until the feed publishes the cycle after", next)
+	}
+	if left != 300*time.Second {
+		t.Errorf("countdown at the boundary = %s, want the new cycle's full 5 minutes", left)
 	}
 }
 
@@ -521,6 +881,174 @@ func TestBossPollerNextDelayClamps(t *testing.T) {
 	}
 }
 
+// This is the fix for "next never shows up": reacting to NextBoundary alone
+// means waking up when the active cycle ENDS, which on a back-to-back
+// schedule is also when the next one STARTS - too late to ever have seen it
+// as upcoming. Waking up bossMapPublishWindow before the horizon instead lands
+// inside the window the feed is expected to already carry it in.
+func TestBossPollerWakesEarlyForOnslaughtsPublishWindow(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Poll.Jitter = 0 // deterministic
+	// Raised well clear of the wake being measured, so the heartbeat cannot be
+	// what caps the delay: this test is about where the aim lands, and the
+	// tighter Onslaught heartbeat is TestBossPollerUsesOnslaughtsOwnIntervals.
+	cfg.BossMap.OnslaughtMaxInterval = duration{10 * time.Minute}
+
+	// now=100, cycle ends at 450: the raw boundary (450+slack-100=355s) is
+	// past that and so would not lower the delay on its own - only the
+	// horizon-minus-publish-window (450-100-100=250s) should.
+	raw := `{
+	  "0":{"event_id":"1","isoa":"0","locations":[["3000","3000"]],"started":"1","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"450"},
+	  "bosshash":"abc","servertime":100,"version":"1"}`
+	m, err := parseBossMap([]byte(raw), time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := newBossPoller(nil, nil, func() *Config { return cfg }, func() bool { return true })
+	p.current = m
+	if got := p.nextDelay(time.Unix(100, 0)); got != 250*time.Second {
+		t.Errorf("delay = %s, want 250s (the horizon minus the publish window)", got)
+	}
+
+	// Jitter on this wake may only ever push it LATER. Early is the failure
+	// direction - the feed has not published yet - so a symmetric spread would
+	// be spending the very margin the aim depends on. Repeated because it is a
+	// claim about a random draw.
+	cfg.Poll.Jitter = 0.10
+	for i := 0; i < 200; i++ {
+		got := p.nextDelay(time.Unix(100, 0))
+		if got < 250*time.Second {
+			t.Fatalf("delay = %s on draw %d, want never below the 250s aim - jitter must not pull an aimed wake earlier", got, i)
+		}
+		if got > 275*time.Second {
+			t.Fatalf("delay = %s on draw %d, want at most 250s +10%%", got, i)
+		}
+	}
+	cfg.Poll.Jitter = 0
+
+	// Out in the city, the same map's Onslaught horizon must not matter at all -
+	// counting it would drag every player's schedule down to Onslaught's cadence
+	// just because the feed always carries its cycles.
+	pCity := newBossPoller(nil, nil, func() *Config { return cfg }, func() bool { return false })
+	pCity.current = m
+	if got := pCity.nextDelay(time.Unix(100, 0)); got != cfg.BossMap.MaxInterval.Duration {
+		t.Errorf("delay = %s, want the plain max interval (%s), Onslaught ignored",
+			got, cfg.BossMap.MaxInterval.Duration)
+	}
+}
+
+// Onslaught's cycle is 300s where the city's is 3600s, so it gets its own floor
+// and heartbeat: the city's five-minute heartbeat is a WHOLE Onslaught cycle and
+// can miss a turnover outright.
+func TestBossPollerUsesOnslaughtsOwnIntervals(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Poll.Jitter = 0
+	now := time.Unix(100, 0)
+
+	// No map at all, so nothing schedules the fetch and the heartbeat is the
+	// entire answer - which is the number being asserted.
+	inOnslaught := true
+	p := newBossPoller(nil, nil, func() *Config { return cfg }, func() bool { return inOnslaught })
+	if got := p.nextDelay(now); got != cfg.BossMap.OnslaughtMaxInterval.Duration {
+		t.Errorf("in Onslaught delay = %s, want the Onslaught heartbeat (%s)",
+			got, cfg.BossMap.OnslaughtMaxInterval)
+	}
+	inOnslaught = false
+	if got := p.nextDelay(now); got != cfg.BossMap.MaxInterval.Duration {
+		t.Errorf("in the city delay = %s, want the city heartbeat (%s)",
+			got, cfg.BossMap.MaxInterval)
+	}
+
+	// And the floor moves with it. A boundary two seconds out would otherwise
+	// schedule a fetch two seconds out; the floor is what stops that, and in
+	// Onslaught it is the tighter one.
+	raw := `{
+	  "0":{"event_id":"1","isoa":"0","locations":[["3000","3000"]],"started":"1","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"102"},
+	  "bosshash":"abc","servertime":100,"version":"1"}`
+	m, err := parseBossMap([]byte(raw), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.current = m
+	inOnslaught = true
+	if got := p.nextDelay(now); got != cfg.BossMap.OnslaughtInterval.Duration {
+		t.Errorf("delay = %s, want the Onslaught floor (%s)", got, cfg.BossMap.OnslaughtInterval)
+	}
+}
+
+// The floors protect somebody else's server, so a config below them is a startup
+// error rather than a value quietly raised.
+func TestOnslaughtIntervalRespectsTheSharedFloor(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.BossMap.OnslaughtInterval = duration{floorBossMapInterval - time.Second}
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "bossmap.onslaught_interval") {
+		t.Errorf("validate() = %v, want it to reject anything under the %s floor", err, floorBossMapInterval)
+	}
+
+	// And the floor itself is allowed - it is a floor, not a value to stay clear
+	// of. Onslaught's 300s cycle is the reason it sits below dfprofiler's own
+	// 30s page rate at all.
+	cfg = defaultConfig()
+	cfg.BossMap.OnslaughtInterval = duration{floorBossMapInterval}
+	if err := cfg.validate(); err != nil {
+		t.Errorf("validate() = %v, want the floor value itself to be accepted", err)
+	}
+
+	cfg = defaultConfig()
+	cfg.BossMap.OnslaughtMaxInterval = duration{15 * time.Second}
+	err = cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "onslaught_max_interval") {
+		t.Errorf("validate() = %v, want it to reject a heartbeat below its own floor", err)
+	}
+}
+
+// A wake has to move the deadline, or it does nothing at all: the loop re-arms a
+// timer for the same instant and the poke is swallowed. That was the bug that
+// stopped "arriving on a new block refetches the map" from ever happening.
+func TestBossPollerWakeBringsTheNextFetchForward(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Poll.Jitter = 0
+	now := time.Unix(10000, 0)
+
+	p := newBossPoller(nil, nil, func() *Config { return cfg }, func() bool { return false })
+
+	// With no map yet there is nothing to be polite about: fetch now.
+	if got := p.earliestFetch(now); !got.Equal(now) {
+		t.Errorf("earliestFetch with no map = %s, want %s", got, now)
+	}
+
+	// With a fetch 10s ago and a 1m floor, the wake waits out the remaining 50s
+	// rather than firing immediately.
+	raw := `{
+	  "0":{"event_id":"1","isoa":"0","locations":[["1058","1016"]],"started":"1","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"17",
+	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"99999"},
+	  "bosshash":"abc","servertime":9990,"version":"1"}`
+	m, err := parseBossMap([]byte(raw), now.Add(-10*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.current = m
+	want := now.Add(50 * time.Second)
+	if got := p.earliestFetch(now); !got.Equal(want) {
+		t.Errorf("earliestFetch = %s, want %s (the interval floor still applies to a poke)", got, want)
+	}
+
+	// Once the floor has passed, a wake fetches at once.
+	if got := p.earliestFetch(now.Add(2 * time.Minute)); !got.Equal(now.Add(2 * time.Minute)) {
+		t.Errorf("earliestFetch past the floor = %s, want the given time", got)
+	}
+}
+
 // Which way to walk when your own block is empty, which is most blocks.
 //
 // nearestFixture is the pair the store uses: every active event as a mark, with one
@@ -714,53 +1242,5 @@ func TestNearestLine(t *testing.T) {
 	cfg.ShowNearest = false
 	if _, ok := nearestLine(v, cfg); ok {
 		t.Error("show_nearest = false must silence it")
-	}
-}
-
-// The feed's servertime is not a clock, so adding it must not move when an event
-// becomes active. It lags real time by however long ago their backend last synced
-// with the game: measured 19s behind, then 53s behind 14 minutes later, against an
-// NTP-synced local clock. The event timestamps themselves are absolute unix
-// seconds on the game's own schedule, so the local clock is what decides.
-//
-// Fixtures elsewhere in this file pass fetchedAt == servertime, which is exactly
-// the case that hid this. Here they are 53s apart.
-func TestAStaleServertimeDoesNotDelayAChangeover(t *testing.T) {
-	// Two back-to-back cycles on one block: the first ends at 1300, the second
-	// runs from there.
-	raw := `{
-	  "0":{"event_id":"a","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"0",
-	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
-	       "special_enemy_type":"3 x Mega Mother","special_enemy_amount":"3","boss_num":"1",
-	       "event_type":"","dfp_objectives":[],"start_time":"1000","end_time":"1300"},
-	  "1":{"event_id":"b","isoa":"0","locations":[["1000","1000"]],"started":"0","ended":"0",
-	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
-	       "special_enemy_type":"3 x Eldritch Horror","special_enemy_amount":"3","boss_num":"17",
-	       "event_type":"","dfp_objectives":[],"start_time":"1300","end_time":"1600"},
-	  "bosshash":"abc","servertime":1147,"version":"1"}`
-	m, err := parseBossMap([]byte(raw), time.Unix(1200, 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	names := func(events []CityEvent) string {
-		var out []string
-		for _, e := range events {
-			out = append(out, e.Enemies...)
-		}
-		return strings.Join(out, "+")
-	}
-
-	// A second before the boundary the first cycle is still the live one.
-	if got := names(m.At(1000, 1000, time.Unix(1299, 0))); got != "3 x Mega Mother" {
-		t.Errorf("before the boundary: active = %q", got)
-	}
-	// On the boundary the second cycle is live and the first has ended, both at
-	// once. With the servertime added, neither had happened yet.
-	if got := names(m.At(1000, 1000, time.Unix(1300, 0))); got != "3 x Eldritch Horror" {
-		t.Errorf("on the boundary: active = %q, want the cycle starting there", got)
-	}
-	if got := names(m.AtEnded(1000, 1000, time.Unix(1300, 0))); got != "3 x Mega Mother" {
-		t.Errorf("on the boundary: ended = %q, want the cycle that just finished", got)
 	}
 }

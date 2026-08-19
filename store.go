@@ -12,9 +12,8 @@ import (
 )
 
 // The store is the single place widgets read from. The poller writes snapshots
-// into it, the UI derives a View out of it, and nothing else talks to either
-// side. Widgets therefore never issue requests, never parse the wire format, and
-// never see a map[string]string.
+// in, the UI derives a View out, and nothing else talks to either side - so
+// widgets never issue requests, parse the wire format, or see a map[string]string.
 
 // xpSource records which cumulative-XP tier a snapshot used, so the choice is
 // observable rather than assumed.
@@ -36,11 +35,10 @@ func (s xpSource) String() string {
 	return "unavailable"
 }
 
-// Snapshot is one parsed observation of the player record. Every field is
-// derived from a get_values response; anything the response did not contain is
-// left at its zero value and flagged by the corresponding Has* bool, because
-// "absent" and "zero" mean genuinely different things here (df_dangerlevel=0 is
-// a real danger level; a missing df_dangerlevel is not).
+// Snapshot is one parsed observation of the player record. Anything the response
+// did not contain is left at its zero value and flagged by a Has* bool, because
+// "absent" and "zero" mean genuinely different things here - df_dangerlevel=0 is
+// a real danger level.
 type Snapshot struct {
 	At time.Time
 
@@ -53,10 +51,9 @@ type Snapshot struct {
 	// ExpNeeded is the threshold to leave the current level, 0 at the cap or
 	// without a catalog.
 	ExpNeeded int64
-	// PendingLevels is how many levels the banked XP is already worth. It is
-	// normally 0, but the client never levels you up - XP piles into df_exp for
-	// a whole run and is cashed in on the way back to an outpost - so this can
-	// legitimately be 20 or more.
+	// PendingLevels is how many levels the banked XP is already worth. Normally
+	// 0, but the client never levels you up - XP piles into df_exp for a whole
+	// run and is cashed in on the way back to an outpost - so this can be 20+.
 	PendingLevels int
 	FreePoints    int
 
@@ -64,10 +61,10 @@ type Snapshot struct {
 	// earned since the current trip into the city began (observed ~2M below
 	// exptotal while out in the city at level 415).
 	//
-	// Parsed but NOT rendered by any widget yet: the reset point is unconfirmed
-	// and needs one observation across an outpost-to-city transition. A number
-	// labelled "this run" that actually means something else is worse than no
-	// number. See knowledge/player-record-and-signing.md.
+	// Parsed but NOT rendered: the reset point is unconfirmed and needs one
+	// observation across an outpost-to-city transition. A number labelled "this
+	// run" that means something else is worse than no number. See
+	// knowledge/player-record-and-signing.md.
 	ExpSinceStart    int64
 	HasExpSinceStart bool
 
@@ -88,18 +85,16 @@ type Snapshot struct {
 	Nourishment int
 	HasHunger   bool
 
-	// BoostExp is when an XP boost ends, which can legitimately be "never".
-	// The XP widget resets its window on a change here, since the rate either
-	// side of a boost is not comparable.
+	// BoostExp is when an XP boost ends, which can legitimately be "never". The
+	// XP widget resets its window on a change here, since the rate either side of
+	// a boost is not comparable.
 	BoostExp dfDeadline
 
 	// Session3D is a FINGERPRINT of df_session3d, never the value.
 	//
 	// That field is the last untried candidate for "the client just took control",
-	// which is the one thing no other field in the record marks: position, zone and
-	// df_inoutpost all persist unchanged across a client exit and relaunch, as
-	// observed live. If it turns out to change when the 3D client connects, it is
-	// exactly the run-start signal.
+	// which nothing else in the record marks: position, zone and df_inoutpost all
+	// persist unchanged across a client exit and relaunch, as observed live.
 	//
 	// Hashed because a field with "session" in its name gets the benefit of the
 	// doubt: a fingerprint answers "did it change" without the value ever reaching
@@ -120,34 +115,33 @@ type Snapshot struct {
 // years of error, so they get separate decoders.
 //
 //  1. A compact epoch, unix minus 1.2e9, used by df_servertime and
-//     df_hungertime. Observed values are ~585,000,000 while unix time is
-//     ~1,786,000,000.
+//     df_hungertime. Observed ~585,000,000 while unix time is ~1,786,000,000.
 //
 //  2. Plain unix seconds, used by the expiry fields (df_boostexpuntil and
-//     friends). This is settled by the game's own arithmetic, as reproduced in
+//     friends). Settled by the game's own arithmetic, as reproduced in
 //     the bridge userscript (silverscripts.js:2346):
 //
 //     durationLeft = df_boostexpuntil - (df_servertime + 1200000000)
 //
 //     The right-hand side is unix, so the left-hand side must be too.
 //
-// This was caught by live data: applying the offset to an expiry field produced
-// a boost that expired in 49 years.
+// Caught by live data: applying the offset to an expiry field produced a boost
+// that expired in 49 years.
 const dfTimeOffset = 1_200_000_000
 
 // dfForever is the game's "does not expire" sentinel: int32 max, or one less.
-// Captured values are literally 2147483647 for a permanent boost. As a unix
-// timestamp that is 2038-01-19, the classic 32-bit end of time. the bridge userscript
-// treats anything more than 600000 seconds out as infinite for the same reason.
+// Captured values are literally 2147483647 - as a unix timestamp, 2038-01-19.
+// the bridge userscript treats anything more than 600000 seconds out as infinite for the
+// same reason.
 const dfForever = int64(1)<<31 - 8
 
 // dfPlausibleWindow bounds what a real deadline can be. Anything beyond it is
 // treated as not-a-deadline rather than rendered.
 //
-// This exists because df_block_support_until was zero in every capture, so its
-// encoding is unverified. If it turns out to use the compact epoch, this guard
-// makes the widget omit the line instead of confidently displaying a countdown
-// that is decades wrong.
+// df_block_support_until was zero in every capture, so its encoding is
+// unverified. If it turns out to use the compact epoch, this guard makes the
+// widget omit the line instead of confidently displaying a countdown that is
+// decades wrong.
 const dfPlausibleWindow = 365 * 24 * time.Hour
 
 // dfDeadline is one of the game's expiry timestamps, with "never" as a state
@@ -171,10 +165,9 @@ func (d dfDeadline) Remaining(now time.Time) time.Duration {
 	return 0
 }
 
-// parseSnapshot turns a get_values response into a Snapshot. It never fails:
-// a field that is missing or unparseable is simply absent from the result,
-// because a HUD that renders four of five widgets beats one that renders none
-// over a single unexpected value.
+// parseSnapshot turns a get_values response into a Snapshot. It never fails: a
+// missing or unparseable field is simply absent, because a HUD that renders four
+// of five widgets beats one that renders none over a single unexpected value.
 func parseSnapshot(vars map[string]string, at time.Time, catalog *Catalog) Snapshot {
 	s := Snapshot{At: at}
 
@@ -182,11 +175,10 @@ func parseSnapshot(vars map[string]string, at time.Time, catalog *Catalog) Snaps
 	s.ExpInLevel, _ = int64Var(vars, "df_exp")
 	s.FreePoints, _ = intVar(vars, "df_freepoints")
 
-	// Tier 1: the server's own cumulative counter. Present in every captured
-	// player record, and preferred because it needs no catalog and no
-	// arithmetic. Tier 2 reconstructs it from the XP table, which differs by a
-	// fixed historical offset but advances identically - see
-	// knowledge/allstats-map-and-xp.md.
+	// Tier 1: the server's own cumulative counter, present in every captured
+	// record and preferred because it needs no catalog. Tier 2 reconstructs it
+	// from the XP table, which differs by a fixed historical offset but advances
+	// identically - see knowledge/allstats-map-and-xp.md.
 	if total, ok := int64Var(vars, "df_exptotal"); ok && total > 0 {
 		s.CumulativeXP, s.XPSource = total, xpSourceExpTotal
 	} else if catalog != nil {
@@ -219,8 +211,8 @@ func parseSnapshot(vars map[string]string, at time.Time, catalog *Catalog) Snaps
 
 	s.HP, _ = intVar(vars, "df_hpcurrent")
 	s.HPMax, _ = intVar(vars, "df_hpmax")
-	// Cash is genuinely zero when the bank holds it all, which is why the
-	// presence flag matters here as much as it does for the danger level.
+	// Cash is genuinely zero when the bank holds it all, which is why the presence
+	// flag matters here as much as it does for the danger level.
 	s.Cash, s.HasCash = int64Var(vars, "df_cash")
 	s.BankCash, _ = int64Var(vars, "df_bankcash")
 	s.Nourishment, s.HasHunger = intVar(vars, "df_hungerhp")
@@ -302,12 +294,8 @@ func dfCompactTimeVar(vars map[string]string, key string) time.Time {
 
 // dfDeadlineVar decodes an expiry field: plain unix seconds, with the int32
 // sentinel meaning "never expires" and anything implausible treated as unset.
-//
-// The plausibility check is the important part. It is not defensive
-// programming for its own sake: df_block_support_until was zero in every
-// capture, so its encoding is unverified, and if it turns out to be the compact
-// epoch this makes the HUD omit the line rather than display a countdown that is
-// decades wrong. A wrong number presented confidently is worse than no number.
+// See dfPlausibleWindow for why that check is not defensive programming for its
+// own sake.
 func dfDeadlineVar(vars map[string]string, key string, now time.Time) dfDeadline {
 	v, ok := int64Var(vars, key)
 	if !ok || v <= 0 {
@@ -326,9 +314,9 @@ func dfDeadlineVar(vars map[string]string, key string, now time.Time) dfDeadline
 	return dfDeadline{At: at}
 }
 
-// Store holds everything the UI renders, and is the only shared mutable state
-// in df-hud. Every accessor locks, so the poller, the game watcher, the bridge
-// and the GTK main loop can all touch it.
+// Store holds everything the UI renders, and is the only shared mutable state in
+// df-hud. Every accessor locks, so the poller, the game watcher, the bridge and
+// the GTK main loop can all touch it.
 type Store struct {
 	mu sync.RWMutex
 
@@ -355,8 +343,8 @@ type Store struct {
 	boardStatus string
 
 	// xpSamples supplies the rate window. A function rather than a field because
-	// the window is owned by the persistent state store, and copying it into here
-	// on every poll would be two sources of truth for the same ring.
+	// the window is owned by the persistent state store, and copying it in on
+	// every poll would be two sources of truth for the same ring.
 	xpSamples  func() []XPSample
 	xpMinSamps int
 
@@ -365,9 +353,8 @@ type Store struct {
 	missedTicks int
 	// pendingPenalty and shownPenalty make one hiccup visible for TWO ticks.
 	// Without them a single missed poll flashes amber for a fraction of a second
-	// and is gone before you look up from the game, which defeats the point of
-	// having a stability signal at all: the first success after a miss carries
-	// the penalty forward, and the second clears it.
+	// and is gone before you look up from the game: the first success after a miss
+	// carries the penalty forward, and the second clears it.
 	pendingPenalty int
 	shownPenalty   int
 	lastErr        string
@@ -416,8 +403,8 @@ func (s *Store) ApplyTick(tick Tick) bool {
 	s.mu.Unlock()
 
 	if logSource {
-		// Which XP tier is live is worth exactly one line, because it changes
-		// how the rate is computed and it is otherwise invisible.
+		// Worth exactly one line: it changes how the rate is computed and is
+		// otherwise invisible.
 		log.Printf("store: cumulative XP from %s", snap.XPSource)
 		if snap.XPSource == xpSourceNone {
 			log.Print("store: no cumulative XP source; XP/hr will stay blank " +
@@ -429,47 +416,32 @@ func (s *Store) ApplyTick(tick Tick) bool {
 
 // updateRunLocked maintains the run clock: how long you have been playing.
 //
-// It is not the game client's uptime. Launching Dead Frontier means a launcher, a
-// Launch button, a loading screen and then a Start button, so process uptime can
-// be minutes ahead of any playing, and a clock counting that is timing a loading
-// screen.
+// NOT the client's uptime. Launching means a launcher, a Launch button, a loading
+// screen and then a Start button, so process uptime can be minutes ahead of any
+// playing.
 //
 // Three signals start it, in the order they are trusted:
 //
-//  1. LEAVING AN OUTPOST: df_inoutpost going from 1 to 0. This is the EDGE, not
-//     the value, and that distinction is the whole thing. An earlier version
-//     started the clock whenever the field read 0, which is why it began at the
-//     launcher: the field was already 0 there and stayed 0, so there was no edge
-//     to fire on. The edge means the server has just taken you out of an outpost,
-//     which is the only one of the three that fires AT the start of a run rather
-//     than at the first sign of activity within it.
+//  1. LEAVING AN OUTPOST: df_inoutpost going from 1 to 0. The EDGE, not the
+//     value, and that distinction is the whole thing - an earlier version started
+//     the clock whenever the field read 0, which is why it began at the launcher:
+//     the field was already 0 there, so there was no edge to fire on.
 //  2. THE POSITION CHANGING, and
 //  3. CUMULATIVE XP GOING UP.
 //
-// Neither 2 nor 3 is any good as a primary signal, which is worth writing down
-// because both look convincing: a whole loot run can happen inside one block, and
-// killing is not what you do first when you arrive. They are the fallback for when
-// df-hud was not watching at the moment of the edge - started mid-run, or a
-// previous session that ended out in the city, leaving the record already at 0.
+// Neither 2 nor 3 works as a primary signal, which is worth writing down because
+// both look convincing: a whole loot run can happen inside one block, and killing
+// is not what you do first. They cover df-hud not watching at the moment of the
+// edge - started mid-run, or a previous session that ended out in the city.
 //
 // None of the three can happen while a launcher sits on screen: nothing on the
-// server moves your character, awards you XP, or takes you out of an outpost while
-// you are looking at a Launch button.
+// server moves your character or awards XP while you look at a Launch button.
 //
-// Two rejected alternatives, both tried:
-//
-//   - the process start time. Measurably wrong: reported live as starting the
-//     clock when the launcher appeared.
-//   - df_inoutpost alone. Also wrong, and more interestingly so: it was already
-//     "0" at the launcher, before Start was pressed. So it does not mean "your
-//     character is docked at an outpost" in the way the name suggests. It is kept
-//     below as an END condition only, where being wrong costs a clock that stops
-//     early rather than one that lies about how long you have played.
-//
-// The cost of using movement is that the clock starts on the first step rather
-// than at the Start press, and that df-hud must be watching when it happens (a
-// mid-run start is covered by the persisted run instead). Both are cheap next to
-// a clock that is confidently wrong.
+// Two rejected alternatives, both tried: the process start time (measurably
+// wrong - it started the clock when the launcher appeared), and df_inoutpost
+// alone (already "0" at the launcher, so it does not mean what the name suggests;
+// kept below as an END condition only, where being wrong costs a clock that stops
+// early rather than one that lies).
 func (s *Store) updateRunLocked(snap Snapshot) {
 	moved := s.havePrev && s.prevSnap.HasPosition && snap.HasPosition &&
 		(s.prevSnap.PositionX != snap.PositionX ||
@@ -492,8 +464,8 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 		}
 		s.endRunLocked(snap.At, why)
 	case s.runStart.IsZero() && (leftOutpost || moved || earned):
-		// Timed from the observation that proves it, not from the one before it:
-		// never claim to have been playing for longer than there is evidence for.
+		// Timed from the observation that proves it, not the one before: never
+		// claim to have been playing for longer than there is evidence for.
 		s.runStart = snap.At
 		var why string
 		switch {
@@ -507,10 +479,10 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 		log.Printf("session: run started (%s)", why)
 	}
 
-	// Evidence for the two unconfirmed fields, gathered while the game is being
-	// played rather than guessed at from a single snapshot. Both would give an
-	// exact run boundary if their meaning were settled; neither is acted on until
-	// it is. See knowledge/player-record-and-signing.md.
+	// Evidence for the two unconfirmed fields, gathered while the game is played
+	// rather than guessed at from one snapshot. Both would give an exact run
+	// boundary if their meaning were settled; neither is acted on until it is.
+	// See knowledge/player-record-and-signing.md.
 	if s.havePrev && s.prevSnap.HasExpSinceStart && snap.HasExpSinceStart {
 		prevStart := s.prevSnap.CumulativeXP - s.prevSnap.ExpSinceStart
 		nextStart := snap.CumulativeXP - snap.ExpSinceStart
@@ -525,8 +497,7 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 	if s.havePrev && (s.prevSnap.InOutpost != snap.InOutpost || s.prevSnap.TradeZone != snap.TradeZone) {
 		// Logged together because they are two views of the same thing and it is
 		// not yet known whether they move at the same moment - or whether that
-		// moment is pressing Launch or pressing Start. One launch with this in
-		// place settles it.
+		// moment is pressing Launch or pressing Start.
 		log.Printf("session: outpost=%v tradezone=%d position=%d,%d (was outpost=%v tradezone=%d)",
 			snap.InOutpost, snap.TradeZone, snap.PositionX, snap.PositionY,
 			s.prevSnap.InOutpost, s.prevSnap.TradeZone)
@@ -535,13 +506,11 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 
 // endRunLocked discards the run clock and says how long it had been going.
 //
-// EVERY path that clears the clock goes through here. Three of them did not before -
-// closing the game, relaunching it, and the game simply not being detected any more -
-// so the commonest way a run ends, quitting the game, was the one that left no record
-// of it at all. The clock vanished off the HUD and that was the last you heard.
-//
-// The journal is where you look for yesterday's numbers, so this is the line that has
-// to be there:
+// EVERY path that clears the clock goes through here. Three did not before -
+// closing the game, relaunching it, and the game not being detected any more - so
+// the commonest way a run ends, quitting, was the one that left no record at all.
+// The journal is where you look for yesterday's numbers, so this line has to be
+// there:
 //
 //	session: run ended after 23m41s (the game closed)
 //
@@ -558,16 +527,12 @@ func (s *Store) endRunLocked(at time.Time, why string) {
 
 // RestartRun starts the clock from now, and why is the caller's to say.
 //
-// It exists because none of the automatic signals is certain: the server's record
-// does not mark the client taking control at all, so the clock can only be started
-// from evidence of activity, which for a loot run inside a single block can arrive
-// a long way into it. A one-click correction beats a number you cannot trust and
-// cannot fix.
+// None of the automatic signals is certain - the record does not mark the client
+// taking control at all - so the clock can only start from evidence of activity,
+// which for a loot run inside one block can arrive a long way in. A one-click
+// correction beats a number you cannot trust and cannot fix.
 //
-// why is a parameter because there are three callers now and they are not the same
-// event. It said "by hand" unconditionally, which became untrue the moment the
-// Start button could do it: the log read "Start pressed" and then claimed a manual
-// restart on the next line.
+// why is a parameter because the three callers are not the same event.
 func (s *Store) RestartRun(at time.Time, why string) {
 	s.mu.Lock()
 	s.runStart, s.runSeed = at, nil
@@ -576,8 +541,8 @@ func (s *Store) RestartRun(at time.Time, why string) {
 }
 
 // SetRunSeed offers a persisted run to restore, so restarting df-hud mid-run
-// keeps the clock instead of resetting it to zero. It is applied only once the
-// game watcher confirms the same process is still running.
+// keeps the clock. Applied only once the game watcher confirms the same process
+// is still running.
 func (s *Store) SetRunSeed(run *RunState) {
 	s.mu.Lock()
 	s.runSeed = run
@@ -640,8 +605,6 @@ func (s *Store) Challenges() ([]Challenge, bool) {
 	return s.board, s.haveBoard
 }
 
-// SetGame records the game process, and keeps the run clock honest about it: a
-// closed or relaunched game cannot be the same run.
 // SetBossMap replaces the city event map.
 func (s *Store) SetBossMap(m *BossMap) {
 	s.mu.Lock()
@@ -656,22 +619,24 @@ func (s *Store) BossMap() *BossMap {
 	return s.bossMap
 }
 
+// SetGame records the game process, and keeps the run clock honest about it: a
+// closed or relaunched game cannot be the same run.
 func (s *Store) SetGame(g GameState) {
 	s.mu.Lock()
 	prev := s.game
 	s.game = g
 	switch {
 	case !g.Running:
-		// The commonest end to a run: you quit. Timed to now rather than to the last
-		// poll, because the run continued until the client went away, and the last
-		// poll can be a whole interval behind that.
+		// The commonest end to a run: you quit. Timed to now rather than to the
+		// last poll, because the run continued until the client went away and the
+		// last poll can be a whole interval behind that.
 		s.endRunLocked(time.Now(), "the game closed")
 	case prev.Running && !g.SameSession(prev):
 		s.endRunLocked(time.Now(), "the game relaunched")
 	case s.runSeed != nil:
 		// A run persisted by a previous df-hud process, restored only if it
-		// belongs to the game that is running now. Comparing the start time as
-		// well as the PID matters because PIDs are recycled.
+		// belongs to the game running now. The start time is compared as well as
+		// the PID, because PIDs are recycled.
 		if s.runSeed.Matches(g) {
 			s.runStart = s.runSeed.StartedAt
 			log.Printf("session: resuming the run started %s ago",
@@ -714,10 +679,8 @@ func (s *Store) Snapshot() (Snapshot, bool) {
 	return s.snapshot, s.haveSnap
 }
 
-// View is a flat, immutable picture for the widgets: plain data, no GTK types,
-// no locks, no methods that fetch anything. Everything a widget needs to render
-// one frame is here, already formatted where formatting is a decision rather
-// than a style.
+// View is a flat, immutable picture for the widgets: plain data, no GTK types, no
+// locks, no methods that fetch anything.
 type View struct {
 	Now time.Time
 
@@ -725,14 +688,14 @@ type View struct {
 	DataAge  time.Duration
 
 	// SessionTime is time in the inner city on this run, valid only when
-	// HasSession is set - zero is a real value one second after you arrive, so
-	// it cannot double as "no run".
+	// HasSession is set - zero is a real value one second after you arrive, so it
+	// cannot double as "no run".
 	GameRunning bool
 	HasSession  bool
 	SessionTime time.Duration
-	// ClientUptime is how long the game process has been up, which is no longer
-	// what the HUD shows. Kept for the tray tooltip, where "the client is up but
-	// you are not in the city" is the whole explanation for an empty HUD.
+	// ClientUptime is how long the game process has been up, which is not what
+	// the HUD shows. Kept for the tray tooltip, where "the client is up but you
+	// are not in the city" is the whole explanation for an empty HUD.
 	ClientUptime time.Duration
 
 	Level         int
@@ -754,24 +717,33 @@ type View struct {
 	DangerLevel  int
 	BlockSupport time.Duration
 
-	// BlockEvents is what is standing on your block right now: bosses, bandits,
-	// a mission, a QRF. Empty is the normal case - most blocks hold nothing.
+	// BlockEvents is what is standing on your block right now. Empty is the normal
+	// case - most blocks hold nothing.
 	BlockEvents []CityEvent
 	// BlockEventsPast is the previous cycle's events, filled only in Onslaught
 	// where the cycles overlap.
 	BlockEventsPast []CityEvent
+	// BlockEventsUpcoming is the next cycle's, same gating but forward: the feed
+	// carries the next slot a couple of minutes early, which out in the city
+	// (hourly, no overlap) would just be planning information.
+	BlockEventsUpcoming []CityEvent
+	// OnslaughtCountdown is how long until this cycle turns over - the current one
+	// ending if something is up, otherwise the next one starting. It is a DISPLAY
+	// of the boundary, never what causes "next" to become "now": that happens
+	// because Derive re-reads the event states against the real clock every tick.
+	HasOnslaughtCountdown bool
+	OnslaughtCountdown    time.Duration
 	// OutpostAttack is map-wide rather than about your block.
 	OutpostAttack bool
 
-	// Nearest* is the closest active event when your own block has none, so an
-	// empty block says which way to walk instead of nothing at all. Deltas are in
-	// blocks, and NearestX/Y are the block itself, which is the form the game's own
-	// coordinate readout is in.
+	// Nearest* is the closest active event when your own block has none. Deltas
+	// are in blocks, and NearestX/Y are the block itself, which is the form the
+	// game's own coordinate readout is in.
 	//
-	// NearestDistanceInBlocks is the WALK, around the gaps in the city, and it is
-	// also what "nearest" was decided by. NearestDetour is how much longer that is
-	// than the deltas suggest, which is how the row can admit that the direct line
-	// is not walkable.
+	// NearestDistanceInBlocks is the WALK, around the gaps in the city, and is
+	// what "nearest" was decided by. NearestDetour is how much longer that is than
+	// the deltas suggest, which is how the row can admit the direct line is not
+	// walkable.
 	HasNearest              bool
 	NearestLabel            string
 	NearestDX, NearestDY    int
@@ -779,12 +751,12 @@ type View struct {
 	NearestDistanceInBlocks int
 	NearestDetour           int
 
-	// CityMarks is every active event on the whole map, which is what the map group
-	// draws. The nearest one above is chosen from this list rather than found
-	// separately, so the marker you see and the row you read cannot disagree.
+	// CityMarks is every active event on the whole map, which the map group draws.
+	// The nearest one above is chosen from this list rather than found separately,
+	// so the marker you see and the row you read cannot disagree.
 	CityMarks []CityMark
-	// BossMapAge is how stale the event feed is, so a widget can decline to
-	// claim a block is clear on the strength of an hour-old fetch.
+	// BossMapAge is how stale the event feed is, so a widget can decline to claim
+	// a block is clear on the strength of an hour-old fetch.
 	BossMapAge time.Duration
 	HasBossMap bool
 
@@ -797,8 +769,8 @@ type View struct {
 	Dead            bool
 
 	// XPRate is blank only when there are fewer than two samples; XPWhy explains
-	// why. XPProvisional marks a rate computed from fewer than min_samples, which
-	// is shown with a tilde rather than withheld.
+	// why. XPProvisional marks a rate from fewer than min_samples, shown with a
+	// tilde rather than withheld.
 	XPPerHour     float64
 	XPAvailable   bool
 	XPProvisional bool
@@ -807,9 +779,9 @@ type View struct {
 	XPSamples     int
 	XPStability   xpStability
 
-	// Challenges is the whole board. Which rows reach the HUD is decided at
-	// render time from the config, not here, so toggling a category takes effect
-	// on the next tick instead of on the next poll two minutes later.
+	// Challenges is the whole board. Which rows reach the HUD is decided at render
+	// time from the config, so toggling a category takes effect on the next tick
+	// instead of the next poll two minutes later.
 	Challenges      []Challenge
 	ChallengeStatus string
 	ChallengesDone  int
@@ -821,10 +793,9 @@ type View struct {
 	MissedTicks int
 }
 
-// Derive builds the render view. It is a pure function of stored state plus the
-// current time: no locks held by callers, no I/O, no allocation the UI has to
-// manage. Time-dependent fields (clocks, countdowns) are computed here, which is
-// why a 1s UI tick can re-derive without any network activity.
+// Derive builds the render view: a pure function of stored state plus the current
+// time, with no I/O. Time-dependent fields are computed here, which is why a 1s
+// UI tick can re-derive without any network activity.
 func (s *Store) Derive(now time.Time) *View {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -875,18 +846,22 @@ func (s *Store) Derive(now time.Time) *View {
 		if v.HasPosition {
 			v.BlockEvents = s.bossMap.At(v.PositionX, v.PositionY, now)
 			if v.PositionX == onslaughtCoord && v.PositionY == onslaughtCoord {
-				// Onslaught only. Its cycle is five minutes and the cycles overlap,
-				// so last cycle's boss is often still in front of you. Out in the
-				// city the cycle is an hour and the previous boss is gone.
+				// Onslaught only: its five-minute cycles overlap, so last cycle's
+				// boss is often still in front of you and the next is already in
+				// the feed. Out in the city the cycle is an hour, where the
+				// previous boss has gone and the next is planning information.
 				v.BlockEventsPast = s.bossMap.AtEnded(v.PositionX, v.PositionY, now)
+				v.BlockEventsUpcoming = s.bossMap.AtUpcoming(v.PositionX, v.PositionY, now)
+				if boundary := s.bossMap.BlockBoundary(v.PositionX, v.PositionY, now); !boundary.IsZero() {
+					v.HasOnslaughtCountdown = true
+					v.OnslaughtCountdown = boundary.Sub(now)
+				}
 			}
 		}
 		// Every active event, for the map group - and the source the nearest one is
-		// picked from, so a marker on the map and the row on the HUD can never
-		// disagree about what is out there or how far it is.
-		//
-		// One breadth-first search, shared: it is what makes distances to a dozen
-		// bosses cost the same as a distance to one.
+		// picked from, so a marker on the map and the row on the HUD cannot
+		// disagree. One breadth-first search, shared, which is what makes distances
+		// to a dozen bosses cost the same as a distance to one.
 		var from [2]int
 		var dist []int32
 		if v.HasPosition && theCity.IsBlock(v.PositionX, v.PositionY) {
@@ -895,10 +870,8 @@ func (s *Store) Derive(now time.Time) *View {
 		}
 		v.CityMarks = s.bossMap.ActiveMarks(now, from, dist)
 
-		// Only when your own block is empty. With something in front of you, the
+		// Only when your own block is empty: with something in front of you, the
 		// nearest OTHER thing is a distraction.
-		// v.InOutpost rather than the snapshot, which is out of scope here: the
-		// view already carries it and they are the same value.
 		if v.HasPosition && len(v.BlockEvents) == 0 && !v.InOutpost {
 			if m, ok := nearestMark(v.CityMarks); ok {
 				v.HasNearest = true

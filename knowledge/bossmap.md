@@ -75,8 +75,141 @@ useless for QRFs.
    operator more than one of their own open tabs.
 
 Onslaught cycles are five minutes long and overlap - last cycle's boss is
-routinely still standing there - so the previous cycle is shown for that block
-alone, marked `last:`. City cycles are hourly, where the previous boss has gone.
+routinely still standing there, and the next one is already in the feed before
+it starts - so the previous and next cycles get their own panel
+(`onslaughtPanel` in hudlines.go, `bossesWidget` in widget_bosses.go), coloured
+to match the `onslaught_bosses` userscript this mirrors: grey for `prev`, red
+for `now`, blue for `next`, a dimmer grey for an empty section
+("cleared"/"nothing this cycle"/"not announced") or the "ended Nm ago" line.
+
+The panel's outline went through both extremes before landing. The base
+sheet's `0 0 4px` glow smears once a dozen close-set rows each halo onto their
+neighbours; removing the shadow entirely then left the text blending into
+whatever the game drew behind it. What works is neither: four 1px hard offsets,
+no blur, which draws a black border around each glyph instead of a glow around
+the block. Four corners rather than the map key's three - these rows are
+thinner and a missing corner shows.
+City cycles are hourly, where the previous boss has gone and the next one is
+still just a countdown - so `threatLines` (the plain, uncoloured display used
+everywhere else on the map) never shows Onslaught's prev/next fields at all,
+only `onslaughtPanel` does.
+
+**Each row is two GTK labels, not one with a mixed-colour markup span.** The
+"prev"/"now"/"next" word stays one fixed grey regardless of section, while the
+content beside it takes the section's own colour - and both want the panel's
+own outline rather than the base glow, which GTK cannot apply to only part of
+one label's text. So
+`onslaughtRow` carries `Label`/`Content`/`ContentClass` separately, and
+`onslaughtRowWidget` (widget_bosses.go) lays them out side by side, the label
+always `onslaught-label`. A single label with an inline `foreground=` span was
+tried first and looked right in isolation, but its shadow could not be split
+from the content's - two widgets is the only way to make good on the "no
+shadow, one grey label" requirement, not just the colour.
+
+**A joined `special_enemy_type` on an Onslaught event is not a real nest.**
+Confirmed live: `"3 x Irradiated Giant Spider<br />3 x Mega Giant Spider"`
+looked like a two-type spawn but was the feed bundling two different cycles'
+own single bosses into one entry, the one listed LAST being current.
+`onslaughtEventRows` keeps only the last name for this reason - `eventRows`
+itself is unchanged and still shows every type on a real city nest, where a
+joined list genuinely means several enemies spawned together.
+
+**A bundle's `start_time`/`end_time` describe only the FIRST cycle in it.**
+Captured at 00:28:51: one entry read start 00:15:01, end 00:20:01 carrying two
+names, while the 00:25 cycle was a separate entry - so the second name really
+ran 00:20-00:25, and the entry's own end is that boss's START. Ageing the
+displayed boss from `e.End` therefore said "ended 8m ago" about something three
+minutes gone, one full cycle early per extra name. `onslaughtCycleEnd` shifts
+it by `(len(Enemies)-1)` windows, taking the cycle length from the entry's own
+window rather than hardcoding five minutes. This is also why
+`bossMapPastWindow` has to be well over one cycle: a bundle's declared end is
+already stale by the time it is the thing worth showing.
+
+`AtEnded`/`AtUpcoming` narrow to whichever events share the single most recent
+end time / soonest start time (`edgeGroup`, ported from the same idea in the
+`onslaught_bosses` userscript). `bossMapPastWindow` is 12 minutes, not one
+cycle: Onslaught skips slots often enough that the last SPAWN can be more than
+five minutes back, and 12 is what the userscript settled on after 6 lost
+`prev` too early in practice.
+
+A countdown rides along (`BlockBoundary`, `View.OnslaughtCountdown`): the
+current cycle's own end while something is up, the next one's start once it
+isn't. No timer of df-hud's own drives "next" becoming "now" becoming
+"prev" - it happens because `Derive` re-reads `ActiveAt`/`EndedRecentlyAt`/
+`UpcomingAt` against the real clock on every one-second UI tick, the same as
+everything else here. The countdown is only ever a display of how long until
+that already-true reevaluation lands on the boundary, never what causes it to.
+
+**`servertime` is not a clock. It is how stale the data is.** Measured
+2026-08-17 against an NTP-synced local clock: 19s behind, and 53s behind on a
+fetch 14 minutes later, so it drifts rather than sitting at an offset - it is
+when their backend last synced with the game. `cf-cache-status` is `DYNAMIC`,
+so nothing in between is caching it; the lag is theirs.
+
+Everything therefore compares against the **local clock**, and there is no
+skew adjustment anywhere in `bossmap.go`. Two things justify that. The feed's
+timestamps are absolute unix seconds sitting on the game's own schedule -
+every Onslaught boundary is `unix % 300 == 2`, e.g. `19:25:02 → 19:30:02 →
+19:35:02` - so they are computed from the cycle, not observed on a wonky
+clock. And the local clock is NTP-synced, which makes it the better reading of
+absolute time of the two.
+
+This was a real bug twice over. First, right after a restart the countdown
+showed a full extra minute against a cycle genuinely ~15s from turning over,
+because the freshest possible skew was the most misleading one. Then, once
+`BlockBoundary` alone had been switched to the local clock, it disagreed with
+the rows beside it: the countdown ticked out and restarted at 5:00 while the
+panel kept last cycle's boss as "now" for however stale the feed was - 5
+seconds when reported, up to a minute in principle. Adding skew delayed every
+changeover by the data's age.
+
+With one clock, the shift happens by construction and needs no state of its
+own. At the boundary instant the ended cycle fails `ActiveAt` and becomes
+`prev`, the cycle starting there becomes `now`, `next` empties until the feed
+publishes the one after (~100s ahead, below), and `BlockBoundary` returns that
+new cycle's end. `TestOnslaughtCyclesShiftWhenTheCountdownRollsOver` pins it
+at exactly the boundary and one second before, on a feed 53s stale.
+
+**"next" needs the poller to fetch EARLY, not just react.** `NextBoundary`
+alone schedules the next fetch for when the CURRENT cycle ends - but Onslaught
+runs back-to-back, so that is also when the NEXT one starts, and a fetch made
+then always finds it already "now", never having caught it as "next". Fixed
+with `Horizon`/`bossMapPublishWindow`: while in Onslaught the poller also wakes
+that far before the latest end time it already knows about, landing inside the
+window where the feed carries a cycle but it has not started.
+
+**The publish lead is 100s, measured.** Sampling the feed every 20s across a
+cycle on 2026-08-16, the 00:45:01 cycle first appeared at 00:43:18 - a lead of
+103s, at most 123s allowing for the sample gap, and the player watching
+dfprofiler's own page beside df-hud reported the same independently. The
+window was 150s before that, inherited from the userscript's
+`PUBLISH_WINDOW_MS` whose comment says "~2 minutes" as an impression rather
+than a measurement. So the aimed wake fired BEFORE publication every cycle,
+found nothing, and left discovery to the interval floor's retry - which is
+exactly the lag against their page that prompted the measurement. Aim late
+rather than early: early looks for something that does not exist yet, late
+merely finds it a few seconds after it could have been.
+
+Dropping the skew adjustment made that aim mean what it says. `Horizon` used to
+hand back the end time shifted by the skew, so a 100s aim really fired 47-81s
+out depending on how stale the feed was - late, and safe by accident. It is now
+100s against the measured 103s lead, which is only 3s of margin, so the
+one-sided jitter below is what the aim rests on.
+
+Jitter on that wake is **one-sided** (`jitteredLate`). Ten percent of a ~200s
+delay is 20s, which is most of the margin between aiming at 100s and the 123s
+upper bound - symmetric jitter would spend the very thing the aim depends on.
+Everywhere else it stays symmetric, because spreading load is what it is for.
+
+**Onslaught has its own floor and heartbeat**
+(`bossmap.onslaught_interval`/`onslaught_max_interval`, 30s and 1m). The city
+pair is sized against a 3600s cycle; against Onslaught's 300s one, a
+five-minute heartbeat is a whole cycle wide and can miss a turnover outright.
+These are the only settings where df-hud costs dfprofiler what one of their own
+open tabs does rather than half of it - bounded, since they apply only while
+standing on 3000,3000 with the game running. `RequestsPerHour` deliberately
+does not fold that floor in: it reports what an hour of normal play costs, and
+an hour entirely inside Onslaught is a different activity.
 
 
 ## Cycles, from the player rather than from the data
@@ -108,23 +241,4 @@ The schedule that falls out of this: fetch shortly after the next boundary in th
 data, on arriving at a new block (which is the only question the feed answers),
 and otherwise on a heartbeat for the random spawns. The minimum gap is a floor
 none of those can breach, and jitter is applied before the floor rather than
-after, so it can never reduce it.\n\n
-
-## `servertime` is not a clock. It is how stale the data is.
-
-Measured 2026-08-17 against an NTP-synced local clock: 19s behind, and 53s behind
-on a fetch 14 minutes later, so it drifts rather than sitting at an offset - it is
-when their backend last synced with the game. `cf-cache-status` is `DYNAMIC`, so
-nothing in between is caching it; the lag is theirs.
-
-So nothing here adjusts by it, and every comparison is against the local clock.
-Two things justify that. The feed's timestamps are absolute unix seconds sitting
-on the game's own schedule - every Onslaught boundary is `unix % 300 == 2`, e.g.
-`19:25:02` then `19:30:02` - so they are computed from the cycle rather than
-observed on a wonky clock. And the local clock is NTP-synced, which makes it the
-better reading of absolute time of the two.
-
-Adding it delayed every changeover by the data's age: up to a minute of an event
-still reading as active after it had ended, worst on the five-minute cycle where a
-minute is a fifth of it. `ServerTime` is still parsed, because how fresh the feed
-is remains worth knowing; it just decides nothing.
+after, so it can never reduce it.

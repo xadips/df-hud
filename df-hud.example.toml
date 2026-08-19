@@ -1,28 +1,26 @@
 # df-hud configuration.
 #
 # Copy to ~/.config/df-hud/config.toml and edit. Every value below is the
-# built-in default, so an empty file (or no file at all) behaves exactly like
-# this one, and you only need to keep the lines you actually change.
+# built-in default, so an empty file behaves exactly like this one and you only
+# need to keep the lines you change.
 #
-# Unknown keys are a startup ERROR, not a warning: a typo would otherwise look
-# like a bug in df-hud rather than a bug in your config. Intervals below their
-# minimum are also errors rather than being quietly raised, because they decide
-# how often df-hud talks to somebody else's game server.
+# Unknown keys are a startup ERROR, not a warning - a typo would otherwise look
+# like a bug in df-hud. Intervals below their minimum are errors too, rather than
+# being quietly raised, because they decide how often df-hud talks to somebody
+# else's server.
 #
-# Editing this file while df-hud is running reloads it. Three keys need a
-# restart and are noted where they appear.
+# Editing this file while df-hud is running reloads it. Three keys need a restart
+# and are noted where they appear.
 
 [df]
-# The game's API root. Every request body carries your credentials, so this must
-# be https.
+# The game's API root. Every request body carries your credentials, so https.
 base_url = "https://fairview.deadfrontier.com/onlinezombiemmo"
 
-# The public, unauthenticated stats feed. df-hud reads the level XP table from
-# here - it is what makes an XP rate immune to the reset at every level-up.
+# The public, unauthenticated stats feed, read for the level XP table - which is
+# what makes an XP rate immune to the reset at every level-up.
 allstats_url = "https://fairview.deadfrontier.com/onlinezombiemmo/dfdata/get_allstats.php?printvars=1"
 
-# Sent on every request. Defaults to "df-hud/<version> (+local overlay; contact
-# via Dead Frontier forums)". Keep it honest and identifiable: it is what lets a
+# Sent on every request. Keep it honest and identifiable: it is what lets a
 # server operator tell a local HUD apart from abuse, and contact you instead of
 # banning you. Left commented so it stays version-stamped.
 # user_agent = "df-hud/dev (+local overlay; contact via Dead Frontier forums)"
@@ -30,10 +28,9 @@ allstats_url = "https://fairview.deadfrontier.com/onlinezombiemmo/dfdata/get_all
 # Per-request timeout. Allowed range 2s..60s.
 timeout = "10s"
 
-# Signing salt for hashed calls (challenges). Normally leave this empty: the
-# bridge userscript reports the live value from page context and a reported salt
-# always wins, so the game rotating it heals itself. Set it only if you want
-# challenges to work without the bridge script installed.
+# Signing salt for hashed calls (challenges). Normally leave empty: the bridge
+# userscript reports the live value and a reported salt always wins, so the game
+# rotating it heals itself. Set it only to work without the bridge script.
 skeygen = ""
 
 [bridge]
@@ -46,27 +43,23 @@ enabled = true
 listen = "127.0.0.1:9275"
 
 [poll]
-# How often df-hud asks the game for your player record.
+# How often df-hud asks the game for your player record. active applies while the
+# game is running, idle when it is not - so with only_when_game_running below,
+# idle never applies at all and closing the game means zero requests.
 #
-# active_interval applies while the game is running, idle_interval when it is
-# not - so with only_when_game_running below (the default), idle_interval never
-# applies at all and closing the game means zero requests.
-#
-# Deliberately NOT refined by whether you are in an outpost: that status is only
-# known from the previous poll, so it would always be one poll stale, and it
-# would delay noticing the outpost-to-city transition by a whole idle interval -
-# right when the HUD matters most.
+# Deliberately NOT refined by whether you are in an outpost: that is only known
+# from the previous poll, so it would always be one poll stale, and it would
+# delay noticing the outpost-to-city transition by a whole idle interval.
 #
 # Minimums: active 5s, idle 30s, challenges 30s, catalog 1h. Regardless of these,
 # two requests are never sent less than 5s apart, so nothing that wakes df-hud
-# (credentials arriving, the game launching) can turn into a burst.
+# can turn into a burst.
 active_interval = "10s"
 idle_interval = "2m"
 
-# The challenge board's cadence WHILE PLAYING. With the game closed nothing is
-# generating challenge progress, so it stretches to idle_interval - a short value
-# chosen for play cannot become an all-night poll if you turn
-# only_when_game_running off.
+# The challenge board's cadence WHILE PLAYING. With the game closed it stretches
+# to idle_interval, so a short value chosen for play cannot become an all-night
+# poll if you turn only_when_game_running off.
 challenge_interval = "30s"
 
 catalog_interval = "24h"
@@ -76,7 +69,6 @@ catalog_interval = "24h"
 jitter = 0.10
 
 # With this on, closing the game takes df-hud's traffic to exactly zero.
-# Turning it off means it polls around the clock.
 only_when_game_running = true
 
 # Ceiling on the exponential backoff after transport failures. A rejected
@@ -87,109 +79,90 @@ backoff_max = "5m"
 
 [game]
 # The client executable, matched against the first command-line argument's
-# basename. It must be a bare name, not a path. The default is the Steam/Proton
-# install's exe name.
+# basename. A bare name, not a path.
 #
-# Detection is done from /proc rather than from the compositor: it decides
-# whether df-hud polls at all, so it has to work on any compositor and it must
-# not depend on a window existing (a Proton game spends a while with none).
+# Detection is from /proc rather than the compositor: it decides whether df-hud
+# polls at all, so it must work anywhere and must not depend on a window existing
+# (a Proton game spends a while with none).
 process = "DeadFrontier.exe"
 
-# The game WINDOW's class, which is a different question: it decides where the
-# HUD is drawn (hud.follow_game_workspace, and monitor = "auto"), never whether
-# df-hud polls.
+# The game WINDOW's class, a different question: it decides where the HUD is
+# drawn (follow_game_workspace, monitor = "auto"), never whether df-hud polls.
 #
-# Empty means "look for a window whose process id matches, and failing that one
-# whose class looks like game.process". Set it only if `df-hud -check-game` says
-# the window could not be matched - it prints every window's class, so the fix is
-# copying one of them in here.
+# Empty means "match by process id, failing that by a class that looks like
+# game.process". Set it only if `df-hud -check-game` says the window could not be
+# matched - it prints every window's class, so the fix is copying one in here.
 window_class = ""
 
 # Titles that are NOT the game even though they carry its class, matched
 # case-insensitively as substrings.
 #
-# The launcher is why. Dead Frontier's configuration dialogs are the same
-# executable, so they report the same class AND the same pid as the game:
+# The launcher is why. Its configuration dialogs are the same executable, so they
+# report the same class AND the same pid as the game:
 #
 #   class: deadfrontier.exe   title: Dead Frontier Configuration   464x406
 #   class: deadfrontier.exe   title: Input Configuration           215x78
 #
-# Without this the HUD is drawn over a settings box on whatever workspace it
-# opened on. "configuration" catches both by what they are rather than by their
-# exact wording - which is also why this is an ignore list and not a positive
-# match on the game's own title: a required title would break the day they append
-# a version to it, and the failure would be an invisible HUD, which looks exactly
-# like df-hud being broken.
+# An ignore list rather than a positive match on the game's own title: a required
+# title would break the day they append a version to it, and the failure would be
+# an invisible HUD, which looks exactly like df-hud being broken.
 window_title_ignore = ["configuration"]
 
-# How often /proc is scanned. This is a local read, not a network request, so
-# there is no politeness floor - only sanity limits of 250ms..5m. Under Hyprland
-# a window opening or closing also triggers an immediate rescan, so this is a
-# backstop rather than the main path.
+# How often /proc is scanned. A local read, not a network request, so there is no
+# politeness floor - only sanity limits of 250ms..5m. Under Hyprland a window
+# opening or closing also triggers an immediate rescan.
 scan_interval = "2s"
-
 [paths]
 # Holds credentials.json (mode 0600), state.json and catalog.json.
-# Defaults to $XDG_DATA_HOME/df-hud, i.e. ~/.local/share/df-hud.
-# Needs a RESTART to change.
+# Defaults to $XDG_DATA_HOME/df-hud. Needs a RESTART to change.
 # data_dir = "~/.local/share/df-hud"
 
 [hud]
 enabled = true
 
-# Hide the HUD entirely while the game is not running. Without this the overlay
-# sits over your desktop all day showing a clock for a game nobody is playing.
-#
-# Named to match poll.only_when_game_running and deliberately separate from it:
-# that one governs requests to somebody else's server, this one governs pixels on
-# your own screen.
+# Hide the HUD while the game is not running. Named to match
+# poll.only_when_game_running and deliberately separate: that one governs
+# requests to somebody else's server, this one governs pixels on your screen.
 only_when_game_running = true
 
-# Show the HUD only while the game's own workspace is the one on screen.
+# Show the HUD only while the game's own workspace is on screen.
 #
-# The layer-shell protocol has no concept of a workspace - a layer surface belongs
-# to a MONITOR and is drawn on every workspace of it - so this is emulated: df-hud
-# asks the compositor which workspace the game's window is on and hides the
-# surface while you are looking at a different one.
+# Layer-shell has no concept of a workspace - a layer surface belongs to a
+# MONITOR - so this is emulated by asking the compositor which workspace the
+# game's window is on.
 #
-# It fails open. If the compositor cannot be reached, or the game's window cannot
-# be identified (see game.window_class), the HUD is shown rather than hidden: a
-# HUD that is wrongly visible is an annoyance you can see, while one that is
-# wrongly invisible is indistinguishable from df-hud being broken.
+# It fails open. If the compositor cannot be reached or the window cannot be
+# identified, the HUD is shown rather than hidden: a HUD that is wrongly visible
+# is an annoyance you can see, one that is wrongly invisible is
+# indistinguishable from df-hud being broken.
 follow_game_workspace = true
 
-# Connector name ("DP-1", "HDMI-A-1"), or "auto".
+# Connector name ("DP-1"), or "auto".
 #
-# "auto" follows the GAME: the surface is pinned to whichever monitor the game's
-# window is on, re-checked every time the HUD is shown. If the window cannot be
-# identified, the compositor chooses, which in practice means the focused
-# monitor. Name a connector explicitly to override that.
+# "auto" follows the GAME: pinned to whichever monitor the game's window is on,
+# re-checked every time the HUD is shown. If the window cannot be identified the
+# compositor chooses, which means the focused monitor.
 #
 # An unknown name is a warning, not a failure: losing the HUD entirely because a
 # connector got renamed after a cable swap would be a poor trade.
 monitor = "auto"
 
 # MUST be "overlay" to be visible over a fullscreen game: the "top" layer sits
-# BELOW fullscreen surfaces, so a "top" HUD simply disappears when you play,
-# which looks identical to df-hud being broken. The others exist for debugging.
+# BELOW fullscreen surfaces, so a "top" HUD simply disappears when you play. The
+# others exist for debugging.
 layer = "overlay"
 
-# The surface covers the whole monitor and each group of rows carries its own
-# x/y under [widget.*], so a coordinate here means what it means in a
-# screenshot. These margins inset the surface from each edge, which moves that
-# origin: set margin_top if you want everything pushed below a bar, rather than
-# adding the same offset to every group.
-#
-# There used to be an anchors key here, from when the HUD was one stack of rows
-# in a corner. Per-group coordinates replaced it.
+# The surface covers the whole monitor and each group carries its own x/y under
+# [widget.*], so a coordinate means what it means in a screenshot. These margins
+# inset the surface from each edge, which moves that origin: set margin_top to
+# push everything below a bar, rather than offsetting every group.
 margin_top = 0
 margin_right = 0
 margin_bottom = 0
 margin_left = 0
 
-# Leave this on. The HUD sits on top of the game, so every pointer event it
-# keeps is one the game does not get. Turn it off only to poke at the surface
-# while debugging.
+# Leave this on. The HUD sits on top of the game, so every pointer event it keeps
+# is one the game does not get.
 click_through = true
 
 font_family = "Courier New, monospace"
@@ -197,172 +170,132 @@ font_size = 12
 text_color = "#e6cc4d"
 opacity = 1.0
 
-# Optional extra stylesheet, loaded after the built-in one, so you can restyle
-# without rebuilding. Must exist if set.
+# Optional extra stylesheet, loaded after the built-in one. Must exist if set.
 # css = "~/.config/df-hud/style.css"
 
 [bossmap]
 # What is standing on your block: bosses, bandit packs, missions, QRF events and
-# outpost attacks. Shown as an extra line under the block name.
+# outpost attacks.
 #
-# This is the only thing df-hud fetches from a site that is not the game's own.
-# The game's API knows where YOU are and the public stats feed knows the map's
-# geometry, but neither knows what has spawned on it; dfprofiler publishes that.
+# The only thing df-hud fetches from a site that is not the game's own. The
+# game's API knows where YOU are and the stats feed knows the map's geometry, but
+# neither knows what has spawned on it; dfprofiler publishes that.
 #
 # There is no fixed cadence. The feed states when every event starts and ends, so
-# the schedule comes from the data: a fetch shortly after the next changeover, one
-# when you arrive on a new block (the only question this feed answers), and
-# otherwise a heartbeat for the once-a-day random spawns that nothing predicts.
+# the schedule comes from the data: a fetch shortly after the next changeover,
+# one when you arrive on a new block, and otherwise a heartbeat for the
+# once-a-day random spawns that nothing predicts. Since each event's own times
+# are read against the clock, a changeover costs no request at all.
 #
-# Most cycles turn over on the hour, and the feed carries the NEXT cycle from
-# around :59 and keeps the previous one for a few minutes after :00. df-hud reads
-# each event's own start and end times against the clock, so a changeover costs no
-# request at all - one fetch stays correct straight through it.
+# interval is the MINIMUM gap between fetches, not the cadence. The floor for
+# both intervals is 15s. Nothing is fetched while the game is not running.
 #
-# interval is the MINIMUM gap between fetches, not the cadence. Its floor is 30s,
-# which is what dfprofiler's own boss map page polls at per open tab: df-hud must
-# never cost the operator more than their own page does. Nothing is fetched at all
-# while the game is not running.
+# The onslaught_ pair is the same two numbers for while you are standing in
+# Onslaught, and tighter because that cycle is 300 seconds where the city's is
+# 3600 - a five-minute heartbeat against a five-minute cycle can miss a whole
+# turnover. dfprofiler's own page polls this endpoint every 30s per open tab,
+# which is the rate worth staying near.
 enabled = true
 url = "https://www.dfprofiler.com/bossmap/json/"
 interval = "1m"
 max_interval = "5m"
-
+onslaught_interval = "30s"
+onslaught_max_interval = "1m"
 [tray]
 # The icon in the system tray (waybar's "tray" module, or any other
 # StatusNotifierItem host), with a menu for hiding the overlay, reloading this
 # file and quitting.
 #
 # Worth leaving on: with only_when_game_running above, df-hud has no presence on
-# screen at all while you are not playing, and this is then the only way to tell
-# it is running or to stop it.
+# screen at all while you are not playing, and this is the only way to tell it is
+# running or to stop it.
 enabled = true
-
-# Widgets. Each has enabled and order; order is a sort key, not an index, so the
-# gaps are deliberate - reorder by editing one number.
 
 # --- widgets -----------------------------------------------------------------
 #
 # Each group has its own place on screen. x and y are pixels from the top-left,
-# measured the way you would measure them on a screenshot, and the defaults below
-# were set at 2560x1440 against the game's own interface - so on another
-# resolution they are the first thing to change.
+# measured as you would on a screenshot; the defaults were set at 2560x1440
+# against the game's own interface, so on another resolution they are the first
+# thing to change.
 #
-# font_family, font_size and color are optional per group. Zero, absent or empty
-# means "use the [hud] values", so a group only needs the keys it differs on.
+# font_family, font_size and color are optional per group - zero, absent or empty
+# means "use the [hud] values".
 #
-# A group's color is its NORMAL colour. The colours that carry meaning still win
-# over it: the error banner's red, an outpost attack's red, the amber on a block
-# with bandits on it, and the amber or red on an xp rate whose polls have been
-# landing badly. Those say something the words do not, so a colour preference does
-# not switch them off.
+# A group's color is its NORMAL colour. The colours that carry meaning still win:
+# the error banner's red, an outpost attack's red, the amber on a block with
+# bandits, the amber or red on an xp rate whose polls have been landing badly.
 
 [widget.status]
 # df-hud's own error banner: stale credentials, a board it cannot fetch.
 #
-# Two keys it deliberately does not have. No enabled, because this is how df-hud
-# tells you it cannot do its job. And no color: the banner is red when you cannot
-# fix it and amber when you can, which is the whole message.
+# No enabled key, because this is how df-hud tells you it cannot do its job. No
+# color either: red when you cannot fix it, amber when you can, which is the
+# whole message.
 x = 10
 y = 10
 
 [widget.block]
-# Where you are: the region or outpost name, and the block-support countdown. Off
-# to the right, clear of the game's own left-hand panels.
+# Where you are: the region or outpost name, and the block-support countdown.
 enabled = true
 x = 2340
 y = 300
 # font_size = 14
 
-# Cool blue, because the amber below it means "something here can kill you". Where
-# you are standing is not a warning and should not borrow the colour of one.
+# Cool blue, because the amber below it means "something here can kill you".
 color = "#9ecbff"
 
-# Print the raw coordinates: as the head out in the city, and under the name of an
-# outpost.
-#
-# Off, because the game already shows them under its own minimap and two identical
-# readouts an inch apart is not information. With it off the city head becomes the
-# region name, which the game shows nowhere - and the group is one row shorter.
-#
-# Turn it on to check df-hud against the game: the coordinates are the one thing
-# on the overlay you can compare with the game's own readout at a glance.
+# Print the raw coordinates. Off, because the game already shows them under its
+# own minimap; with it off the city head becomes the region name, which the game
+# shows nowhere. Turn it on to check df-hud against the game.
 show_position = false
 
 [widget.bosses]
-# What the city event feed says is on your block - bosses, bandit packs, missions,
-# QRF events - one row per enemy type, plus the map-wide outpost attack.
+# What the city event feed says is on your block, one row per enemy type, plus
+# the map-wide outpost attack.
 #
-# Its own group rather than part of block info, and directly under it by default:
-# this is a list that is empty on most of the map and seven rows long on a boss
-# nest, so anything sharing its group would move up and down as you travelled.
+# Its own group rather than part of block info: this list is empty on most of the
+# map and seven rows long on a boss nest, so anything sharing its group would
+# move up and down as you travelled.
 #
-# The amber that says "something is standing here" and the red of an outpost attack
-# win over color, since those say what the words do not.
-# Left of block info, and close under it. These rows are the longest thing the HUD
-# draws: "1 x Irradiated Giant Spider" at x = 2340 finished thirteen pixels from the
-# edge of a 2560-wide screen, and a group is clipped rather than wrapped.
+# Left of block info and close under it. These rows are the longest thing the HUD
+# draws - "1 x Irradiated Giant Spider" at x = 2340 finished thirteen pixels from
+# the edge of a 2560-wide screen, and a group is clipped rather than wrapped.
 enabled = true
 x = 2240
 y = 344
 # font_size = 14
 # color = "#ffd166"
 
-# When your own block is empty - which is most blocks - say which way the nearest
-# event is, in block moves and then as the block's own coordinates:
+# When your own block is empty, say which way the nearest event is:
 #
 #   nearest 4 up 1 left  1054, 1015
 #
-# Both forms on purpose. The words are what you read at a glance; the coordinates
-# are what the game itself shows you, so they are also how you would catch "up"
-# being the wrong way round. Anything further than a dozen blocks is not reported:
-# it would be furniture rather than information.
+# Both forms on purpose: the words are what you read at a glance, the coordinates
+# are what the game itself shows, so they are how you would catch "up" being the
+# wrong way round. Anything past a dozen blocks is not reported.
 show_nearest = true
 
 [widget.session]
-# Time in the inner city on this run: it starts when you press Start (see
-# [run_start]) or when the server first reports you out of an outpost, and the row
-# disappears when you go back to one.
-#
-# Deliberately NOT the game client's uptime. Launching Dead Frontier means a
-# launcher, then Launch, then a loading screen, then Start - so process uptime can
-# be minutes ahead of any playing, and a clock counting that is timing a loading
-# screen.
-#
-# The run survives a df-hud restart mid-session (it is persisted with the game's
-# process identity), so restarting the HUD does not reset your clock.
-enabled = true
-x = 350
-y = 60
-# font_size = 16
-# White, because the game's own HUD is already yellow and green: a reading that is
-# neither a warning nor a status should read as ours rather than as more of the
-# game's.
-color = "#ffffff"
-# Labels the clock. A bare number on an overlay over a game that has its own
-# clocks says nothing about what it is timing. Set it to "" for just the digits.
-prefix = "IC Time: "
-
 [widget.xp]
 enabled = true
 x = 160
 y = 85
-# White to match the clock, and because this row sits beside the game's own
-# "LV 415: 8,122,281,000" and is meant to read as its continuation.
+# White to match the clock, and because this sits beside the game's own
+# "LV 415: 8,122,281,000" and reads as its continuation.
 color = "#ffffff"
 # font_size = 16
 # The amber and red that say recent polls have been missing still win over this.
 # color = "#9be564"
 prefix = "Xp/Hr: "
-# Averaging window, and the number of usable samples below which the rate is
-# left blank rather than extrapolated from too little data. The window must be
-# long enough to hold min_samples at active_interval; if it is not, it widens
-# rather than being rejected, and the startup log says so.
+# Averaging window, and the sample count below which the rate is left blank
+# rather than extrapolated. The window must be long enough to hold min_samples at
+# active_interval; if it is not it widens rather than being rejected, and the
+# startup log says so.
 #
 # Five minutes, not thirty seconds, because XP arrives in lumps: a window short
-# enough to contain no kill reads as a rate of zero, and a number that flips
-# between 20M/hr and nothing is actively misleading about how the run is going.
-# Shorten it if you want the rate to react faster and can live with it twitching.
+# enough to contain no kill reads as a rate of zero, and a number flipping
+# between 20M/hr and nothing is actively misleading. Shorten it if you want it to
+# react faster and can live with it twitching.
 #
 # The window is reset, not averaged across, whenever the samples either side stop
 # being comparable: a new run, a death, an XP boost starting or ending, a clock
@@ -371,85 +304,64 @@ window = "5m"
 min_samples = 3
 
 [widget.map]
-# The whole city as a grid, shaded the way DFProfiler's own map shades it: one cell
-# per block, the gaps left empty because they are not places, the district lines
-# heavier, an identifier on every active event and a ring on the block you are
-# standing on.
+# The whole city as a grid, shaded the way DFProfiler's own map shades it: one
+# cell per block, gaps left empty, district lines heavier, an identifier on every
+# active event and a ring on the block you are standing on.
 #
-# IT STARTS HIDDEN. SUPER + ALT + M brings it up (POST /api/widget/map/toggle).
-# That is not the same as enabled = false: this is a thing you summon to decide
-# where to walk and dismiss ten seconds later, and a thousand pixels of city permanently
-# over the game would not be a HUD, it would be a wall. Turning enabled off costs
-# you the key as well.
+# IT STARTS HIDDEN. SUPER + ALT + M brings it up
+# (POST /api/widget/map/toggle) - this is something you summon to decide where to
+# walk and dismiss ten seconds later. Turning enabled off costs you the key too.
 #
-# It is a widget group like any other, so the mouse still passes through it to the
-# game - which is why it has no hover: a map you can point at would be a map that
-# eats the clicks you shoot with.
+# The mouse passes through it to the game like any other group, which is why it
+# has no hover: a map you can point at would eat the clicks you shoot with.
 enabled = true
 
 # Centre the grid on the monitor, ignoring x/y below. On by default: the right
-# coordinate depends on both the monitor and the scale - the grid is 1180 wide at
-# 1.0 and 1475 at 1.25 - so a number here would have to be recomputed by hand every
-# time either changed. Editing the scale re-centres it on the spot.
+# coordinate depends on both monitor and scale - 1180 wide at 1.0, 1475 at 1.25 -
+# so a number here would need recomputing by hand every time either changed.
 center = true
 
 # Where the top-left of the grid goes when center = false.
 x = 700
 y = 240
 
-# Nudge the centred map, in pixels: negative is left and up, positive is right and
-# down. Applied on top of the centring rather than instead of it, so "60 up from
-# centre" keeps meaning that when the scale, the radius or the monitor changes -
-# which is the whole reason not to use x/y for this. Ignored when center = false.
+# Nudge the centred map, in pixels: negative is left and up. Applied on top of
+# the centring, so "60 up from centre" keeps meaning that when the scale, radius
+# or monitor changes. Ignored when center = false.
 offset_x = 0
 offset_y = 0
 
-# Crop the map to a square around you, in blocks: 15 draws 31x31, 0 is the whole
-# city. The key beside the grid is cropped to match, since a row about a boss you
-# cannot see on the map is a row about nowhere.
+# Crop to a square around you, in blocks: 15 draws 31x31, 0 is the whole city.
+# The key crops to match, since a row about a boss you cannot see is a row about
+# nowhere. At the full 59x55 most of the picture is somewhere you are not going.
 #
-# Worth having: at the full 59x55 most of the picture is somewhere you are not going,
-# and the part you might actually walk to is a sixth of it.
-#
-# The window is clamped into the city rather than hanging off the edge, so its size
-# never changes and the map does not jump sideways as you approach a boundary - near
-# an edge you are simply off-centre, which is what every map does. With no position
-# yet, or in Onslaught (whose 3000,3000 is not a place on the grid), it falls back to
-# the whole city rather than a window around nowhere.
+# The window is clamped into the city rather than hanging off the edge, so its
+# size never changes and the map does not jump sideways near a boundary. With no
+# position yet, or in Onslaught, it falls back to the whole city.
 radius = 0
 
-# The size of the whole thing, grid AND the key beside it, from one number. 1.0 is
-# the map this shipped as: 1180 pixels across the longest side, 20 per block at the
-# full 59x55, a 13pt key. 1.25 is a quarter bigger, both halves of it.
+# The size of the whole thing, grid AND key, from one number. 1.0 is 1180 pixels
+# across the longest side, 20 per block at the full 59x55, a 13pt key.
 #
-# It is a pixel budget for the longest side rather than a size per block, which is
-# what makes a cropped map BIGGER rather than merely smaller: the same budget over 31
-# blocks gives 38px cells where 59 blocks gives 20, so cutting the radius above zooms
-# in. The key's font comes from the block size that falls out of this, so there is
-# nothing to keep in step by hand.
-#
-# Centring means this is the only number to change to resize the map - the position
-# follows from it. font_size below pins the key's text if you would rather it stayed
-# put while the map moves.
+# A pixel budget for the longest side rather than a size per block, which is what
+# makes a cropped map BIGGER rather than merely smaller: the same budget over 31
+# blocks gives 38px cells where 59 gives 20, so cutting the radius zooms in. The
+# key's font follows the block size, so there is nothing to keep in step by hand.
 scale = 1.0
 
-# Multiplies the map's own alpha, which is already partial (0.7, their value), so
-# the game shows through the city. The markers are NOT faded: the point is to see
-# through the map, not to make the writing on it hard to read.
+# Multiplies the map's own alpha, which is already partial (0.7, their value).
+# The markers are NOT faded: the point is to see through the map, not to make the
+# writing on it hard to read.
 opacity = 1.0
 
-# The key beside the grid - which identifier is what, how far away it is to walk,
-# how long is left. Without it the digits in the cells mean nothing.
-#
-# Sorted nearest first, because the question is not "what is on the map" but "what
-# can I get to". max_listed caps it, 0 for no cap, and what is dropped is counted
-# rather than silently left out.
+# The key beside the grid - which identifier is what, how far to walk, how long
+# is left. Without it the digits in the cells mean nothing. Sorted nearest first,
+# because the question is not "what is on the map" but "what can I get to".
 show_list = true
 
 # Cap on entries, 0 for no cap. 40 never triggers on a real feed - a busy cycle
 # carries about thirty events - and keeps the list from running off the bottom of
-# the screen, so what does not fit is COUNTED ("+3 more") rather than clipped by
-# the screen edge with nothing to say so.
+# the screen, so what does not fit is COUNTED ("+3 more") rather than clipped.
 max_listed = 40
 
 # Font and colour for that list. Empty inherits from [hud].
@@ -463,22 +375,20 @@ enabled = true
 x = 10
 y = 190
 # font_size = 11
-# Off-white rather than white: this is the longest column on screen, and the green
-# and red it marks finished and expiring rows with need somewhere quiet to stand
-# out from.
+# Off-white rather than white: the longest column on screen, and the green and
+# red it marks finished and expiring rows with need somewhere quiet to stand out
+# from.
 color = "#e8e8e8"
 
-# Which parts of the board are worth a row. Each is a category rather than a
-# guess at what matters:
+# Which parts of the board are worth a row:
 #
-#   show_repeatable      limited-time event challenges, currently the Summer ones.
-#                   The wire marks these `repeatable`; they pay event currency
-#                   rather than XP, so turn this off if you are not collecting
-#                   tickets.
-#   show_clan       your clan's challenges. Progress that is not yours.
-#   show_personal   the ordinary dailies and weeklies.
-#   show_completed  cuts across all three: a finished challenge is a row that
-#                   will not change again this cycle.
+#   show_repeatable  limited-time event challenges, currently the Summer ones.
+#                    They pay event currency rather than XP, so turn this off if
+#                    you are not collecting tickets.
+#   show_clan        your clan's challenges. Progress that is not yours.
+#   show_personal    the ordinary dailies and weeklies.
+#   show_completed   cuts across all three: a finished challenge is a row that
+#                    will not change again this cycle.
 show_repeatable = true
 show_clan = true
 show_personal = true
@@ -489,61 +399,46 @@ show_completed = true
 #   ── clan - Weekly Challenge ──────────────────
 #     Kill Infected            162,423/162,401
 #
-# It also earns its row back. A prefix that every challenge in a category shares
-# moves up into the heading, so the five clan entries - all called "Weekly
-# Challenge - something" - say that once between them instead of once each, and
-# stop pushing every figure on the board to the right.
-#
-# Never drawn when only one category is on screen.
+# It earns its row back: a prefix every challenge in a category shares moves up
+# into the heading, so the five clan entries say "Weekly Challenge" once between
+# them instead of once each. Never drawn when only one category is on screen.
 show_sections = true
 
 # Cap on rows, or 0 for no cap. The group has its own place on screen, so the
-# whole board fits and there is nothing to crop around.
+# whole board fits.
 max_shown = 0
 
 # How close a deadline has to be before an UNFINISHED challenge is drawn in the
 # alarm colour, 0 to turn that off. Finished ones are green and struck through
 # whatever this says.
 #
-# A display threshold rather than a request interval, so it has no minimum - but it
-# is a key because "soon" depends on how you play: two hours is plenty for a daily
+# A display threshold rather than a request interval, so it has no minimum - but
+# a key because "soon" depends on how you play: two hours is plenty for a daily
 # kill count and nowhere near enough for a weekly you have not started.
 urgent_within = "2h"
 
-# The listener also exposes the two corrections the tray menu offers, so a key can
-# do them without taking a hand off the mouse:
+# The listener also exposes the two corrections the tray menu offers, so a key
+# can do them without taking a hand off the mouse:
 #
 #   bind = SUPER, F2, exec, curl -fsS -X POST http://127.0.0.1:9275/api/run/start
 #   bind = SUPER, F3, exec, curl -fsS -X POST http://127.0.0.1:9275/api/xp/reset
 #
-# /api/run/start is the answer to "start the clock exactly when I press Start in
-# the game", and it is deliberately a trigger rather than a detector. If you would
-# rather catch the click itself, Hyprland can do it without df-hud watching your
-# input at all - bindn passes the click through to the game as well as firing:
+# /api/run/start is deliberately a trigger rather than a detector. To catch the
+# click itself, Hyprland can do it without df-hud watching your input - bindn
+# passes the click through to the game as well as firing:
 #
 #   bindn = , mouse:272, exec, ~/.config/hypr/df-run-start.sh
 #
-# with a script that checks it was the right window and the right part of the
-# screen before calling the endpoint:
-#
-#   #!/bin/sh
-#   [ "$(hyprctl activewindow -j | jq -r .class)" = "deadfrontier.exe" ] || exit 0
-#   eval "$(hyprctl cursorpos | awk -F", " '"'"'{print "x="$1" y="$2}'"'"')"
-#   # the Start button, measured once at your resolution
-#   [ "$x" -gt 1100 ] && [ "$x" -lt 1460 ] && [ "$y" -gt 800 ] && [ "$y" -lt 880 ] || exit 0
-#   curl -fsS -X POST http://127.0.0.1:9275/api/run/start
-#
-# Worth knowing before you do: that fires on every left click, so it spawns a
-# process per shot fired, and the coordinates move with your resolution and with
-# any UI change the game ships. A key you press as you press Start has neither
-# problem.
+# with a script that checks the window and the screen region first. Worth knowing
+# before you do: that fires on every left click, so it spawns a process per shot
+# fired, and the coordinates move with your resolution and any UI change the game
+# ships. A key you press as you press Start has neither problem.
 
 [console]
-# NOT BUILT YET. /api/console/toggle answers 503; these two settings are read and
-# validated so the size is yours when it lands.
+# NOT BUILT YET. /api/console/toggle answers 503; these are read and validated so
+# the size is yours when it lands.
 #
-# An ordinary window, for what a HUD group cannot be: the full challenge list with
-# every objective, and diagnostics. The city map did not need it - see
-# [widget.map], which is an overlay group like everything else.
+# An ordinary window, for what a HUD group cannot be: the full challenge list
+# with every objective, and diagnostics.
 width = 720
 height = 560

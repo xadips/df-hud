@@ -19,54 +19,40 @@ import (
 
 // What is standing on your block: bosses, bandit packs, missions and QRF events.
 //
-// This is the one feature whose data is not in the game's own API. The public
-// stats feed carries the map's geometry (buildings, street layout) but nothing
-// about what has spawned on it, and the player record only knows where YOU are.
-// DFProfiler publishes the event map, so that is where this comes from.
+// The one feature whose data is not in the game's own API - the stats feed has
+// the map's geometry and the player record knows where YOU are, but neither knows
+// what has spawned. DFProfiler publishes it.
 //
-// ## Being a good citizen with somebody else's site
+// Somebody else's site, run by a person rather than an API vendor, so: their own
+// bossmap page polls this every 30s per open tab (bossmap.js: setTimeout(I, 3e4))
+// and df-hud's defaults stay at or under that; nothing at all while the game is
+// closed; one jittered request per interval with exponential backoff; and a
+// User-Agent naming the tool so the operator can identify and complain about it.
 //
-// DFProfiler is a community site run by a person, not an API vendor, so the
-// budget here is deliberately far below what their own page costs them:
-//
-//   - their own bossmap page polls this endpoint every 30 SECONDS per open tab
-//     (bossmap.js: setTimeout(I, 3e4)). df-hud defaults to one minute and will not
-//     be configured below 30s, so it can never cost more than their own page does.
-//   - nothing is requested at all while the game is not running, same rule as the
-//     game server.
-//   - one request per interval, jittered, with exponential backoff on failure and
-//     no retry storms.
-//   - the User-Agent is df-hud's own, naming the tool and how to contact its
-//     author. If this ever becomes a nuisance, the operator can identify it and
-//     say so.
-//
-// The endpoint returns 404 without an `X-Requested-With: XMLHttpRequest` header,
-// so that is sent. It is worth being precise about what that means: it is the
-// convention their API is written against, not a claim to be something we are
-// not - the User-Agent still says exactly what this is. A forged Referer WOULD be
-// such a claim ("this came from a page on your site"), so none is sent, and it
-// turns out not to be needed. The `_=<millis>` cache-buster their jQuery adds is
-// also left off, so any HTTP cache in between is free to help.
+// The endpoint 404s without `X-Requested-With: XMLHttpRequest`, so that is sent -
+// the convention their API is written against, not a claim to be a browser. A
+// forged Referer WOULD be such a claim, so none is sent, and it turns out not to
+// be needed. Their jQuery's `_=<millis>` cache-buster is left off too, so any
+// cache in between is free to help.
 const defaultBossMapURL = "https://www.dfprofiler.com/bossmap/json/"
 
-// bossMapPastWindow is how long a finished event stays worth mentioning. Sized
-// for Onslaught, whose cycles are five minutes and overlap in practice.
-const bossMapPastWindow = 6 * time.Minute
+// bossMapPastWindow is how long a finished event stays worth mentioning. Wider
+// than one Onslaught cycle because Onslaught skips slots often enough that the
+// last SPAWN can be more than five minutes back - the onslaught_bosses userscript
+// paid for this lesson first, trying 6 minutes and losing "prev" too early.
+const bossMapPastWindow = 12 * time.Minute
 
 // onslaughtCoord is the block Onslaught events sit on.
 //
-// Their own page treats it as "off screen" and labels it "OS", because the city
-// map has no cell there. It is not a null value though: a player IN Onslaught
-// reports df_positionx/y of exactly 3000,3000, so this is a real coordinate in the
-// same space as everything else. Indexing it like any other block is therefore
-// both simpler and more correct than special-casing it - the Onslaught cycles
-// surface exactly when you are in Onslaught, and never otherwise.
+// Their page treats it as "off screen" since the city map has no such cell, but a
+// player IN Onslaught reports df_positionx/y of exactly 3000,3000 - so it is a
+// real coordinate in the same space, and indexing it like any other block makes
+// those cycles surface exactly when you are there and never otherwise.
 const onslaughtCoord = 3000
 
-// CityEventKind is what sort of thing an event is. The classification is a port
-// of the branch order in bossmap.js, which is load-bearing: a mission also
-// carries a special_enemy_type, so testing that first would file every mission as
-// a plain spawn.
+// CityEventKind is what sort of thing an event is. The classification order is a
+// port of bossmap.js and is load-bearing: a mission also carries a
+// special_enemy_type, so testing that first files every mission as a plain spawn.
 type CityEventKind int
 
 const (
@@ -94,25 +80,21 @@ type CityEvent struct {
 	Kind  CityEventKind
 	Title string
 
-	// Enemies is already in "6 x Bandits" form, as the feed states it. Several
-	// entries mean several enemy types on the same block, which the feed joins
-	// with <br /> in one string.
+	// Enemies is already in "6 x Bandits" form. Several entries mean several
+	// types on the same block, which the feed joins with <br /> in one string.
 	Enemies []string
-	// Objectives is the mission's task list, formatted the way their own page
-	// formats it.
+	// Objectives is the mission's task list, formatted as their own page does.
 	Objectives []string
 	RewardExp  int64
 
-	// Slot is the feed's boss_num: the game's own numbering of its event slots,
-	// counted separately per event type. It is what the identifiers on the map are
-	// built from, and it is worth being precise about why.
+	// Slot is the feed's boss_num: the game's own event slots, numbered per
+	// event type, and what the map's identifiers are built from.
 	//
-	// Within a type the slots ascend with difficulty. Measured on a real cycle: the
-	// bandit camps sit at slots 1, 2, 3, 14, 16 carrying 1, 2, 2, 4 and 6 bandits;
-	// the nests run 4 to 11, from a pair of Flaming Zombies up to a bear pit; the
-	// single-type bosses run 17 to 27. So ranking the active events of one category
-	// by slot gives B1..B6 in the order the city gets harder, which is what their
-	// own map means by those numbers - it reads off the same feed.
+	// Within a type the slots ascend with difficulty. Measured on a real cycle:
+	// bandit camps at 1, 2, 3, 14, 16 carrying 1, 2, 2, 4 and 6 bandits; nests at
+	// 4..11, from a pair of Flaming Zombies up to a bear pit; single-type bosses
+	// at 17..27. So ranking the active events of one category by slot gives
+	// B1..B6 in the order the city gets harder, which is what their map means.
 	//
 	// For a mission the slot IS the outpost: 0 Nastya's, 1 Fort Pastor, 2 Dogg's,
 	// 3 Precinct 13, 4 Secronom. Hence M1..M5 with no ranking at all.
@@ -123,29 +105,24 @@ type CityEvent struct {
 	End       time.Time
 
 	// startedFlag and endedFlag are the feed's own booleans, used only when an
-	// event carries no usable timestamps. Everything else derives state from
-	// Start and End against the clock - see ActiveAt.
+	// event carries no usable timestamps. See ActiveAt.
 	startedFlag bool
 	endedFlag   bool
 
-	// Onslaught marks the boss cycles that run in the instanced Onslaught mode
-	// rather than out on the city map. They shift every five minutes, which is the
-	// tightest cycle in the feed and the reason a one-minute poll is worth having.
+	// Onslaught marks the cycles that run in the instanced mode rather than out
+	// on the city map. They shift every five minutes, the tightest cycle here.
 	Onslaught bool
 }
 
 // ActiveAt reports whether this event is happening at a given instant.
 //
-// Derived from the event's own start and end times rather than from the feed's
-// started/ended flags, and this is the whole trick: the feed contains the NEXT
-// cycle before it begins (observed appearing around :59 for a cycle that starts
-// at :00) and keeps the PREVIOUS one for minutes afterwards. Deciding from the
-// clock means one fetch stays correct straight through a changeover, with no
-// request at the moment it matters and no window where the HUD shows a boss that
-// has gone or hides one that has arrived.
+// From the event's own timestamps rather than the started/ended flags, which is
+// the whole trick: the feed carries the NEXT cycle before it begins (seen around
+// :59 for a cycle starting at :00) and keeps the PREVIOUS one for minutes after.
+// Deciding from the clock means one fetch stays correct straight through a
+// changeover, with no request at the moment it matters.
 //
-// The flags are the fallback for an event with no usable timestamps, so a feed
-// that stops sending them degrades to what it used to do rather than to nothing.
+// The flags are the fallback for an event with no usable timestamps.
 func (e CityEvent) ActiveAt(now time.Time) bool {
 	if e.Start.IsZero() || e.End.IsZero() {
 		return e.startedFlag && !e.endedFlag
@@ -161,9 +138,7 @@ func (e CityEvent) UpcomingAt(now time.Time) bool {
 	return now.Before(e.Start)
 }
 
-// EndedRecentlyAt is last cycle's, and only while "last cycle" still means
-// something. The window exists because an event that finished an hour ago is not
-// news, and the feed can carry one for a while.
+// EndedRecentlyAt is last cycle's, while "last cycle" still means something.
 func (e CityEvent) EndedRecentlyAt(now time.Time) bool {
 	if e.End.IsZero() {
 		return e.endedFlag
@@ -206,7 +181,7 @@ type BossMap struct {
 	// Every timestamp in the feed is an absolute unix second landing on the
 	// game's own schedule (Onslaught's are all `unix % 300 == 2`), so the local
 	// clock is what they are compared against. Treating this field as a clock
-	// offset delayed every changeover by however stale the data was.
+	// offset used to delay every changeover by however stale the data was.
 	ServerTime time.Time
 
 	// Hash is the feed's own change marker (bosshash). Their page uses it to
@@ -214,9 +189,8 @@ type BossMap struct {
 	Hash   string
 	Events []CityEvent
 
-	// OutpostAttack is the feed's isoa flag: every outpost is under attack. It is
-	// map-wide rather than per-block, and it is the sort of thing worth knowing
-	// wherever you happen to be standing.
+	// OutpostAttack is the feed's isoa flag: every outpost under attack, map-wide
+	// rather than per-block.
 	OutpostAttack bool
 
 	byBlock map[[2]int][]int
@@ -224,58 +198,93 @@ type BossMap struct {
 
 // At returns the events happening on one block at a given instant.
 //
-// Upcoming ones are deliberately excluded: "a titan will be here in forty
-// minutes" is planning information, not something to put in front of someone who
-// is being chased. They are still in the map, which is what lets a cached fetch
-// become correct on its own when their start time arrives.
+// Upcoming ones are excluded: "a titan will be here in forty minutes" is planning
+// information, not something to put in front of someone being chased. They stay
+// in the map, which is what lets a cached fetch become correct on its own.
 func (b *BossMap) At(x, y int, now time.Time) []CityEvent {
 	return b.eventsAt(x, y, func(e CityEvent) bool { return e.ActiveAt(now) })
 }
 
-// AtEnded returns the previous cycle's events on one block.
+// AtEnded returns the previous cycle's events on one block, narrowed to whichever
+// ended most recently.
 //
-// Only useful where the cycle is short enough that they overlap, which in practice
-// means Onslaught: it shifts every five minutes, and the boss from the last cycle
-// is routinely still standing there when the next one appears. The caller decides
-// whether to ask - out in the city, where cycles are hourly, the previous cycle is
-// a boss that has gone, and reporting it would send you somewhere for nothing.
+// Only useful where cycles are short enough to overlap, which means Onslaught.
+// The caller decides whether to ask: out in the city the previous cycle is a boss
+// that has gone, and reporting it would send you somewhere for nothing.
+//
+// Narrowed rather than returning everything inside bossMapPastWindow, which is
+// wide enough to span more than one past cycle when Onslaught skips slots.
 func (b *BossMap) AtEnded(x, y int, now time.Time) []CityEvent {
-	return b.eventsAt(x, y, func(e CityEvent) bool { return e.EndedRecentlyAt(now) })
+	events := b.eventsAt(x, y, func(e CityEvent) bool { return e.EndedRecentlyAt(now) })
+	return edgeGroup(events, func(e CityEvent) time.Time { return e.End }, afterEdge)
 }
 
-// CityMark is one active event at one place, ready to draw. Both the map group and
-// the HUD's one-line "which way to walk" are built from these, so the two can never
+// AtUpcoming returns the next cycle's events on one block, narrowed to whichever
+// starts soonest. Onslaught only in practice, same as AtEnded.
+func (b *BossMap) AtUpcoming(x, y int, now time.Time) []CityEvent {
+	events := b.eventsAt(x, y, func(e CityEvent) bool { return e.UpcomingAt(now) })
+	return edgeGroup(events, func(e CityEvent) time.Time { return e.Start }, beforeEdge)
+}
+
+// edgeGroup narrows events to whichever share the most extreme value of field. A
+// group rather than one event, because a slot can carry several enemy types.
+//
+// Ported from the onslaught_bosses userscript, for the reason it exists there:
+// the window a "previous" or "upcoming" set is drawn from can span more than one
+// cycle, and blending two of them into one unlabelled group is worse than only
+// ever showing the nearest.
+func edgeGroup(events []CityEvent, field func(CityEvent) time.Time, moreExtreme func(candidate, currentEdge time.Time) bool) []CityEvent {
+	if len(events) == 0 {
+		return nil
+	}
+	edge := field(events[0])
+	for _, e := range events {
+		if t := field(e); moreExtreme(t, edge) {
+			edge = t
+		}
+	}
+	var out []CityEvent
+	for _, e := range events {
+		if field(e).Equal(edge) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func afterEdge(candidate, currentEdge time.Time) bool  { return candidate.After(currentEdge) }
+func beforeEdge(candidate, currentEdge time.Time) bool { return candidate.Before(currentEdge) }
+
+// CityMark is one active event at one place, ready to draw. Both the map group
+// and the "which way to walk" row are built from these, so the two cannot
 // disagree about what is on the map or how far away it is.
 type CityMark struct {
-	// Marker is the character the map draws in the cell, and the list repeats
-	// beside the name. Assigned in the feed's order.
+	// Marker is the character drawn in the cell and repeated in the key.
 	Marker string
 	Label  string
-	// Enemies is the types standing there, separately, because a boss nest can
-	// carry seven at once and Label joins them into a 140-character line. The list
-	// beside the map gives them a row each.
+	// Enemies is the types standing there, separately, because a nest can carry
+	// seven at once and Label joins them into a 140-character line.
 	Enemies []string
 	Kind    CityEventKind
 	X, Y    int
 	// EndsIn is how long is left, zero when the feed gave no usable end time.
 	EndsIn time.Duration
 
-	// OffMap is Onslaught, whose cycles sit on 3000,3000: a real coordinate in the
-	// same space, but not a place on the city grid and not somewhere you can walk.
+	// OffMap is Onslaught: a real coordinate, but not a place on the city grid
+	// and not somewhere you can walk.
 	OffMap bool
 	// Walk is the route from where the player is standing, valid only when
-	// Reachable. Unreachable covers standing in Onslaught, standing nowhere known,
+	// Reachable - which excludes standing in Onslaught, standing nowhere known,
 	// and the mark being off the map.
 	Walk      cityWalk
 	Reachable bool
 }
 
-// eventMarkers is the identifier each active event is drawn with, one per event in
-// the order given.
+// eventMarkers is the identifier each active event is drawn with.
 //
-// The scheme is DFProfiler's, because their map is the one everybody already reads:
-// a letter for what sort of place it is and a number for which one, so B4 means the
-// fourth bandit camp out and everyone means the same camp by it.
+// The scheme is DFProfiler's, because their map is the one everybody reads: a
+// letter for what sort of place it is and a number for which one, so B4 means the
+// same camp to everyone.
 //
 //	B1..B6   bandit camps, ascending with the endgame
 //	I1..In   inner city bosses, one enemy type
@@ -284,17 +293,17 @@ type CityMark struct {
 //	Δ        a QRF, numbered only when there is more than one
 //	DH VL BH LB   today's daily, whichever it is
 //
-// The numbers come from the game's own slots rather than from anything about the
-// player - see CityEvent.Slot - so an identifier means the same place all cycle, and
-// the same place it means on their map. It deliberately does NOT renumber by
-// distance: a marker that changed as you walked could not be said out loud to anyone.
+// The numbers come from the game's own slots (see CityEvent.Slot), so an
+// identifier means the same place all cycle and the same place it means on their
+// map. It deliberately does NOT renumber by distance: a marker that changed as
+// you walked could not be said out loud to anyone.
 //
-// The daily takes its own initials instead of a number, but only when it stands
-// alone. A nest that happens to contain today's boss keeps its N number, because a
-// nest of six things is not "the Devil Hound" - the ring around it carries that.
+// The daily takes initials instead of a number, but only standing alone - a nest
+// containing today's boss keeps its N number, because a nest of six things is not
+// "the Devil Hound". The ring around it carries that.
 func eventMarkers(events []CityEvent) []string {
-	// Rank the slots per category first, so that a category present as slots 1, 2, 3,
-	// 14, 16 draws as 1, 2, 3, 4, 5.
+	// Rank slots per category first, so a category present as 1, 2, 3, 14, 16
+	// draws as 1, 2, 3, 4, 5.
 	ranks := make(map[markCategory]map[int]int)
 	for _, e := range events {
 		cat := markCategoryOf(e.Kind, e.Enemies)
@@ -304,8 +313,7 @@ func eventMarkers(events []CityEvent) []string {
 				continue // takes its initials, so it is not in the numbering
 			}
 		default:
-			// Missions are numbered by their own slot and QRFs are not numbered by
-			// slot at all - see below, they all carry slot 0.
+			// Missions are numbered by their own slot; QRFs all carry slot 0.
 			continue
 		}
 		if ranks[cat] == nil {
@@ -324,9 +332,8 @@ func eventMarkers(events []CityEvent) []string {
 		}
 	}
 
-	// QRFs are counted rather than ranked, because every one of them arrives on slot 0
-	// - measured, two at once in the capture - so a slot ranking would give them both
-	// the same number. Their order is the feed's.
+	// QRFs are counted rather than ranked: every one arrives on slot 0 - measured,
+	// two at once in the capture - so ranking would give them the same number.
 	qrfTotal, qrfSeen := 0, 0
 	for _, e := range events {
 		if markCategoryOf(e.Kind, e.Enemies) == markQRF {
@@ -342,11 +349,10 @@ func eventMarkers(events []CityEvent) []string {
 		case daily != "" && cat != markNest:
 			out[i] = daily
 		case cat == markMission:
-			// The slot is the outpost, and it is zero-based on the wire.
+			// The slot is the outpost, zero-based on the wire.
 			out[i] = "M" + strconv.Itoa(e.Slot+1)
 		case cat == markQRF:
-			// One QRF is just Δ. A number on the only one of something says there
-			// are others to tell it from.
+			// A number on the only one of something says there are others.
 			qrfSeen++
 			out[i] = qrfMarker
 			if qrfTotal > 1 {
@@ -365,34 +371,30 @@ func eventMarkers(events []CityEvent) []string {
 	return out
 }
 
-// qrfMarker is the triangle their map uses for a quick reaction force. Kept as their
-// glyph rather than a letter of our own so that a screenshot of this map and a
-// screenshot of theirs say the same thing.
+// qrfMarker is the triangle their map uses, kept as their glyph so a screenshot
+// of this map and one of theirs say the same thing.
 const qrfMarker = "Δ"
 
 // dailyBosses are the rotating daily events, each with initials of its own.
 //
-// Initials rather than a number because the whole question about a daily is WHICH one
-// it is - it is the thing you log in for - and "I3" answers it only via the key. They
-// share one ring colour, so the map says "today's boss is here" before you read
-// anything.
+// Initials rather than a number because the question about a daily is WHICH one
+// it is - it is what you logged in for - and "I3" answers that only via the key.
 //
 // Matched on the full name as a substring, which is not fussiness: "hound" alone
-// would file every Flaming Flesh Hound as a Devil Hound, and those are seven blocks
-// of walking apart in difficulty. A prefixed variant (a Charred Devil Hound) still
-// matches, which is right.
+// would file every Flaming Flesh Hound as a Devil Hound, and those are seven
+// blocks of walking apart in difficulty. A Charred Devil Hound still matches.
 var dailyBosses = []struct{ Name, Marker string }{
 	{"devil hound", "DH"},
 	{"volatile leaper", "VL"},
 	{"behemoth", "BH"},
 }
 
-// legendaryBanditPack is the size at which a bandit camp is the daily rather than one
-// of the six standing camps. The daily pack is eight; the largest ordinary camp
-// observed is six.
+// legendaryBanditPack is the size at which a bandit camp is the daily rather than
+// one of the six standing camps: the daily pack is eight, the largest ordinary
+// camp observed is six.
 const legendaryBanditPack = 8
 
-// dailyMarker returns the initials for today's daily if these enemies are it, or "".
+// dailyMarker returns the initials for today's daily if these enemies are it.
 func dailyMarker(enemies []string) string {
 	for _, e := range enemies {
 		low := strings.ToLower(e)
@@ -408,7 +410,7 @@ func dailyMarker(enemies []string) string {
 	return ""
 }
 
-// enemyCount is the number at the front of "6 x Bandits", or 0 if there is none.
+// enemyCount is the number at the front of "6 x Bandits", or 0.
 func enemyCount(enemy string) int {
 	n, _, ok := strings.Cut(enemy, " x ")
 	if !ok {
@@ -423,25 +425,20 @@ func enemyCount(enemy string) int {
 
 // ActiveMarks is everything happening on the map right now.
 //
-// dist is a walk-distance table from where the player is standing, or nil when that
-// is unknown - one breadth-first search shared by every mark, so the cost does not
-// grow with the number of bosses.
+// dist is a walk-distance table from where the player is standing, or nil when
+// that is unknown - one breadth-first search shared by every mark.
 func (b *BossMap) ActiveMarks(now time.Time, from [2]int, dist []int32) []CityMark {
 	if b == nil {
 		return nil
 	}
-	// Onslaught is left out unless you are in it. Its cycles sit on 3000,3000 - a
-	// real coordinate in the same space, but not a place on the city grid and not
-	// somewhere you can walk to - so out in the city they are events you can do
-	// nothing about, several every cycle. Filtered HERE rather than where the list is
-	// built, so their identifiers are never assigned: otherwise the letters on the
-	// map would have gaps in them, which looks like something failed to draw.
+	// Onslaught is left out unless you are in it: out in the city those are events
+	// you can do nothing about, several every cycle. Filtered HERE rather than
+	// where the list is built, so their identifiers are never assigned - otherwise
+	// the letters on the map would have gaps, which looks like a drawing failure.
 	inOnslaught := from[0] == onslaughtCoord && from[1] == onslaughtCoord
 
-	// Which events count comes first, then their identifiers, then the marks. Two
-	// passes because the identifiers are ranked WITHIN the active set: B1 is the
-	// first bandit camp that is actually up, and that cannot be known while still
-	// walking the list.
+	// Two passes, because identifiers are ranked WITHIN the active set: B1 is the
+	// first bandit camp actually up, which cannot be known while still walking.
 	active := make([]CityEvent, 0, len(b.Events))
 	for _, e := range b.Events {
 		if !e.ActiveAt(now) {
@@ -478,15 +475,14 @@ func (b *BossMap) ActiveMarks(now time.Time, from [2]int, dist []int32) []CityMa
 	return out
 }
 
-// nearestMark is the closest active event to walk to, for when the block you are
-// standing on has nothing on it.
+// nearestMark is the closest active event to walk to, for when your own block has
+// nothing on it.
 //
-// Closest is measured by WALKING, not by subtracting coordinates. The city is not a
-// full rectangle - see citymap.go - so a boss five blocks up can be nine blocks away
-// around a gap while one seven blocks east is seven, and the nearer-looking one is
-// the wrong answer.
+// Closest is by WALKING, not by subtracting coordinates: the city is not a full
+// rectangle (see citymap.go), so a boss five blocks up can be nine blocks away
+// around a gap while one seven blocks east is seven.
 //
-// Ties go to the first one seen, which is the feed's own order, so the row does not
+// Ties go to the first seen, which is the feed's order, so the row does not
 // flicker between two equidistant bosses every poll.
 func nearestMark(marks []CityMark) (CityMark, bool) {
 	var best CityMark
@@ -527,15 +523,12 @@ func (b *BossMap) eventsAt(x, y int, keep func(CityEvent) bool) []CityEvent {
 // earliest start or end still ahead of now, in local time. Zero when there is
 // none.
 //
-// This is what replaces polling on a fixed timer. The feed tells us exactly when
-// it will next be wrong, so the schedule can be derived from the data instead of
-// guessed at, which is both fresher at the moments that matter and quieter at the
-// ones that do not.
+// This is what replaces polling on a fixed timer - the feed states exactly when
+// it will next be wrong, so the schedule comes from the data.
 //
-// withOnslaught decides whether the five-minute Onslaught cycles count. They are
-// always in the feed, so including them unconditionally would pull the whole
-// schedule down to five minutes for someone who is out in the city and cannot see
-// them.
+// withOnslaught decides whether the five-minute cycles count. They are always in
+// the feed, so including them unconditionally would pull the whole schedule down
+// to five minutes for someone who cannot see them.
 func (b *BossMap) NextBoundary(now time.Time, withOnslaught bool) time.Time {
 	if b == nil {
 		return time.Time{}
@@ -556,8 +549,56 @@ func (b *BossMap) NextBoundary(now time.Time, withOnslaught bool) time.Time {
 		consider(e.Start)
 		consider(e.End)
 	}
-	if best.IsZero() {
+	return best
+}
+
+// Horizon is how far into the future this map's data already reaches: the latest
+// end time among its events. What bossMapPublishWindow is measured back from.
+func (b *BossMap) Horizon(onslaughtOnly bool) time.Time {
+	if b == nil {
 		return time.Time{}
+	}
+	var edge time.Time
+	for _, e := range b.Events {
+		if onslaughtOnly && !e.Onslaught {
+			continue
+		}
+		if e.End.After(edge) {
+			edge = e.End
+		}
+	}
+	return edge
+}
+
+// BlockBoundary is the next instant at which what shows on ONE block changes.
+// Zero when there is none.
+//
+// Where NextBoundary schedules polling across the whole map, this drives a
+// countdown the player is watching. Onslaught is the only real user: its cycle is
+// short enough to be worth a ticking clock, and every Onslaught event sits on the
+// same block.
+//
+// Reaching zero and the panel's rows shifting are the same instant by
+// construction, because both read the same clock: at the boundary the ended
+// cycle fails ActiveAt and becomes prev, the one starting there becomes now, and
+// this returns the next boundary after it. Nothing shifts the rows on a timer.
+func (b *BossMap) BlockBoundary(x, y int, now time.Time) time.Time {
+	if b == nil {
+		return time.Time{}
+	}
+	var best time.Time
+	consider := func(t time.Time) {
+		if t.IsZero() || !t.After(now) {
+			return
+		}
+		if best.IsZero() || t.Before(best) {
+			best = t
+		}
+	}
+	for _, i := range b.byBlock[[2]int{x, y}] {
+		e := b.Events[i]
+		consider(e.Start)
+		consider(e.End)
 	}
 	return best
 }
@@ -571,7 +612,7 @@ func (b *BossMap) Age(now time.Time) time.Duration {
 }
 
 // rawBossEvent mirrors the feed. Every value is a JSON string, including the
-// numbers and the booleans, which is why nothing here is a Go int or bool.
+// numbers and the booleans.
 type rawBossEvent struct {
 	EventID          string     `json:"event_id"`
 	ISOA             string     `json:"isoa"`
@@ -595,9 +636,9 @@ type rawBossEvent struct {
 // parseBossMap decodes the feed.
 //
 // The shape is a JSON object whose keys are event indices as strings, with three
-// scalars mixed in at the same level (bosshash, servertime, version). So it is
-// decoded loosely and each value is examined, rather than into a struct that
-// would break the first time they add a field at the top level.
+// scalars mixed in at the same level (bosshash, servertime, version) - so it is
+// decoded loosely rather than into a struct that would break the first time they
+// add a top-level field.
 func parseBossMap(data []byte, fetchedAt time.Time) (*BossMap, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil {
@@ -680,9 +721,9 @@ func parseBossMap(data []byte, fetchedAt time.Time) (*BossMap, error) {
 	}
 
 	if len(out.Events) == 0 && !out.OutpostAttack {
-		// An empty map is possible in principle but has never been observed, and
-		// silently showing "nothing here" for a feed that changed shape would be
-		// the worst outcome: no error, no data, no clue.
+		// Possible in principle but never observed. Silently showing "nothing
+		// here" for a feed that changed shape would be the worst outcome: no
+		// error, no data, no clue.
 		return nil, errors.New("bossmap: no events in the response (has the feed changed shape?)")
 	}
 	return out, nil
@@ -751,8 +792,7 @@ func fetchBossMap(ctx context.Context, client *http.Client, url, userAgent strin
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "application/json")
-	// Required: the endpoint answers 404 without it. See the note at the top of
-	// this file for why sending it is not the same as pretending to be a browser.
+	// Required: the endpoint answers 404 without it. See the note at the top.
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 
 	resp, err := client.Do(req)
@@ -760,8 +800,8 @@ func fetchBossMap(ctx context.Context, client *http.Client, url, userAgent strin
 		return nil, err
 	}
 	defer resp.Body.Close()
-	// Bounded read: this is a third-party response, and an unbounded ReadAll on
-	// somebody else's endpoint is a memory bug waiting for a bad day.
+	// Bounded read: an unbounded ReadAll on somebody else's endpoint is a memory
+	// bug waiting for a bad day.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
@@ -774,28 +814,22 @@ func fetchBossMap(ctx context.Context, client *http.Client, url, userAgent strin
 
 // BossPoller keeps the event map current while the game is running.
 //
-// The schedule is derived from three things rather than from a fixed timer, which
-// is both fresher where it matters and quieter where it does not:
+// The schedule comes from three things rather than a fixed timer:
 //
-//  1. The next boundary in the data. Every event states when it starts and ends,
-//     so the feed says exactly when it will next be wrong. Most cycles turn over
-//     on the hour, and a poll a few seconds later picks the new one up.
-//  2. Arriving on a new block. What is on the block you just walked onto is the
-//     one question this feed answers, so that is the moment to be current.
-//  3. A heartbeat, for the events that follow no cycle at all: Devil Hound,
-//     Behemoth, Volatile Leaper and the 8x bandit packs spawn once a day at a
-//     random time and last two or three hours, so nothing in the data predicts
-//     them appearing.
+//  1. The next boundary in the data - every event states when it starts and ends,
+//     so the feed says exactly when it will next be wrong.
+//  2. Arriving on a new block, which is the one question this feed answers.
+//  3. A heartbeat, for what follows no cycle: Devil Hound, Behemoth, Volatile
+//     Leaper and the 8x bandit packs spawn once a day at a random time, so
+//     nothing in the data predicts them.
 //
 // Underneath all three is the minimum interval, which nothing can breach.
 type BossPoller struct {
 	client *http.Client
 	game   *GameWatcher
 	cfg    func() *Config
-	// inOnslaught decides whether the five-minute Onslaught cycles are worth
-	// scheduling around. They are always in the feed, so counting them for a
-	// player out in the city would drag the whole schedule down to five minutes
-	// for events they cannot see.
+	// inOnslaught decides whether the five-minute cycles are worth scheduling
+	// around, and which interval pair applies.
 	inOnslaught func() bool
 
 	onMap func(*BossMap)
@@ -857,6 +891,16 @@ func (p *BossPoller) jittered(d time.Duration) time.Duration {
 	return out
 }
 
+// jitteredLate is jittered for a wake that must not arrive early: the spread is
+// one-sided, so it can only ever delay. See nextDelay.
+func (p *BossPoller) jitteredLate(d time.Duration) time.Duration {
+	j := p.cfg().Poll.Jitter
+	if j <= 0 {
+		return d
+	}
+	return time.Duration(float64(d) * (1 + rand.Float64()*j))
+}
+
 func (p *BossPoller) Run(ctx context.Context) {
 	next := time.Now()
 	loggedPause := ""
@@ -867,10 +911,9 @@ func (p *BossPoller) Run(ctx context.Context) {
 				log.Printf("bossmap: paused - %s", reason)
 				loggedPause = reason
 			}
-			// Re-checked on a timer as well as on a poke, for the same reason the
-			// challenge board is: a pause that can only be lifted by someone
-			// remembering to send a wake-up is a pause that will one day be
-			// permanent.
+			// Re-checked on a timer as well as on a poke: a pause that can only be
+			// lifted by someone remembering to send a wake-up is a pause that will
+			// one day be permanent.
 			timer := time.NewTimer(pauseRecheck)
 			select {
 			case <-ctx.Done():
@@ -897,6 +940,15 @@ func (p *BossPoller) Run(ctx context.Context) {
 				return
 			case <-p.wake:
 				timer.Stop()
+				// Bring the next fetch forward to the earliest polite moment, and
+				// no earlier - the same shape as the other two pollers.
+				//
+				// This used to be a bare `continue`, which left `next` untouched
+				// and re-armed the timer for the same deadline: every Wake while
+				// running was silently swallowed. So "arriving on a new block
+				// refetches the map", which main.go does on every block change,
+				// had never once happened.
+				next = p.earliestFetch(time.Now())
 				continue
 			case <-timer.C:
 			}
@@ -914,35 +966,91 @@ func (p *BossPoller) Run(ctx context.Context) {
 }
 
 // bossMapBoundarySlack is how long after a changeover to poll. A few seconds,
-// because the event's own end time is when it stops being true and their server
-// needs a moment to have published the replacement.
+// because their server needs a moment to have published the replacement.
 const bossMapBoundarySlack = 5 * time.Second
+
+// bossMapPublishWindow is how far before an Onslaught cycle starts to go looking
+// for it - a little INSIDE the window where the feed already carries it.
+//
+// This is the fix for "next never shows up": reacting to NextBoundary alone means
+// waking when the CURRENT cycle ends, which on a back-to-back schedule is also
+// when the next one starts, so it has already become "now".
+//
+// 100s, measured. Sampling the feed every 20s on 2026-08-16, the 00:45:01 cycle
+// first appeared at 00:43:18 - a lead of 103s, at most 123s allowing for the
+// sample gap, and the player watching their page beside df-hud reported the same
+// independently. The 150s this used to be, inherited from the userscript's
+// PUBLISH_WINDOW_MS ("~2 minutes" as an impression, not a measurement), therefore
+// woke BEFORE publication every cycle and left discovery to the floor's retry.
+//
+// Erring late by design: early looks for something that does not exist yet, while
+// late merely finds it a few seconds on, bounded by onslaught_max_interval.
+const bossMapPublishWindow = 100 * time.Second
+
+// earliestFetch is the soonest a wake may bring the next fetch, which is one
+// minimum interval after the last one landed. The floor protects somebody else's
+// server, so a poke cannot breach it however often it arrives - walking across
+// ten blocks is ten wakes and still at most one fetch per interval.
+func (p *BossPoller) earliestFetch(now time.Time) time.Time {
+	onslaught := p.inOnslaught != nil && p.inOnslaught()
+	min, _ := p.cfg().BossMap.Intervals(onslaught)
+
+	p.mu.RLock()
+	current := p.current
+	p.mu.RUnlock()
+	if current == nil || current.FetchedAt.IsZero() {
+		return now
+	}
+	if earliest := current.FetchedAt.Add(min); earliest.After(now) {
+		return earliest
+	}
+	return now
+}
 
 // nextDelay is how long to wait before the next fetch.
 func (p *BossPoller) nextDelay(now time.Time) time.Duration {
 	cfg := p.cfg()
-	min := cfg.BossMap.Interval.Duration
-	max := cfg.BossMap.MaxInterval.Duration
-	if max < min {
-		max = min
-	}
 
 	p.mu.RLock()
 	current := p.current
 	p.mu.RUnlock()
 
 	onslaught := p.inOnslaught != nil && p.inOnslaught()
+	// Onslaught gets its own floor and heartbeat: a five-minute cycle cannot be
+	// watched by numbers sized for an hourly one. See BossMapConfig.
+	min, max := cfg.BossMap.Intervals(onslaught)
+	if max < min {
+		max = min
+	}
 	delay := max
 	if boundary := current.NextBoundary(now, onslaught); !boundary.IsZero() {
 		if until := boundary.Add(bossMapBoundarySlack).Sub(now); until < delay {
 			delay = until
 		}
 	}
-	// Jittered BEFORE the floor is applied, not after. Jitter is allowed to spread
-	// requests out; it is not allowed to breach a minimum that exists to protect
-	// somebody else's server. Clamping last is what makes the floor absolute - a
-	// test caught 60s of minimum becoming 54s of actual.
-	delay = p.jittered(delay)
+	// aimed marks a wake that has to land inside a window rather than merely
+	// happen eventually, which changes what jitter may do to it.
+	aimed := false
+	if onslaught {
+		if horizon := current.Horizon(true); !horizon.IsZero() {
+			if until := horizon.Add(-bossMapPublishWindow).Sub(now); until < delay {
+				delay = until
+				aimed = true
+			}
+		}
+	}
+	// Jittered BEFORE the floor, not after: jitter may spread requests out, but
+	// not breach a minimum protecting somebody else's server. A test caught 60s of
+	// minimum becoming 54s of actual.
+	//
+	// On an aimed wake it may only push LATER - ten percent of a ~200s delay is
+	// 20s, which is most of the margin between aiming at 100s and the 123s upper
+	// bound on the publish lead.
+	if aimed {
+		delay = p.jitteredLate(delay)
+	} else {
+		delay = p.jittered(delay)
+	}
 	if delay < min {
 		delay = min
 	}

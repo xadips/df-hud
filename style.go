@@ -84,6 +84,49 @@ window label.threat {
 window label.threat.urgent {
   color: #ff6b6b;
 }
+/* Onslaught's own prev/now/next panel, coloured to match the onslaught_bosses
+   userscript this mirrors: grey for what just left (may or may not still be
+   standing there), red for what is definitely up, blue for what the feed has
+   already announced but has not started, and a dimmer grey for a section with
+   nothing in it ("cleared" / "not announced") or the "ended Nm ago" line.
+
+   The base sheet's 4px glow is wrong here for the same reason it is wrong on
+   the map key: a dozen close-set rows means every letter's halo lands on its
+   neighbours and the panel turns into a smear. But dropping the shadow
+   outright left the text with nothing to sit on. So this is the middle
+   answer - four 1px offsets and no blur at all, which is a black BORDER
+   around each glyph rather than a glow around the block, and it holds each
+   colour apart from whatever the game is drawing underneath. Four corners
+   rather than the map's three, because these rows are thinner and a missing
+   corner shows. */
+window label.onslaught-prev,
+window label.onslaught-now,
+window label.onslaught-next,
+window label.onslaught-empty,
+window label.onslaught-label,
+window label.onslaught-timer {
+  text-shadow: 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000;
+}
+window label.onslaught-prev {
+  color: #b5b5b5;
+}
+window label.onslaught-now {
+  color: #ff4d4d;
+}
+window label.onslaught-next {
+  color: #4fc3ff;
+}
+window label.onslaught-empty {
+  color: #6f6f6f;
+}
+/* The "prev"/"now"/"next" word itself, always this one grey regardless of
+   which section it introduces - a caption, not another coloured claim. */
+window label.onslaught-label {
+  color: #8a8a8a;
+}
+window label.onslaught-timer {
+  color: #ffffff;
+}
 `
 
 // groupClass is the CSS class carrying one group's font and colour overrides. Prefixed so a
