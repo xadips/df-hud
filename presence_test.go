@@ -307,6 +307,81 @@ func TestPresenceRefusesMalformedCoordinates(t *testing.T) {
 	}
 }
 
+// The run clock, started from the client rather than inferred from the poll.
+//
+// The polled version needs two snapshots ten seconds apart and a CHANGE in a
+// position that lags 15-25s, so walking into the city and standing still often
+// started no clock at all. The client states it outright.
+func TestPresenceStartsTheRunClock(t *testing.T) {
+	now := time.Unix(10000, 0)
+	s := newStore(nil)
+	s.SetGame(GameState{Running: true, PID: 1, StartedAt: now.Add(-time.Minute)})
+
+	if start, _ := s.Run(); !start.IsZero() {
+		t.Fatal("a run was running before anything happened")
+	}
+	s.SetPresence(PresenceState{At: now, HasPosition: true, X: 1054, Y: 986, Place: "Inner City"})
+	start, _ := s.Run()
+	if !start.Equal(now) {
+		t.Fatalf("run started at %v, want the moment the client reported a position (%v)", start, now)
+	}
+
+	// Standing still: the client republishes nothing, and a later frame on the
+	// same block must not restart the clock.
+	s.SetPresence(PresenceState{At: now.Add(time.Minute), HasPosition: true, X: 1054, Y: 986})
+	if again, _ := s.Run(); !again.Equal(now) {
+		t.Fatalf("the clock restarted mid-run: %v", again)
+	}
+}
+
+// Inside a building is still in the city, so it starts the clock like any other
+// position.
+func TestPresenceStartsTheRunClockFromInsideABuilding(t *testing.T) {
+	now := time.Unix(10000, 0)
+	s := newStore(nil)
+	s.SetGame(GameState{Running: true, PID: 1})
+	s.SetPresence(parsePresenceDetails("Supermarket 1058 x 1016", now))
+	if start, _ := s.Run(); !start.Equal(now) {
+		t.Fatalf("a building did not start the run: %v", start)
+	}
+}
+
+func TestPresenceEndsTheRunAtAnOutpost(t *testing.T) {
+	now := time.Unix(10000, 0)
+	s := newStore(nil)
+	s.SetGame(GameState{Running: true, PID: 1})
+	s.SetPresence(PresenceState{At: now, HasPosition: true, X: 1054, Y: 986})
+	s.SetPresence(PresenceState{At: now.Add(time.Minute), InOutpost: true, OutpostName: "Secronom Bunker"})
+	if start, _ := s.Run(); !start.IsZero() {
+		t.Fatalf("standing in an outpost left a run running: %v", start)
+	}
+
+	// And stepping back out is a NEW run, timed from then.
+	out := now.Add(2 * time.Minute)
+	s.SetPresence(PresenceState{At: out, HasPosition: true, X: 1054, Y: 986})
+	if start, _ := s.Run(); !start.Equal(out) {
+		t.Fatalf("leaving the outpost started the clock at %v, want %v", start, out)
+	}
+}
+
+// Zoning happens mid-run - through a door, into a building - so it must not end
+// the clock, or every doorway would restart it.
+func TestPresenceLoadingDoesNotDisturbTheRunClock(t *testing.T) {
+	now := time.Unix(10000, 0)
+	s := newStore(nil)
+	s.SetGame(GameState{Running: true, PID: 1})
+	s.SetPresence(PresenceState{At: now, HasPosition: true, X: 1054, Y: 986})
+
+	s.SetPresence(PresenceState{At: now.Add(time.Minute), Loading: true})
+	if start, _ := s.Run(); !start.Equal(now) {
+		t.Fatalf("zoning disturbed the run clock: %v", start)
+	}
+	s.SetPresence(PresenceState{At: now.Add(2 * time.Minute), HasPosition: true, X: 1058, Y: 1016})
+	if start, _ := s.Run(); !start.Equal(now) {
+		t.Fatalf("arriving after a zone restarted the clock: %v", start)
+	}
+}
+
 // A run persisted by a previous df-hud is restored by SetGame. Presence must not
 // overwrite it with a fresh one, or restarting df-hud mid-run would throw away a
 // clock that is already an hour old.

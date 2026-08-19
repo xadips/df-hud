@@ -25,8 +25,21 @@ local endpoint = "http://127.0.0.1:9275"
 
 -- --max-time so a wedged listener cannot leave a curl per keypress lying around,
 -- and -o /dev/null so nothing is written anywhere.
+--
+-- The fallback exists because an instance may be listening inside a network
+-- namespace. Loopback is per namespace, so a df-hud running in one has a
+-- 127.0.0.1 that this curl -- issued by the compositor, in the init namespace --
+-- cannot reach at all, and every keybind silently did nothing. Trying the plain
+-- endpoint first keeps the normal case a single connect; when nothing answers
+-- there, the same request is retried inside the namespace. A refused connection
+-- is immediate, so the extra attempt costs nothing perceptible.
+--
+-- Ordered this way round on purpose: the un-namespaced instance is the common one,
+-- and df-netns-run exits non-zero when the namespace is down, so neither branch
+-- can hang.
 local function post_cmd(path)
-    return "curl -fsS --max-time 2 -o /dev/null -X POST " .. endpoint .. path
+    local req = "curl -fsS --max-time 2 -o /dev/null -X POST " .. endpoint .. path
+    return req .. " || df-netns-run " .. req
 end
 
 -- Two forms of the same call, because Hyprland has two: hl.dsp.exec_cmd builds a
@@ -99,7 +112,7 @@ end
 -- Worth having on a key even with the click detector below: nothing in the player
 -- record marks the client taking control, so if the clock ever starts late, this
 -- is the correction.
-bind_action("t", "/api/run/start", "df-hud: restart run clock")
+bind_action("grave", "/api/run/start", "df-hud: restart run clock")
 
 -- Start the xp/hr average again from now. For after a challenge reward drops a
 -- lump of XP into the window and it stops answering "how fast am I killing".
@@ -115,7 +128,7 @@ bind_action("k", "/api/overlay/toggle", "df-hud: toggle overlay")
 -- "block", "bosses", "session" and "xp" work the same way if you want keys for
 -- them. The status banner deliberately cannot be hidden - it is how df-hud says it
 -- cannot do its job.
-bind_action("tab", "/api/widget/challenges/toggle",
+bind_action("t", "/api/widget/challenges/toggle",
     "df-hud: toggle the challenge board")
 
 -- The city map: the whole 59x55 grid, shaded the way DFProfiler's own map shades
@@ -136,97 +149,6 @@ bind_action("tab", "/api/widget/challenges/toggle",
 -- bind, so the game never sees it - including in its own chat box.
 bind_action("v", "/api/widget/map/toggle",
     "df-hud: toggle the city map")
-
--- No bind for /api/console/toggle. The console does not exist yet - the endpoint
--- answers 503 - and SUPER + C is the window kill in this config, so a neighbouring
--- SUPER + ALT + C is a keystroke away from closing something. Bind it when there is
--- something to open.
-
--- OPTIONAL: start the run clock from the game's own Start button.
---
--- non_consuming is the whole trick, and it is why this cannot be done from inside
--- df-hud: a Wayland surface that receives a pointer event CONSUMES it, and there is
--- no forwarding. Only the compositor can both act on a click and still deliver it
--- to the game, because it is the thing doing the delivering.
---
--- df-hud never sees your input. It is told that a click happened and then checks
--- for itself whether the cursor was on the button, inside the game's focused
--- window, with no run already in progress. Configure the rectangle under
--- [run_start] in df-hud's config; the default is measured at 2560x1440.
---
--- Two things keep this from being a nuisance, because clicking is also how you
--- shoot and a plain global bind on the left mouse button would fork a curl several
--- times a second all day, in every application:
---
---   1. The bind EXISTS ONLY WHILE THE GAME IS FOCUSED - the same gate the keys
---      above use, and the reason it is written once, below. Unlike them this one is
---      not optional: a global click bind is a curl per shot fired.
---   2. The dispatcher is a FUNCTION rather than exec_cmd, so it runs inside the
---      compositor and decides whether to spawn anything, and at most one report
---      per second leaves the compositor.
---
--- One per second loses nothing. The Start press is a single click, and any click
--- dropped by that limit was under a second behind one df-hud has already judged -
--- so the only way to miss the button is to press it twice in one second, by which
--- point the clock is already running.
---
--- OFF BY DEFAULT, BECAUSE IT CRASHED THE COMPOSITOR.
---
--- 2026-08-14, Hyprland 0.56.2: a left click segfaulted Hyprland inside its own Lua
--- bindings. The backtrace is a mouse button arriving at CKeybindManager::handleKeybinds,
--- which pcalls this Lua function, which calls hl.exec_cmd, and the argument check for
--- that (Config::Lua::Bindings::Check::string) dies on a null dereference. The whole
--- session goes with it, mid-game.
---
--- This is a bug in Hyprland - a compositor must not segfault on a callback its own
--- config gave it - but the trigger is here, and it is the only bind in this file whose
--- dispatcher is a Lua FUNCTION rather than a dispatcher object built at load time.
--- Every key below is dispatched in C++ and none of them was in the backtrace.
---
--- Two details from that crash that are worth keeping:
---
---   * the game had closed five minutes earlier, so window.close should have disarmed
---     this bind. Either set_enabled does not take on a mouse bind in this version, or
---     what fired was a stale bind left over by an hyprctl reload. Both readings say
---     the same thing: do not put a Lua callback on the input path.
---   * two hyprctl reloads had happened that afternoon. If it is the stale-bind
---     reading, a reload is what arms the gun.
---
--- Turning this on gets you the feature and the risk. The alternative that keeps the
--- input path free of Lua is a plain exec dispatcher, which loses the rate limit and
--- so forks a curl per click while the game is focused - several a second in a fight:
---
---   table.insert(gated, hl.bind("mouse:272", post("/api/run/click"),
---       { non_consuming = true, click = true, description = "df-hud: catch the Start button" }))
---
--- Either way SUPER + T starts the clock by hand, which is what this was saving you.
-local catch_start_button = false
-
-if catch_start_button then
-    local report = post_cmd("/api/run/click")
-
-    -- os.time has one-second granularity, which is exactly the resolution wanted
-    -- here. It is checked for existence rather than assumed: an embedded Lua
-    -- without the os library should lose the rate limit, not the whole feature.
-    local last = 0
-    local function throttled()
-        if os and os.time then
-            local now = os.time()
-            if now == last then
-                return
-            end
-            last = now
-        end
-        hl.exec_cmd(report)
-    end
-
-    table.insert(gated, hl.bind("mouse:272", throttled, {
-        non_consuming = true,
-        click = true,
-        description = "df-hud: catch the Start button",
-    }))
-end
-
 -- Arming, for every gated bind at once.
 --
 -- Matched on the class rather than the exact name because Wine reports it

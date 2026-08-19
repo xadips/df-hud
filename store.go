@@ -454,10 +454,6 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 		(s.prevSnap.PositionX != snap.PositionX ||
 			s.prevSnap.PositionY != snap.PositionY ||
 			s.prevSnap.PositionZ != snap.PositionZ)
-	// Compared only within the same XP tier: the two differ by a large constant,
-	// so a tier change would look like earning hundreds of thousands of XP.
-	earned := s.havePrev && snap.XPSource == s.prevSnap.XPSource &&
-		snap.CumulativeXP > s.prevSnap.CumulativeXP
 	// The EDGE, not the value. The value is what started the clock at the launcher.
 	leftOutpost := s.havePrev && s.prevSnap.InOutpost && !snap.InOutpost
 
@@ -470,7 +466,7 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 			why = "you died"
 		}
 		s.endRunLocked(snap.At, why)
-	case s.runStart.IsZero() && (leftOutpost || moved || earned):
+	case s.runStart.IsZero() && (leftOutpost || moved):
 		// Timed from the observation that proves it, not the one before: never
 		// claim to have been playing for longer than there is evidence for.
 		s.runStart = snap.At
@@ -478,10 +474,8 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 		switch {
 		case leftOutpost:
 			why = "left the outpost"
-		case moved:
-			why = fmt.Sprintf("moved to %d, %d", snap.PositionX, snap.PositionY)
 		default:
-			why = "earned xp"
+			why = fmt.Sprintf("moved to %d, %d", snap.PositionX, snap.PositionY)
 		}
 		log.Printf("session: run started (%s)", why)
 	}
@@ -509,6 +503,13 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 			snap.InOutpost, snap.TradeZone, snap.PositionX, snap.PositionY,
 			s.prevSnap.InOutpost, s.prevSnap.TradeZone)
 	}
+}
+
+// forgetPrevLocked drops the previous snapshot, so no run-start signal compares
+// across a game restart - a position from the last session against this one is a
+// movement nobody made.
+func (s *Store) forgetPrevLocked() {
+	s.prevSnap, s.havePrev = Snapshot{}, false
 }
 
 // endRunLocked discards the run clock and says how long it had been going.
@@ -624,6 +625,28 @@ func (s *Store) SetPresence(p PresenceState) {
 		return
 	}
 	s.presence, s.havePresence = p, true
+	s.updateRunFromPresenceLocked(p)
+}
+
+// updateRunFromPresenceLocked starts and ends the run clock from what the client
+// says outright, rather than inferring it from the poll.
+//
+// Loading is ignored rather than treated as an end: zoning happens mid-run, and
+// ending there would restart the clock at every doorway.
+func (s *Store) updateRunFromPresenceLocked(p PresenceState) {
+	if s.runSeed != nil {
+		// A run persisted by a previous df-hud is still waiting to be restored by
+		// SetGame. Starting a fresh one here would throw away a clock that is
+		// already an hour old.
+		return
+	}
+	switch {
+	case p.InOutpost:
+		s.endRunLocked(p.At, "the client says outpost")
+	case p.HasPosition && s.runStart.IsZero():
+		s.runStart = p.At
+		log.Printf("session: run started (the client reported %d, %d)", p.X, p.Y)
+	}
 }
 
 // presencePositionLocked is the client's position when it is usable: it exists,
@@ -692,8 +715,10 @@ func (s *Store) SetGame(g GameState) {
 		// last poll, because the run continued until the client went away and the
 		// last poll can be a whole interval behind that.
 		s.endRunLocked(time.Now(), "the game closed")
+		s.forgetPrevLocked()
 	case prev.Running && !g.SameSession(prev):
 		s.endRunLocked(time.Now(), "the game relaunched")
+		s.forgetPrevLocked()
 	case s.runSeed != nil:
 		// A run persisted by a previous df-hud process, restored only if it
 		// belongs to the game running now. The start time is compared as well as

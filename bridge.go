@@ -91,11 +91,6 @@ type bridgeServer struct {
 	// not having.
 	runStart func()
 	xpReset  func()
-	// runClick is the passed-through click on the game's Start button. Separate
-	// from runStart because it is a CANDIDATE rather than a command: df-hud checks
-	// the cursor position, the focused window and whether a run is already going
-	// before it acts on one.
-	runClick func()
 	// overlayToggle is the same switch as the tray checkbox.
 	overlayToggle func()
 	// widgetToggle hides or shows one group. Named rather than one endpoint per
@@ -162,7 +157,6 @@ func (b *bridgeServer) handler() http.Handler {
 	mux.HandleFunc("POST /api/console/toggle", b.handleConsoleToggle)
 	mux.HandleFunc("POST /api/run/start", b.hook(func() func() { return b.runStart }, "run clock"))
 	mux.HandleFunc("POST /api/xp/reset", b.hook(func() func() { return b.xpReset }, "xp rate"))
-	mux.HandleFunc("POST /api/run/click", b.hook(func() func() { return b.runClick }, "run clock"))
 	mux.HandleFunc("POST /api/overlay/toggle", b.hook(func() func() { return b.overlayToggle }, "overlay"))
 	mux.HandleFunc("POST /api/widget/{group}/toggle", b.toggleWidget)
 	return mux

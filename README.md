@@ -49,7 +49,6 @@ is yours:
 | `POST /api/overlay/toggle` | show or hide the overlay by hand |
 | `POST /api/widget/<group>/toggle` | show or hide one group: `block`, `bosses`, `session`, `xp`, `challenges`, `map` |
 | `POST /api/console/toggle` | the console window - **not built yet**, answers 503, and has no default bind |
-| `POST /api/run/click` | a click that *might* be the game's Start button |
 
 Ready-made, with the layer rules: [contrib/df-hud.lua](contrib/df-hud.lua) for
 Hyprland's Lua configuration, [contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf)
@@ -104,76 +103,6 @@ screen for a minute", which you undo thirty seconds later. A HUD that started wi
 a group missing because of a keypress in a previous session would be
 indistinguishable from a broken one. The status banner cannot be hidden at all - it
 is how df-hud says it cannot do its job.
-
-### Starting the clock from the game's own Start button
-
-**Off by default since 2026-08-14, because it crashed the compositor.** A left click
-segfaulted Hyprland 0.56.2 inside its own Lua bindings: the mouse button reached
-`CKeybindManager::handleKeybinds`, which `pcall`ed this bind's Lua function, which
-called `hl.exec_cmd`, and the argument check for that died on a null dereference. The
-session went with it. That is a Hyprland bug - a compositor must not segfault on a
-callback its own config handed it - but this bind is the trigger, and it is the only
-one in `df-hud.lua` whose dispatcher is a Lua *function* rather than a dispatcher
-object built at load time. Every key is dispatched in C++ and none of them appeared in
-the backtrace. `catch_start_button = true` turns it back on; `SUPER + T` does the same
-job by hand. The long note in that file has the evidence.
-
-The rest of this section is why the feature exists at all.
-
-The run clock cannot be inferred reliably, and it is worth being precise about
-why. Nothing in the player record marks the client taking control: position,
-trade zone and `df_inoutpost` all survive a client exit and relaunch unchanged,
-and pressing Start does not even move your character - it lets you move and drops
-your AFK invincibility. Meanwhile a whole loot run can happen inside one block, so
-"the position changed" can arrive a long way into a run, and killing is not what
-you do first.
-
-So `run_start` lets the button itself say so. **df-hud does not watch your input.**
-Hyprland passes the click through with a non-consuming bind and calls
-`/api/run/click`; df-hud then checks, for itself, whether the cursor was on the
-button. Global input monitoring is a keylogger-shaped capability and this program
-does not want it.
-
-It has to be the compositor and not an invisible surface of our own, which is the
-obvious alternative: a Wayland surface that receives a pointer event **consumes**
-it, and the protocol has no forwarding. An invisible box over the Start button
-would eat the click, so the button would never be pressed. Only the compositor can
-both act on a click and still deliver it, because it is the thing doing the
-delivering.
-
-Two things keep a pixel rectangle from being as fragile as it sounds:
-
-- the click must be inside the **game's focused window**, and the rectangle is
-  measured from that window's corner rather than the screen's, so it survives the
-  game moving to another monitor
-- it is **ignored outright once a run is in progress**, which is how the game
-  works anyway - you press Start once, then again only after extracting or dying.
-  Every click you fire during play is therefore inert, and answered without
-  asking the compositor anything.
-
-Two things then keep the bind from being a nuisance, because clicking is also how
-you shoot:
-
-- it is **armed only while the game is focused**. A plain global bind on the left
-  mouse button spawns a process on every click you make all day, in every
-  application. Hyprland has no per-window bind filter, so
-  [contrib/df-hud.lua](contrib/df-hud.lua) subscribes to `window.active` and calls
-  `set_enabled` on the keybind - it does not exist while you are anywhere else.
-- the dispatcher is a **Lua function rather than `exec`**, so it runs inside the
-  compositor and decides whether to spawn anything, and at most one report per
-  second leaves it. That limit loses nothing: the Start press is a single click,
-  and anything it drops was under a second behind a click df-hud has already
-  judged.
-
-The `hyprland.conf` dialect can express neither, which is worth knowing before
-copying the bind out of the other file.
-
-Rejected alternatives, both measured rather than assumed: the game's memory
-(`ptrace_scope` is 1, so it would need root or a machine-wide security change,
-and Mono pointer chains break on every patch - on an account that has already
-been temp-banned once, for polling), and the process's memory or CPU footprint
-(measured live: **Start changes neither**, because the world is fully loaded
-before you press it).
 
 ## Where each group sits
 
@@ -618,8 +547,10 @@ publishes that, so `[bossmap]` reads it from there — and since it is not our
 server, the budget is set by what their own page already costs them:
 
 - their boss map page re-fetches the same endpoint **every 30 seconds per open
-  tab**. df-hud defaults to 60s and **refuses to be configured below 30s**, so it
-  can never cost the operator more than one of their own tabs.
+  tab**. df-hud defaults to 60s in the city and 30s while standing in Onslaught,
+  whose cycle is 300s rather than the city's 3600s — so by default it costs at
+  most what one of their own tabs does. It **refuses to be configured below
+  15s**, which is a floor for hand-tuning rather than a default anyone runs at.
 - nothing at all while the game is closed, same rule as the game server.
 - the User-Agent is df-hud's own, naming the tool, so it can be identified and
   complained about.

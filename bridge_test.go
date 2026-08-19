@@ -403,48 +403,6 @@ func TestBridgeOverlayToggle(t *testing.T) {
 	}
 }
 
-// The guard that makes binding a mouse button safe: once a run is going, every
-// click is inert without the compositor being asked anything at all.
-func TestRunClickAllowed(t *testing.T) {
-	cfg := RunStartConfig{ClickEnabled: true, ButtonX: 1230, ButtonY: 660, ButtonWidth: 100, ButtonHeight: 40}
-
-	if !runClickAllowed(cfg, false, true) {
-		t.Error("no run in progress and the game running: the click is worth checking")
-	}
-	if runClickAllowed(cfg, true, true) {
-		t.Error("a run is already going; this is how a click per shot fired stays free")
-	}
-	if runClickAllowed(cfg, false, false) {
-		t.Error("the game is not running, so nothing can be started")
-	}
-	off := cfg
-	off.ClickEnabled = false
-	if runClickAllowed(off, false, true) {
-		t.Error("disabled means disabled")
-	}
-}
-
-func TestRunStartButtonContains(t *testing.T) {
-	cfg := RunStartConfig{ButtonX: 1230, ButtonY: 660, ButtonWidth: 100, ButtonHeight: 40}
-
-	for _, p := range [][2]int{{1230, 660}, {1279, 679}, {1329, 699}} {
-		if !cfg.ButtonContains(p[0], p[1]) {
-			t.Errorf("%v should be on the button", p)
-		}
-	}
-	// Half-open on the far edges, so two adjacent buttons could never both claim
-	// the same pixel.
-	for _, p := range [][2]int{{1229, 660}, {1230, 659}, {1330, 680}, {1280, 700}, {0, 0}} {
-		if cfg.ButtonContains(p[0], p[1]) {
-			t.Errorf("%v should be off the button", p)
-		}
-	}
-	// A zero-sized button can never be hit, however the coordinates line up.
-	if (RunStartConfig{ButtonX: 10, ButtonY: 10}).ButtonContains(10, 10) {
-		t.Error("a zero-sized button must not swallow clicks")
-	}
-}
-
 // The widget toggle takes the group as a path value, so adding a widget does not
 // mean adding a route.
 func TestBridgeWidgetToggle(t *testing.T) {

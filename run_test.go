@@ -2,7 +2,6 @@ package main
 
 import (
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -277,36 +276,6 @@ func TestPersistedRunRoundTrips(t *testing.T) {
 	}
 }
 
-// Killing things without leaving the block is still playing, and it is the case
-// movement alone misses. It also insures the clock against df_positionx/y being
-// updated less often than it appears to be - 1623 consecutive polls of an
-// unchanged position were observed in one live session.
-func TestRunClockStartsOnEarnedXP(t *testing.T) {
-	s := newStore(nil)
-	launch := time.Now().Add(-5 * time.Minute)
-	s.SetGame(runningGame(launch))
-
-	still := movedTo(1058, 1016)
-	s.ApplyTick(Tick{At: launch, Vars: still, Scheduled: true})
-	if v := s.Derive(launch); v.HasSession {
-		t.Fatal("one poll is not evidence of anything")
-	}
-
-	// Same block, more XP.
-	killing := movedTo(1058, 1016)
-	killing["df_exptotal"] = "23480999999"
-	at := launch.Add(10 * time.Second)
-	s.ApplyTick(Tick{At: at, Vars: killing, Scheduled: true})
-
-	v := s.Derive(at.Add(time.Minute))
-	if !v.HasSession {
-		t.Fatal("earning XP is proof of play")
-	}
-	if v.SessionTime != time.Minute {
-		t.Errorf("SessionTime = %s, want 1m from the poll that proved it", v.SessionTime)
-	}
-}
-
 // XP going DOWN, or the tier changing, is not evidence of play: the two
 // cumulative tiers differ by a large constant, so a tier change would look like
 // earning hundreds of thousands of XP out of nowhere.
@@ -380,22 +349,5 @@ func TestRunClockIgnoresAnAlreadyZeroOutpostFlag(t *testing.T) {
 	}
 	if v := s.Derive(launch.Add(80 * time.Second)); v.HasSession {
 		t.Errorf("the clock started at the launcher again, at %s", v.SessionTime)
-	}
-}
-
-// The calibration line is bounded: a click storm before the run starts must not
-// fill the log, and the first click must not be swallowed by a zero-value clock.
-func TestLogMissedClick(t *testing.T) {
-	var last atomic.Int64
-	now := time.Date(2026, 8, 12, 20, 0, 0, 0, time.UTC)
-
-	if !logMissedClick(&last, now, 5*time.Second) {
-		t.Fatal("the first click must print; a zero last-time means nothing has been said yet")
-	}
-	if logMissedClick(&last, now.Add(4*time.Second), 5*time.Second) {
-		t.Error("a click inside the interval must be dropped")
-	}
-	if !logMissedClick(&last, now.Add(5*time.Second), 5*time.Second) {
-		t.Error("a click at the interval must print again")
 	}
 }
