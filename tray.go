@@ -39,6 +39,15 @@ type trayActions struct {
 	// feature exists.
 	SetChallengesHidden func(bool)
 	ChallengesHidden    func() bool
+	// SetFPSDisplay presses the game's own FPS key. Nil when the feature is not
+	// wired, which is what hides the item rather than showing a dead one.
+	SetFPSDisplay func(bool)
+	FPSDisplay    func() bool
+	// SetDismissLauncher presses Play on the launcher dialog. On the menu because
+	// that dialog is where the game's input bindings are changed, so leaving it up
+	// has to be one click away.
+	SetDismissLauncher func(bool)
+	DismissLauncher    func() bool
 
 	// ResetXPRate throws away the rate window and starts a fresh average.
 	ResetXPRate func()
@@ -128,6 +137,8 @@ type trayItem struct {
 	// a checkbox that disagrees with what it controls is worse than no checkbox.
 	overlay *systray.MenuItem
 	board   *systray.MenuItem
+	fps     *systray.MenuItem
+	skipLnc *systray.MenuItem
 }
 
 // runTray blocks until ctx ends. Safe to run in a goroutine: the Linux backend
@@ -186,6 +197,14 @@ func (t *trayItem) buildMenu() {
 	}
 	board := systray.AddMenuItemCheckbox("Show challenges",
 		"Hide the challenge board without turning it off in the config", boardShown)
+	// The game's FPS readout is off at every launch and nothing in the game
+	// remembers otherwise, so this is the only switch there is for it. Only
+	// offered when it is wired: an item that does nothing is worse than none.
+	var fps *systray.MenuItem
+	if t.actions.SetFPSDisplay != nil && t.actions.FPSDisplay != nil {
+		fps = systray.AddMenuItemCheckbox("FPS display on launch",
+			"Press the game's FPS key once each time the client starts", t.actions.FPSDisplay())
+	}
 	// A challenge reward is a single lump of XP that no amount of killing
 	// produced, so it lands in the window and inflates the average for as long as
 	// the window is wide. The rate is not wrong - that XP really was earned - but
@@ -204,9 +223,34 @@ func (t *trayItem) buildMenu() {
 	reload := systray.AddMenuItem("Reload config", "Re-read config.toml")
 	quit := systray.AddMenuItem("Quit df-hud", "Stop df-hud")
 
+	// Unticking this is how you reach the launcher's Input tab, so the label says
+	// what it does to the dialog rather than naming the dialog.
+	var skipLnc *systray.MenuItem
+	if t.actions.SetDismissLauncher != nil && t.actions.DismissLauncher != nil {
+		skipLnc = systray.AddMenuItemCheckbox("Skip the launcher",
+			"Press Play on the configuration dialog. Untick to reach the Input tab.",
+			t.actions.DismissLauncher())
+	}
+
 	t.mu.Lock()
-	t.overlay, t.board = overlay, board
+	t.overlay, t.board, t.fps, t.skipLnc = overlay, board, fps, skipLnc
 	t.mu.Unlock()
+
+	if skipLnc != nil {
+		go func() {
+			for range skipLnc.ClickedCh {
+				t.actions.SetDismissLauncher(!t.actions.DismissLauncher())
+			}
+		}()
+	}
+
+	if fps != nil {
+		go func() {
+			for range fps.ClickedCh {
+				t.actions.SetFPSDisplay(!t.actions.FPSDisplay())
+			}
+		}()
+	}
 
 	go func() {
 		for range board.ClickedCh {
@@ -284,13 +328,19 @@ func (t *trayItem) refresh() {
 
 	// Sync the ticks to the real overrides, which keybinds can also change.
 	t.mu.Lock()
-	overlay, board := t.overlay, t.board
+	overlay, board, fps, skipLnc := t.overlay, t.board, t.fps, t.skipLnc
 	t.mu.Unlock()
 	if overlay != nil && t.actions.OverlayEnabled != nil {
 		syncCheckbox(overlay, t.actions.OverlayEnabled())
 	}
 	if board != nil && t.actions.ChallengesHidden != nil {
 		syncCheckbox(board, !t.actions.ChallengesHidden())
+	}
+	if fps != nil && t.actions.FPSDisplay != nil {
+		syncCheckbox(fps, t.actions.FPSDisplay())
+	}
+	if skipLnc != nil && t.actions.DismissLauncher != nil {
+		syncCheckbox(skipLnc, t.actions.DismissLauncher())
 	}
 }
 

@@ -210,7 +210,10 @@ func (w *visibilityWatcher) refresh(ctx context.Context) {
 	place := windowPlacement{}
 	if game.Running && w.query != nil && !failed {
 		queryCtx, cancel := context.WithTimeout(ctx, w.timeout)
-		got, err := w.query.GameWindow(queryCtx, game.PID, cfg.Game.WindowMatch())
+		// launcherWindowMatch rather than the plain one, so the placement also
+		// carries the launcher dialog's address. Nothing here uses it; gamekeys.go
+		// does, and this is the only compositor query already running.
+		got, err := w.query.GameWindow(queryCtx, game.PID, cfg.launcherWindowMatch())
 		cancel()
 		switch {
 		case err != nil:

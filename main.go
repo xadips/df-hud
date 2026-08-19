@@ -270,6 +270,7 @@ type app struct {
 	visibility *visibilityWatcher
 	bosses     *BossPoller
 	presence   *PresenceServer
+	gamekeys   *gameKeys
 	poller     *Poller
 	challenges *ChallengePoller
 	gate       *rateGate
@@ -376,6 +377,15 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 			}
 		})
 	}
+
+	// The game's FPS readout, which starts off at every launch because nothing in
+	// the game remembers it. Reads the window the visibility watcher has already
+	// resolved, so it costs no extra compositor queries.
+	a.gamekeys = newGameKeys(a.Config, a.game.State, a.visibility.Placement, hyprClient{})
+	a.gamekeys.active = hyprClient{}.ActiveAddress
+	// Not while the client is still loading: a key pressed at the loading screen
+	// is simply discarded, which is what made the FPS key intermittent.
+	a.gamekeys.ready = func() bool { return a.store.ClientInWorld(time.Now()) }
 
 	a.challenges.SetOnBoard(func(board []Challenge) {
 		a.store.SetChallenges(board, time.Now())
@@ -617,6 +627,7 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 	if a.presence != nil {
 		go a.presence.Run(ctx)
 	}
+	go a.gamekeys.Run(ctx)
 	go a.reportChallengeStatus(ctx)
 	if a.watcher != nil {
 		go a.watcher.Run(ctx, a.Config, a.applyReload)
@@ -633,6 +644,10 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 			OverlayEnabled:      a.visibility.Enabled,
 			SetChallengesHidden: func(hidden bool) { a.groups.Set("challenges", hidden) },
 			ChallengesHidden:    func() bool { return a.groups.Hidden("challenges") },
+			SetFPSDisplay:       a.gamekeys.SetFPSDisplay,
+			FPSDisplay:          a.gamekeys.FPSDisplay,
+			SetDismissLauncher:  a.gamekeys.SetDismissLauncher,
+			DismissLauncher:     a.gamekeys.DismissLauncher,
 			ResetXPRate:         a.resetXPRate,
 			RestartRunClock:     func() { a.store.RestartRun(time.Now(), "the tray menu") },
 			ReloadConfig:        a.reloadConfig,

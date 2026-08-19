@@ -78,6 +78,7 @@ type Config struct {
 	Bridge   BridgeConfig   `toml:"bridge"`
 	Poll     PollConfig     `toml:"poll"`
 	Game     GameConfig     `toml:"game"`
+	GameKeys GameKeysConfig `toml:"game_keys"`
 	Paths    PathsConfig    `toml:"paths"`
 	HUD      HUDConfig      `toml:"hud"`
 	BossMap  BossMapConfig  `toml:"bossmap"`
@@ -190,6 +191,64 @@ func (g GameConfig) WindowMatch() windowMatch {
 		class = g.Process
 	}
 	return windowMatch{Class: class, IgnoreTitles: g.WindowTitleIgnore}
+}
+
+// WindowMatch with the launcher dialog named, for the code that sends it a key.
+func (c *Config) launcherWindowMatch() windowMatch {
+	m := c.Game.WindowMatch()
+	m.LauncherTitle = c.GameKeys.LauncherTitle
+	return m
+}
+
+// GameKeysConfig presses a key in the game's window at launch. See gamekeys.go
+// for why the FPS display needs this rather than a setting.
+type GameKeysConfig struct {
+	// FPSDisplay turns the game's FPS readout on once per launch. Off by
+	// default: df-hud synthesising input is worth opting into rather than
+	// discovering.
+	FPSDisplay bool `toml:"fps_display"`
+
+	// FPSKey is the game's own binding for it, a plain X keysym name. A key here
+	// is what makes this survive the game rebinding it, or a keyboard layout
+	// where "y" is somewhere else.
+	FPSKey string `toml:"fps_key"`
+
+	// FPSDelay is how long to wait after the game's own window appears - not
+	// after the process starts, which is when the LAUNCHER opens.
+	//
+	// Long enough that the key lands in the client rather than in a loading
+	// screen, short enough that the readout is on before you are playing.
+	FPSDelay duration `toml:"fps_delay"`
+
+	// DismissLauncher presses the launcher dialog's default button - Play - as
+	// soon as it appears, so the dialog is on screen for a moment instead of
+	// waiting for you.
+	//
+	// It is DISMISSED rather than skipped, and that distinction is the whole
+	// design. The dialog can be stopped from appearing at all, by setting
+	// PlayerSettings.displayResolutionDialog in DeadFrontier_Data/mainData - but
+	// the dialog is also what APPLIES the input bindings. The game reads them
+	// from the Wine registry only as part of the dialog running; skip it and the
+	// bindings baked into mainData are used instead, so a sprint rebound to space
+	// silently becomes shift and space cycles weapons. Measured, at some cost.
+	//
+	// So pressing Play is not the crude version of skipping it. It is the only
+	// way to keep custom keys.
+	DismissLauncher bool `toml:"dismiss_launcher"`
+
+	// LauncherKey activates that default button. Return, because Play is the
+	// dialog's default and Return is what activates a default button.
+	LauncherKey string `toml:"launcher_key"`
+
+	// LauncherTitle identifies the dialog among the launcher's windows. It has to
+	// be narrower than game.window_title_ignore, which contains "configuration"
+	// and so matches the 215x78 "Input Configuration" key-capture box too - a
+	// window with no default button, where Return would do something else.
+	LauncherTitle string `toml:"launcher_title"`
+
+	// LauncherDelay is how long to leave the dialog mapped before pressing. Long
+	// enough for it to have taken keyboard focus of its own default button.
+	LauncherDelay duration `toml:"launcher_delay"`
 }
 
 type PathsConfig struct {
@@ -599,6 +658,17 @@ func defaultConfig() *Config {
 			WindowTitleIgnore: []string{"configuration"},
 			ScanInterval:      duration{2 * time.Second},
 		},
+		GameKeys: GameKeysConfig{
+			FPSKey: "y",
+			// Five seconds after the client's own window is mapped. Measured
+			// against nothing in particular, and it does not need to be: the
+			// readout is a toggle you want on before you are playing, not at a
+			// precise moment.
+			FPSDelay:      duration{5 * time.Second},
+			LauncherKey:   "Return",
+			LauncherTitle: "Dead Frontier Configuration",
+			LauncherDelay: duration{500 * time.Millisecond},
+		},
 		Paths: PathsConfig{DataDir: defaultDataDir()},
 		HUD: HUDConfig{
 			Enabled:             true,
@@ -833,6 +903,41 @@ func (c *Config) validate() error {
 	errs = appendRange(errs, "game.scan_interval", c.Game.ScanInterval.Duration, 250*time.Millisecond, 5*time.Minute)
 
 	// --- game_keys ---
+	c.GameKeys.FPSKey = strings.TrimSpace(c.GameKeys.FPSKey)
+	if c.GameKeys.FPSDisplay {
+		if c.GameKeys.FPSKey == "" {
+			errs = append(errs, errors.New("game_keys.fps_display is on but game_keys.fps_key is empty"))
+		} else if !hyprKeyName.MatchString(c.GameKeys.FPSKey) {
+			// The key is interpolated into a compositor command, so anything
+			// outside this alphabet is refused at load rather than at the moment
+			// it would have been sent - which is mid-launch, with nobody watching.
+			errs = append(errs, fmt.Errorf("game_keys.fps_key %q must be a plain key name "+
+				"like \"y\" or \"F1\"", c.GameKeys.FPSKey))
+		}
+	}
+	errs = appendRange(errs, "game_keys.fps_delay", c.GameKeys.FPSDelay.Duration, 0, 5*time.Minute)
+	c.GameKeys.LauncherKey = strings.TrimSpace(c.GameKeys.LauncherKey)
+	c.GameKeys.LauncherTitle = strings.TrimSpace(c.GameKeys.LauncherTitle)
+	if c.GameKeys.DismissLauncher {
+		if !hyprKeyName.MatchString(c.GameKeys.LauncherKey) {
+			errs = append(errs, fmt.Errorf("game_keys.launcher_key %q must be a plain key name "+
+				"like \"Return\"", c.GameKeys.LauncherKey))
+		}
+		if c.GameKeys.LauncherTitle == "" {
+			// Without it there is nothing to tell the dialog apart from the
+			// key-capture box, and Return would be sent to whichever came first.
+			errs = append(errs, errors.New("game_keys.dismiss_launcher is on but "+
+				"game_keys.launcher_title is empty"))
+		} else if !c.Game.WindowMatch().ignored(c.GameKeys.LauncherTitle) {
+			// The dialog must also be one of the windows the HUD refuses to draw
+			// over. If it is not, df-hud thinks the launcher IS the game, and the
+			// dismissal never runs because there is no launcher to see.
+			errs = append(errs, fmt.Errorf("game_keys.launcher_title %q does not match any of "+
+				"game.window_title_ignore (%s), so df-hud would treat that window as the game",
+				c.GameKeys.LauncherTitle, strings.Join(c.Game.WindowTitleIgnore, ", ")))
+		}
+	}
+	errs = appendRange(errs, "game_keys.launcher_delay", c.GameKeys.LauncherDelay.Duration, 0, time.Minute)
 
 	// --- paths ---
 	c.Paths.DataDir = expandHome(strings.TrimSpace(c.Paths.DataDir))

@@ -112,6 +112,57 @@ window_title_ignore = ["configuration"]
 # politeness floor - only sanity limits of 250ms..5m. Under Hyprland a window
 # opening or closing also triggers an immediate rescan.
 scan_interval = "2s"
+
+[game_keys]
+# Press a key in the game's own window at launch.
+#
+# One thing only: the client's FPS readout starts OFF every launch, and no
+# setting anywhere remembers otherwise. The game keeps its settings in the Wine
+# registry under Software\Creaky Corpse\Dead Frontier - which has the FPS cap,
+# vsync, quality, brightness and HUD outlines, but nothing for this - so pressing
+# the key is the only way to have it on.
+#
+# Off by default: df-hud synthesising input into the game is worth opting into.
+# There is a tray checkbox for it too, and ticking that mid-session presses the
+# key straight away.
+fps_display = false
+
+# The game's own binding, as an X keysym name. A key here rather than a constant
+# so this survives rebinding it in the game, or a layout where "y" is elsewhere.
+fps_key = "y"
+
+# How long to wait after the game's own window appears - NOT after the process
+# starts, which is when the launcher opens and can sit there indefinitely.
+fps_delay = "5s"
+
+# Press the launcher dialog's Play button as soon as it appears, so it flashes up
+# instead of waiting for you.
+#
+# DISMISSED, not skipped, and the difference is not cosmetic. The dialog can be
+# stopped from appearing at all - PlayerSettings.displayResolutionDialog in
+# DeadFrontier_Data/mainData does it - but the dialog is ALSO what applies your
+# input bindings. The game reads them from the Wine registry only as part of the
+# dialog running, so skipping it silently reverts every rebind to the defaults
+# baked into the build: sprint goes back to shift, and space cycles weapons.
+# Measured the hard way.
+#
+# Turn this off when you want to reach the Input tab.
+dismiss_launcher = false
+
+# The key that activates the dialog's default button, which is Play.
+launcher_key = "Return"
+
+# Which of the launcher's windows to press it on. It has to be narrower than
+# game.window_title_ignore, which contains "configuration" and so also matches
+# the small "Input Configuration" key-capture box - a window with no default
+# button, where Return would mean something else.
+launcher_title = "Dead Frontier Configuration"
+
+# How long to leave the dialog on screen first, so it has focus of its own
+# default button before the key arrives. This is the floor on how long the dialog
+# is visible, so it is deliberately short; SilverOverlays uses the same 0.5s.
+launcher_delay = "500ms"
+
 [paths]
 # Holds credentials.json (mode 0600), state.json and catalog.json.
 # Defaults to $XDG_DATA_HOME/df-hud. Needs a RESTART to change.

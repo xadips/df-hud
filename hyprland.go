@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -161,10 +162,14 @@ type hyprWindow struct {
 	Class        string `json:"class"`
 	InitialClass string `json:"initialClass"`
 	Title        string `json:"title"`
-	PID          int    `json:"pid"`
-	Monitor      int    `json:"monitor"`
-	Mapped       bool   `json:"mapped"`
-	Workspace    struct {
+	// Address is the compositor's own handle for the window, "0x" and hex. The
+	// only identifier that names ONE window: the game and its launcher share a
+	// process and a class, so a pid or a class selector can hit either.
+	Address   string `json:"address"`
+	PID       int    `json:"pid"`
+	Monitor   int    `json:"monitor"`
+	Mapped    bool   `json:"mapped"`
+	Workspace struct {
 		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"workspace"`
@@ -193,6 +198,7 @@ type windowPlacement struct {
 
 	Class         string
 	Title         string
+	Address       string
 	Workspace     int
 	WorkspaceName string
 	Monitor       string
@@ -220,6 +226,10 @@ type windowPlacement struct {
 	//
 	// This is positive evidence, so it can be acted on.
 	LauncherOnly bool
+
+	// LauncherAddress is that dialog's own window, when it is the one with the
+	// Play button rather than a sub-window. Empty unless LauncherOnly.
+	LauncherAddress string
 }
 
 // windowMatch is how to recognise the game's window.
@@ -232,6 +242,23 @@ type windowPlacement struct {
 type windowMatch struct {
 	Class        string
 	IgnoreTitles []string
+	// LauncherTitle picks the ONE ignored window that is the dialog with the Play
+	// button on it, so a key can be sent to it and nothing else.
+	//
+	// Narrower than IgnoreTitles on purpose. That list contains "configuration",
+	// which matches both windows the launcher opens - the 464x406 dialog AND the
+	// 215x78 "Input Configuration" key-capture box - and only the first of those
+	// has a default button to press.
+	LauncherTitle string
+}
+
+// isLauncherDialog reports whether a title is the launcher's main dialog.
+func (m windowMatch) isLauncherDialog(title string) bool {
+	want := strings.ToLower(strings.TrimSpace(m.LauncherTitle))
+	if want == "" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(title), want)
 }
 
 // ignored reports whether a title says "this is not the game".
@@ -276,6 +303,7 @@ func findGameWindow(windows []hyprWindow, monitors []hyprMonitor, pid int, match
 			Known:         true,
 			Class:         w.Class,
 			Title:         w.Title,
+			Address:       w.Address,
 			Workspace:     w.Workspace.ID,
 			WorkspaceName: w.Workspace.Name,
 			MatchedBy:     how,
@@ -298,6 +326,15 @@ func findGameWindow(windows []hyprWindow, monitors []hyprMonitor, pid int, match
 	// rather than discarded: it is the difference between "no window yet" and "the
 	// launcher is up", and the caller treats those oppositely.
 	launcher := false
+	launcherAddr := ""
+	// noteLauncher records an ignored window, and keeps the address of the one
+	// that is the dialog itself rather than one of its sub-windows.
+	noteLauncher := func(w hyprWindow) {
+		launcher = true
+		if launcherAddr == "" && match.isLauncherDialog(w.Title) {
+			launcherAddr = w.Address
+		}
+	}
 	want := normaliseClass(match.Class)
 
 	if pid > 0 {
@@ -306,7 +343,7 @@ func findGameWindow(windows []hyprWindow, monitors []hyprMonitor, pid int, match
 				continue
 			}
 			if match.ignored(w.Title) {
-				launcher = true
+				noteLauncher(w)
 				continue
 			}
 			return place(w, "process id")
@@ -318,13 +355,13 @@ func findGameWindow(windows []hyprWindow, monitors []hyprMonitor, pid int, match
 				continue
 			}
 			if match.ignored(w.Title) {
-				launcher = true
+				noteLauncher(w)
 				continue
 			}
 			return place(w, "window class")
 		}
 	}
-	return windowPlacement{LauncherOnly: launcher}
+	return windowPlacement{LauncherOnly: launcher, LauncherAddress: launcherAddr}
 }
 
 // normaliseClass makes "DeadFrontier.exe" and "deadfrontier.exe" the same thing,
@@ -360,13 +397,66 @@ func (hyprClient) GameWindow(ctx context.Context, pid int, match windowMatch) (w
 	return findGameWindow(windows, monitors, pid, match), nil
 }
 
-// pointerAt is where the cursor is, in coordinates relative to the game's window.
+// SendKey presses and releases one key inside a specific window.
 //
-// Relative rather than absolute on purpose: hyprctl reports the cursor in
-// compositor space, which is offset by the monitor's position, so a region
-// measured on one screen would be wrong on another. Subtracting the window's own
-// origin makes a configured rectangle mean the same thing wherever the game is.
-//
+// Addressed by ADDRESS, not class or pid: the game and its configuration dialogs
+// are one process reporting one class, so every other selector can hit either.
+// The address comes from findGameWindow, which has already ruled out the
+// launcher by title. It also means the key does not follow focus, so nothing is
+// stolen from whatever you were doing.
+func (hyprClient) SendKey(ctx context.Context, key, address string) error {
+	if !hyprKeyName.MatchString(key) {
+		// Refused rather than escaped: the command is Lua source, so a value
+		// needing an escape could close the string and run something.
+		return fmt.Errorf("hyprland: %q is not a plain key name", key)
+	}
+	if !hyprAddress.MatchString(address) {
+		return fmt.Errorf("hyprland: %q is not a window address", address)
+	}
+	cmd := fmt.Sprintf("dispatch hl.dsp.send_shortcut{mods=%q,key=%q,window=%q}", "", key, "address:"+address)
+	reply, err := hyprRequest(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	// "ok" on success; everything else, including a window that vanished between
+	// the lookup and the send, comes back as a warning in the body.
+	if text := strings.TrimSpace(string(reply)); !strings.HasPrefix(text, "ok") {
+		return fmt.Errorf("hyprland: %s", firstLine(text))
+	}
+	return nil
+}
+
+// The two values interpolated into Lua source.
+var (
+	hyprKeyName = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+	hyprAddress = regexp.MustCompile(`^0x[0-9a-fA-F]+$`)
+)
+
+// firstLine keeps a compositor error to one log line: Hyprland appends a note
+// about Lua syntax to every dispatch reply.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+// ActiveAddress is the focused window's address, false when nothing is focused
+// or the compositor cannot be reached. Asked only when a key is about to be
+// sent, never on a timer.
+func (hyprClient) ActiveAddress(ctx context.Context) (string, bool) {
+	raw, err := hyprRequest(ctx, "j/activewindow")
+	if err != nil {
+		return "", false
+	}
+	var window struct {
+		Address string `json:"address"`
+	}
+	if err := json.Unmarshal(raw, &window); err != nil || window.Address == "" {
+		return "", false
+	}
+	return window.Address, true
+}
 
 // Windows lists every window, for the -check-game diagnostic. When the game's
 // window cannot be matched, seeing the actual classes is the whole answer.

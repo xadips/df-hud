@@ -66,6 +66,10 @@ Nothing in it is a credential.
 nowhere in the table, so some keys are hardcoded and invisible here. Reading this rules
 a collision IN; it cannot rule one out.
 
+`y` is the other one: it toggles the FPS readout, is absent from the table, and is not
+persisted anywhere either - which is why turning it on means pressing it. See
+[sending-keys.md](sending-keys.md).
+
 It also cost something to learn: the map was briefly bound to a bare `` ` `` with a
 comment claiming the game did nothing with grave. Grave is the CHAT key, and a
 consuming bind would have eaten it. Check here before claiming a key is free.
