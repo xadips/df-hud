@@ -22,20 +22,14 @@ import (
 
 const namespace = "df-hud"
 
-// version is reported by /healthz, -version and the User-Agent. It stays a dev
-// string until there is a release process, rather than claiming a version
-// number nothing produces.
-//
-// A var rather than a const so `make` can stamp the commit into it
-// (-ldflags -X only works on variables). That matters once df-hud runs as a
-// service: "which build is actually running" is otherwise unanswerable, and a
-// plain `go build` still gives the honest default below.
+// version is reported by /healthz, -version and the User-Agent. A var rather
+// than a const so `make` can stamp the commit into it (-ldflags -X only works on
+// variables), which is what makes "which build is running" answerable for a
+// service. A plain `go build` still gives the honest dev default.
 var version = "0.1.0-dev"
 
 func main() {
 	// Time only, no date: this log is read while something is happening, and
-	// "why did that take so long to appear" is unanswerable without it. The date
-	// would be noise on a process that is restarted several times an evening, and
 	// journald stamps its own copy anyway.
 	log.SetFlags(log.Ltime)
 
@@ -83,11 +77,9 @@ func main() {
 			"invisible while the game is fullscreen; use \"overlay\"", cfg.HUD.Layer)
 	}
 	if cfg.HUD.Enabled && !cfg.HUD.ClickThrough {
-		// This got worse when each group gained its own coordinates: the surface
-		// now covers the whole monitor so that a coordinate means what it means in a
-		// screenshot, which means an input-consuming surface eats every click on the
-		// screen rather than the few over a small stack of text. The symptom is the
-		// game not responding at all, which nobody would trace to a HUD setting.
+		// The surface covers the whole monitor, so an input-consuming one eats
+		// every click on the screen. The symptom is the game not responding at
+		// all, which nobody would trace to a HUD setting.
 		log.Print("config: hud.click_through is off and the HUD surface covers the whole " +
 			"monitor, so it will swallow EVERY pointer event - the game will not respond " +
 			"to the mouse. Turn it back on unless you are debugging the surface.")
@@ -96,9 +88,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// The one-shot diagnostics poll with the credentials already on disk, so they
-	// must not need the bridge port - otherwise they cannot run at all while the
-	// daemon is up, which is exactly when you reach for them.
+	// The one-shot diagnostics use the credentials already on disk, so they must
+	// not need the bridge port - otherwise they cannot run while the daemon is
+	// up, which is exactly when you reach for them.
 	oneShot := *once || *dumpChals
 	app, err := newApp(ctx, cfg, *configPath, !oneShot)
 	if err != nil {
@@ -127,10 +119,9 @@ func main() {
 }
 
 // reportGameDetection answers "does df-hud see my game?" without starting
-// anything. Worth its own flag because the failure is silent: with
-// only_when_game_running set, a process name that does not match means df-hud
-// simply never polls, and the session clock never appears - which looks like the
-// HUD being broken rather than like a one-word config problem.
+// anything. Worth its own flag because the failure is silent: a process name
+// that does not match means df-hud never polls, which looks like the HUD being
+// broken rather than a one-word config problem.
 func reportGameDetection(cfg *Config) {
 	scanner := newProcScanner(cfg.Game.Process)
 	fmt.Printf("looking for a process whose argv[0] basename is %q\n", cfg.Game.Process)
@@ -166,14 +157,10 @@ func reportGameDetection(cfg *Config) {
 	}
 }
 
-// reportWindowDetection answers the other half of "does df-hud see my game?":
-// whether the COMPOSITOR's view of it can be found.
-//
-// It is a separate question from the process, and it has its own silent failure.
-// If the window cannot be matched, hud.follow_game_workspace quietly does
-// nothing and monitor = "auto" cannot follow the game - both of which look like
-// the feature being broken rather than like one config line. The window classes
-// are printed on a miss because that is the whole answer.
+// reportWindowDetection answers the other half: whether the COMPOSITOR's view of
+// the game can be found. Its own silent failure - an unmatched window makes
+// follow_game_workspace do nothing and monitor = "auto" unable to follow. The
+// window classes are printed on a miss because that is the whole answer.
 func reportWindowDetection(cfg *Config, game GameState) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -265,14 +252,14 @@ func describeConfigSource(cfg *Config, path string) string {
 	return "config " + cfg.path
 }
 
-// app is the wiring. Everything is assembled here and nowhere else, so the data
-// flow is readable in one place: bridge -> credentials -> poller -> store, with
-// the game watcher gating the poller and the catalog feeding derived values.
+// app is the wiring, assembled here and nowhere else so the data flow reads in
+// one place: bridge -> credentials -> poller -> store, with the game watcher
+// gating the poller and the catalog feeding derived values.
 type app struct {
-	// cfg is swapped wholesale on a config reload, from the watcher's goroutine,
-	// while every poller reads it once per iteration from its own. An atomic
-	// pointer is what makes that safe: the previous plain field was a data race
-	// that only stayed quiet because nothing had reloaded a config under load.
+	// cfg is swapped wholesale on reload from the watcher's goroutine while every
+	// poller reads it once per iteration from its own. Atomic because the previous
+	// plain field was a data race that only stayed quiet because nothing had
+	// reloaded a config under load.
 	cfg     atomic.Pointer[Config]
 	cfgPath string
 
@@ -282,11 +269,14 @@ type app struct {
 	game       *GameWatcher
 	visibility *visibilityWatcher
 	bosses     *BossPoller
-	poller     *Poller
-	challenges *ChallengePoller
-	gate       *rateGate
-	store      *Store
-	state      *stateStore
+	presence   *PresenceServer
+
+	lastMissedClick atomic.Int64
+	poller          *Poller
+	challenges      *ChallengePoller
+	gate            *rateGate
+	store           *Store
+	state           *stateStore
 
 	bridge    *bridgeServer
 	bridgeSrv *http.Server
@@ -299,11 +289,6 @@ type app struct {
 	// lastRunStart is only touched from the poller's tick callback, which is a
 	// single goroutine, so it needs no lock.
 	lastRunStart time.Time
-
-	// lastMissedClick rate limits the "clicked in the window but not on the
-	// button" line, in unix nanoseconds. Atomic because clicks arrive on the
-	// bridge's handler goroutines.
-	lastMissedClick atomic.Int64
 
 	reloadMu       sync.Mutex
 	onConfigReload func(*Config)
@@ -353,9 +338,8 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 	// clock instead of resetting it.
 	if run := a.state.Get().Run; run != nil {
 		a.store.SetRunSeed(run)
-		// And seeded here too, or a resumed run looks like a brand new one to
-		// recordXPSample and it throws away the rate window that was just
-		// restored from disk - undoing the one thing that persisting it was for.
+		// Seeded here too, or a resumed run looks brand new to recordXPSample
+		// and it discards the rate window just restored from disk.
 		a.lastRunStart = run.StartedAt
 	}
 	// One gate for every scheduler, so the minimum spacing is a property of
@@ -371,15 +355,29 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 			}
 			return 0, false
 		})
-	// The event feed is a different server with a different budget, so it gets its
-	// own client and its own scheduler rather than sharing the game's rate gate -
-	// coupling them would let one starve the other for no benefit.
+	// A different server with a different budget, so its own client and scheduler
+	// rather than sharing the game's rate gate: coupling them would let one starve
+	// the other for no benefit.
 	a.bosses = newBossPoller(&http.Client{Timeout: cfg.DF.Timeout.Duration}, a.game, a.Config,
 		func() bool {
 			snap, ok := a.store.Snapshot()
 			return ok && snap.PositionX == onslaughtCoord && snap.PositionY == onslaughtCoord
 		})
 	a.bosses.SetOnMap(func(m *BossMap) { a.store.SetBossMap(m) })
+
+	// Where you are, straight from the game client. Not a poller: the client
+	// pushes, so there is nothing to schedule and nothing to be polite about.
+	if cfg.Presence.Enabled {
+		a.presence = newPresenceServer(cfg.Presence.SocketPath())
+		a.presence.SetOnState(func(p PresenceState) {
+			a.store.SetPresence(p)
+			// A new block is the moment the event map matters, and the client
+			// says so 15-25s before the poll would.
+			if p.HasPosition {
+				a.bosses.Wake()
+			}
+		})
+	}
 
 	a.challenges.SetOnBoard(func(board []Challenge) {
 		a.store.SetChallenges(board, time.Now())
@@ -396,10 +394,10 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 		a.bosses.Wake()
 		a.visibility.Poke()
 	})
-	// levelSeen fires the one event the challenge board is waiting for. Only on
-	// the transition, never on every tick: waking that scheduler when it is not
-	// paused makes it poll again as soon as the shared gate allows, which would
-	// quietly pull the board's cadence down to the minimum request gap.
+	// levelSeen fires the one event the challenge board waits for. Only on the
+	// transition: waking that scheduler when it is not paused makes it poll again
+	// as soon as the gate allows, pulling the board's cadence down to the minimum
+	// request gap.
 	levelSeen := false
 	var lastBlock [2]int
 	a.poller.SetOnTick(func(tick Tick) {
@@ -413,10 +411,8 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 				a.challenges.Wake()
 			}
 		}
-		// Arriving on a new block is the moment the event map matters, since what
-		// is standing on the block you just walked onto is the only question it
-		// answers. Subject to the minimum interval, so walking cannot turn into a
-		// burst.
+		// Arriving on a new block is the moment the event map matters. Subject
+		// to the minimum interval, so walking cannot turn into a burst.
 		if snap, ok := a.store.Snapshot(); ok && snap.HasPosition {
 			block := [2]int{snap.PositionX, snap.PositionY}
 			if block != lastBlock {
@@ -440,8 +436,8 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 		// The same two corrections the tray offers, on the loopback listener so a
 		// keybind can reach them without taking a hand off the mouse.
 		bs.runStart = func() { a.store.RestartRun(time.Now(), "a keybind") }
-		bs.xpReset = a.resetXPRate
 		bs.runClick = a.runClick
+		bs.xpReset = a.resetXPRate
 		bs.overlayToggle = func() { a.visibility.SetEnabled(!a.visibility.Enabled()) }
 		bs.widgetToggle = func(group string) error {
 			if !knownGroup(group) {
@@ -465,10 +461,8 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 			"logged-in Dead Frontier page (the bridge userscript)")
 	}
 
-	// Create the config directory even with no config file in it, so the
-	// watcher has something to watch and a config dropped in later takes effect
-	// without a restart. Watching a directory that does not exist is what the
-	// "no such file or directory" case would otherwise be.
+	// Created even with no config file in it, so the watcher has something to
+	// watch and a config dropped in later takes effect without a restart.
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		log.Printf("config: could not create %s: %v", filepath.Dir(cfgPath), err)
 	}
@@ -505,8 +499,8 @@ func (a *app) Close() {
 	}
 }
 
-// runOnce is the -once mode: one poll, print what was derived, exit. The first
-// thing to reach for when asking "is the whole chain working?".
+// runOnce is -once: one poll, print what was derived, exit. The first thing to
+// reach for when asking "is the whole chain working?".
 func (a *app) runOnce(ctx context.Context, dumpFields bool) {
 	tick := a.poller.Once(ctx)
 	if tick.Err != nil {
@@ -561,9 +555,8 @@ func (a *app) dumpChallenges(ctx context.Context, raw bool) {
 		return
 	}
 
-	// Reward XP is a per-level multiplier, doubled for gold members, so the board
-	// cannot be rendered honestly without those two facts. Poll once for them
-	// rather than printing rewards at the wrong value.
+	// Reward XP is a per-level multiplier, doubled for gold members, so poll once
+	// for those two facts rather than printing rewards at the wrong value.
 	if _, ok := a.store.Snapshot(); !ok {
 		if tick := a.poller.Once(ctx); tick.Err == nil {
 			a.store.ApplyTick(tick)
@@ -608,8 +601,7 @@ func (a *app) dumpChallenges(ctx context.Context, raw bool) {
 
 func (a *app) run(ctx context.Context, opts runOptions) {
 	// Everything runs in its own goroutine and communicates only through the
-	// store, which matters because GTK then takes the main thread and never
-	// gives it back.
+	// store, because GTK then takes the main thread and never gives it back.
 	go a.game.Run(ctx)
 	go a.visibility.Run(ctx)
 	// One event stream, two subscribers. Neither parses the payload: an event is
@@ -625,6 +617,9 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 	go a.poller.Run(ctx)
 	go a.challenges.Run(ctx)
 	go a.bosses.Run(ctx)
+	if a.presence != nil {
+		go a.presence.Run(ctx)
+	}
 	go a.reportChallengeStatus(ctx)
 	if a.watcher != nil {
 		go a.watcher.Run(ctx, a.Config, a.applyReload)
@@ -703,10 +698,10 @@ func (a *app) reportChallengeStatus(ctx context.Context) {
 				a.store.SetChallengeStatus("board unavailable (retrying)")
 				continue
 			}
-			// Nothing is wrong and no board has arrived yet: the first fetch is in
-			// flight. Clearing matters as much as setting - without it the last
-			// pause reason outlives the pause, so the HUD went on saying "the game
-			// is not running" for a whole session with the game plainly running.
+			// Nothing wrong and no board yet: the first fetch is in flight.
+			// Clearing matters as much as setting - without it the last pause
+			// reason outlives the pause, and the HUD went on saying "the game is
+			// not running" for a whole session with the game plainly running.
 			a.store.SetChallengeStatus("")
 		}
 	}
@@ -747,10 +742,8 @@ func (a *app) applyReload(next *Config, _ []string) {
 	// should be on screen right now.
 	a.visibility.Poke()
 	a.bosses.Wake()
-	// And the HUD's appearance is config too: without this, font size, colours,
-	// margins and which widgets exist would silently need a restart while
-	// everything else reloaded, which is the sort of half-working reload that is
-	// worse than none.
+	// The HUD's appearance is config too: without this, font size, colours and
+	// margins would silently need a restart while everything else reloaded.
 	a.reloadMu.Lock()
 	fn := a.onConfigReload
 	a.reloadMu.Unlock()
@@ -760,13 +753,11 @@ func (a *app) applyReload(next *Config, _ []string) {
 	log.Print("config: reloaded")
 }
 
-// reloadOnSIGHUP is `systemctl --user reload df-hud`, and the same thing by hand.
+// reloadOnSIGHUP is `systemctl --user reload df-hud`, and the same by hand.
 //
-// It has to be handled rather than left alone: the default disposition for SIGHUP
-// is to terminate, so a unit file with an ExecReload of kill -HUP would KILL the
-// HUD - a "reload" that loses the run clock and the XP window is not a reload. A
-// restart is always available for the fields that need one; this is for the ones
-// that do not.
+// It has to be HANDLED rather than left alone: the default disposition for
+// SIGHUP is to terminate, so an ExecReload of kill -HUP would kill the HUD - and
+// a "reload" that loses the run clock and the XP window is not a reload.
 func (a *app) reloadOnSIGHUP(ctx context.Context) {
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
@@ -794,33 +785,95 @@ func (a *app) reloadConfig() {
 	a.applyReload(next, frozen)
 }
 
-// resetXPRate throws the rate window away so the average starts again from the
-// next poll.
-//
-// This is the tray menu's answer to a challenge reward: a lump of XP that no
-// amount of killing produced, which then inflates the average for as long as the
-// window is wide. df-hud cannot tell where a lump came from - the record reports
-// a total, not a source - so the judgement has to be the player's.
+// resetXPRate throws the rate window away, the tray's answer to a challenge
+// reward: a lump of XP no killing produced, which inflates the average for as
+// long as the window is wide. The record reports a total, not a source, so the
+// judgement has to be the player's.
 func (a *app) resetXPRate() {
 	a.state.ResetXPWindow("reset from the tray menu")
 }
 
-// runClick decides whether a passed-through click on the game window was the
-// Start button, and starts the run clock if it was.
-//
-// The three guards, in the order they are cheapest:
-//
-//  1. A run already in progress means every click during play is inert, which is
-//     what makes binding a mouse button safe at all. It also matches how the game
-//     works: you press Start once, and again only after extracting or dying.
-//  2. The click must be in the GAME's focused window, so a click at the same
-//     screen position in a browser does nothing.
-//  3. It must be inside the configured button, measured from the window's own
-//     corner rather than the screen's, so it survives the game being on another
-//     monitor.
-//
-// A rejected click is silent. It is the normal case - most clicks are not on that
-// button - and a line per click would be a log full of nothing.
+// persistRun stores the run clock's start, so a df-hud restart mid-run resumes
+// the clock instead of showing zero for a run that is an hour old.
+func (a *app) persistRun() {
+	start, game := a.store.Run()
+	a.state.Update(func(st *State) {
+		if start.IsZero() || !game.Running {
+			st.Run = nil
+			return
+		}
+		st.Run = &RunState{StartedAt: start, GamePID: game.PID, GameStartedAt: game.StartedAt}
+	})
+}
+
+// recordXPSample feeds the rate window. It lives here rather than in the store
+// because it is the one place that knows both the snapshot and the persistent
+// state.
+func (a *app) recordXPSample() {
+	snap, ok := a.store.Snapshot()
+	if !ok || snap.XPSource == xpSourceNone || snap.CumulativeXP <= 0 {
+		return
+	}
+	cfg := a.Config()
+	window := cfg.Widget.XP.EffectiveWindow(cfg.Poll.ActiveInterval.Duration)
+
+	// A new run starts a new average: the samples before it were collected while
+	// the launcher was on screen earning nothing, so averaging across makes the
+	// first minutes read as a fraction of the real rate.
+	if runStart, _ := a.store.Run(); xpRunReset(a.lastRunStart, runStart) {
+		a.lastRunStart = runStart
+		a.state.ResetXPWindow("a new run started")
+	}
+
+	// Discard the window when the samples either side stop being comparable - a
+	// boost, a death, a clock jump, a long absence. Averaging across any of those
+	// produces a rate that describes no real period.
+	if prev, had := a.store.PreviousSnapshot(); had {
+		if reason := xpWindowReset(prev, snap, window); reason != "" {
+			a.state.ResetXPWindow(reason)
+		}
+	}
+
+	a.state.AppendXPSample(XPSample{
+		At:         snap.At,
+		Cumulative: snap.CumulativeXP,
+		Source:     snap.XPSource.String(),
+	}, window)
+}
+
+// withheldFieldPattern names what must never be printed. The rest - level, cash,
+// kills, position - is what DFProfiler publishes publicly for any account, so
+// printing it on the player's own machine costs nothing and answers most "why is
+// this widget empty?" questions. df_session3d is withheld because its meaning is
+// unverified and a field named "session" gets the benefit of the doubt.
+var withheldFieldPattern = regexp.MustCompile(`(?i)pass|token|cookie|auth|secretkey|^sc$|session`)
+
+// dumpRecordFields prints the raw player record for diagnostics.
+func dumpRecordFields(vars map[string]string) {
+	names := make([]string, 0, len(vars))
+	for name := range vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	fmt.Printf("%d fields returned:\n", len(names))
+	for _, name := range names {
+		value := vars[name]
+		if withheldFieldPattern.MatchString(name) {
+			value = "[withheld]"
+		}
+		fmt.Printf("  %s = %s\n", name, value)
+	}
+}
+
+func printViewJSON(v *View) {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		log.Printf("view: %v", err)
+		return
+	}
+	fmt.Fprintln(os.Stdout, string(data))
+}
+
 func (a *app) runClick() {
 	cfg := a.Config()
 	start, game := a.store.Run()
@@ -880,90 +933,4 @@ func logMissedClick(last *atomic.Int64, now time.Time, every time.Duration) bool
 			return true
 		}
 	}
-}
-
-// persistRun stores the run clock's start, so a df-hud restart mid-run resumes
-// the clock instead of showing zero for a run that is an hour old.
-func (a *app) persistRun() {
-	start, game := a.store.Run()
-	a.state.Update(func(st *State) {
-		if start.IsZero() || !game.Running {
-			st.Run = nil
-			return
-		}
-		st.Run = &RunState{StartedAt: start, GamePID: game.PID, GameStartedAt: game.StartedAt}
-	})
-}
-
-// recordXPSample feeds the rate window. It lives here rather than in the store
-// because it is the one place that knows both the snapshot and the persistent
-// state.
-func (a *app) recordXPSample() {
-	snap, ok := a.store.Snapshot()
-	if !ok || snap.XPSource == xpSourceNone || snap.CumulativeXP <= 0 {
-		return
-	}
-	cfg := a.Config()
-	window := cfg.Widget.XP.EffectiveWindow(cfg.Poll.ActiveInterval.Duration)
-
-	// A new run starts a new average. The samples from before it were collected
-	// while the launcher was on screen earning nothing, and averaging across that
-	// makes the first minutes of a run read as a fraction of the real rate.
-	// Compared against the last value seen rather than handled inside the store,
-	// so the store stays a data structure and this stays the one place that knows
-	// about the persistent window.
-	if runStart, _ := a.store.Run(); xpRunReset(a.lastRunStart, runStart) {
-		a.lastRunStart = runStart
-		a.state.ResetXPWindow("a new run started")
-	}
-
-	// Discard the window when the samples either side stop being comparable - a
-	// boost, a death, a clock jump, a long absence. Averaging across any of those
-	// produces a rate that describes no real period.
-	if prev, had := a.store.PreviousSnapshot(); had {
-		if reason := xpWindowReset(prev, snap, window); reason != "" {
-			a.state.ResetXPWindow(reason)
-		}
-	}
-
-	a.state.AppendXPSample(XPSample{
-		At:         snap.At,
-		Cumulative: snap.CumulativeXP,
-		Source:     snap.XPSource.String(),
-	}, window)
-}
-
-// withheldFieldPattern names the parts of the player record that must never be
-// printed. The rest of it - level, cash, kills, position - is the same data
-// DFProfiler publishes publicly for any account, so printing it on the player's
-// own machine costs nothing and answers most "why is this widget empty?"
-// questions. Credentials are a different matter, and df_session3d is withheld
-// because its meaning is unverified and a field with "session" in the name gets
-// the benefit of the doubt.
-var withheldFieldPattern = regexp.MustCompile(`(?i)pass|token|cookie|auth|secretkey|^sc$|session`)
-
-// dumpRecordFields prints the raw player record for diagnostics.
-func dumpRecordFields(vars map[string]string) {
-	names := make([]string, 0, len(vars))
-	for name := range vars {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	fmt.Printf("%d fields returned:\n", len(names))
-	for _, name := range names {
-		value := vars[name]
-		if withheldFieldPattern.MatchString(name) {
-			value = "[withheld]"
-		}
-		fmt.Printf("  %s = %s\n", name, value)
-	}
-}
-
-func printViewJSON(v *View) {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		log.Printf("view: %v", err)
-		return
-	}
-	fmt.Fprintln(os.Stdout, string(data))
 }

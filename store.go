@@ -336,6 +336,13 @@ type Store struct {
 	runStart time.Time
 	runSeed  *RunState
 
+	// presence is where the game CLIENT says you are, which beats the server's
+	// own record - see presence.go for the measurement. Kept beside the snapshot
+	// rather than folded into it because the two arrive independently and only
+	// this one is allowed to answer "where am I".
+	presence     PresenceState
+	havePresence bool
+
 	bossMap     *BossMap
 	board       []Challenge
 	haveBoard   bool
@@ -605,6 +612,60 @@ func (s *Store) Challenges() ([]Challenge, bool) {
 	return s.board, s.haveBoard
 }
 
+// SetPresence records what the game client last published about where you are.
+//
+// Only accepted while the game is running. The client's last word survives its
+// own death - nothing retracts a presence when a process exits - so without this
+// a closed game would leave the HUD certain of a position forever.
+func (s *Store) SetPresence(p PresenceState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.game.Running {
+		return
+	}
+	s.presence, s.havePresence = p, true
+}
+
+// presencePositionLocked is the client's position when it is usable: it exists,
+// it is not the "Loading..." placeholder, and it is not older than the poll that
+// would otherwise answer.
+//
+// The staleness check is what makes this safe to prefer. The client publishes at
+// most every ~5s and only on a change, so standing still leaves the last frame
+// arbitrarily old - fine while it is still true, wrong the moment the game
+// closes or the socket drops. Falling back to the poll then costs freshness and
+// keeps correctness, which is the right way round.
+func (s *Store) presencePositionLocked(now time.Time) (PresenceState, bool) {
+	if !s.havePresence || !s.game.Running {
+		return PresenceState{}, false
+	}
+	if now.Sub(s.presence.At) > presenceMaxAge {
+		return PresenceState{}, false
+	}
+	return s.presence, true
+}
+
+// ClientInWorld reports whether the game is past its loading screen.
+//
+// True whenever the client has not said otherwise - no feed, a stale one, or one
+// that has not spoken yet - so a machine with no bridge can still send keys.
+func (s *Store) ClientInWorld(now time.Time) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.presencePositionLocked(now)
+	if !ok {
+		return true
+	}
+	return !p.Loading
+}
+
+// presenceMaxAge is how long the client's last word is trusted after it stops
+// talking. Generous, because silence is the NORMAL case - the client only
+// publishes on a change, so standing on one block for a minute is a minute of
+// silence about a position that is still perfectly true. It only has to be short
+// enough that a dead socket does not leave a stale block on screen indefinitely.
+const presenceMaxAge = 2 * time.Minute
+
 // SetBossMap replaces the city event map.
 func (s *Store) SetBossMap(m *BossMap) {
 	s.mu.Lock()
@@ -705,17 +766,21 @@ type View struct {
 	CumulativeXP  int64
 	XPSource      string
 
-	HasPosition  bool
-	PositionX    int
-	PositionY    int
-	PositionZ    int
-	TradeZone    int
-	ZoneName     string
-	InOutpost    bool
-	OutpostName  string
-	HasDanger    bool
-	DangerLevel  int
-	BlockSupport time.Duration
+	HasPosition bool
+	PositionX   int
+	PositionY   int
+	PositionZ   int
+	// PositionSource is "presence" when the client answered and empty when the
+	// poll did. Worth carrying: the two disagree for 15-25s at a time while you
+	// walk, so "which one is this" is the first question about a wrong block.
+	PositionSource string
+	TradeZone      int
+	ZoneName       string
+	InOutpost      bool
+	OutpostName    string
+	HasDanger      bool
+	DangerLevel    int
+	BlockSupport   time.Duration
 
 	// BlockEvents is what is standing on your block right now. Empty is the normal
 	// case - most blocks hold nothing.
@@ -837,6 +902,30 @@ func (s *Store) Derive(now time.Time) *View {
 		v.BoostExpIn = snap.BoostExp.Remaining(now)
 		v.BoostExpForever = snap.BoostExp.Forever
 		v.Dead = snap.Dead
+	}
+
+	// Where you are, from the client rather than the server. AFTER the snapshot so
+	// it wins, and BEFORE the event map below so the block's events, the nearest
+	// walk and the map's own ring are all answering about the same block.
+	//
+	// Only position and outpost state are taken. Everything else the client
+	// publishes is either absent from the presence or better from the poll.
+	if p, ok := s.presencePositionLocked(now); ok {
+		switch {
+		case p.HasPosition:
+			v.HasPosition = true
+			v.PositionX, v.PositionY = p.X, p.Y
+			v.PositionSource = "presence"
+			// Out on the map by definition, which is fresher than df_inoutpost -
+			// a field the poll gets wrong for a minute at a time.
+			v.InOutpost, v.OutpostName = false, ""
+		case p.InOutpost:
+			// An outpost is published by NAME, with no coordinates, so the
+			// snapshot's position stands - it is right whenever you are standing
+			// still, which in an outpost you are.
+			v.InOutpost, v.OutpostName = true, p.OutpostName
+			v.PositionSource = "presence"
+		}
 	}
 
 	if s.bossMap != nil {

@@ -201,6 +201,35 @@ interval = "1m"
 max_interval = "5m"
 onslaught_interval = "30s"
 onslaught_max_interval = "1m"
+
+[presence]
+# Where you are, from the game CLIENT instead of the game server.
+#
+# The client publishes its own position as Discord rich presence, and df-hud
+# listens by being the thing Discord would be. Discord itself is not involved and
+# does not need to be running.
+#
+# This is not a freshness tweak, it is a better source. Measured 2026-08-16 with
+# both running at once: the polled df_positionx/y lagged the client by 15-25s
+# while walking AND skipped blocks entirely - one block never appeared in a
+# single poll, the server jumped straight past it. The client updates on every
+# block change, about every 5s at most. So the boss list, the Onslaught panel,
+# the nearest-event row and the map's position ring all describe the block you
+# are actually standing on rather than one you left twenty seconds ago.
+#
+# The poll stays authoritative for everything else - XP, HP, block support - and
+# takes the position back if the client goes quiet for two minutes.
+#
+# Under Proton this needs the game's Discord pipe bridged to the socket; see
+# knowledge/presence.md. If a real Discord or Vesktop already holds the socket,
+# df-hud says so once and carries on with the polled position.
+enabled = true
+
+# Where to listen. Empty is $XDG_RUNTIME_DIR/discord-ipc-0, which is the only
+# path the game tries first - a custom one is only useful with rpc-bridge's
+# BRIDGE_RPC_PATH pointed at the same place.
+socket = ""
+
 [tray]
 # The icon in the system tray (waybar's "tray" module, or any other
 # StatusNotifierItem host), with a menu for hiding the overlay, reloading this

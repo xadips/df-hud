@@ -82,6 +82,7 @@ type Config struct {
 	HUD      HUDConfig      `toml:"hud"`
 	BossMap  BossMapConfig  `toml:"bossmap"`
 	RunStart RunStartConfig `toml:"run_start"`
+	Presence PresenceConfig `toml:"presence"`
 	Tray     TrayConfig     `toml:"tray"`
 	Widget   WidgetConfig   `toml:"widget"`
 	Console  ConsoleConfig  `toml:"console"`
@@ -274,6 +275,28 @@ func (c BossMapConfig) Intervals(onslaught bool) (min, max time.Duration) {
 		return c.OnslaughtInterval.Duration, c.OnslaughtMaxInterval.Duration
 	}
 	return c.Interval.Duration, c.MaxInterval.Duration
+}
+
+// PresenceConfig is the game client's own position, read by pretending to be
+// Discord. See presence.go for why this beats the polled position.
+type PresenceConfig struct {
+	Enabled bool `toml:"enabled"`
+
+	// Socket is where to listen. Empty means $XDG_RUNTIME_DIR/discord-ipc-0,
+	// which is the only path the game looks at first - so a custom one is only
+	// useful with rpc-bridge's BRIDGE_RPC_PATH pointed at the same place.
+	//
+	// If a real Discord or Vesktop already holds that socket, df-hud logs it and
+	// falls back to the poll rather than fighting for it.
+	Socket string `toml:"socket"`
+}
+
+// SocketPath is the configured socket, or the default one.
+func (c PresenceConfig) SocketPath() string {
+	if s := strings.TrimSpace(c.Socket); s != "" {
+		return expandHome(s)
+	}
+	return defaultPresenceSocket()
 }
 
 // RunStartConfig turns a passed-through click on the game's own Start button into
@@ -645,6 +668,7 @@ func defaultConfig() *Config {
 		},
 		// On by default: it needs no credentials, no network and no Discord, and
 		// where it cannot bind it simply stands down.
+		Presence: PresenceConfig{Enabled: true},
 		RunStart: RunStartConfig{
 			ClickEnabled: true,
 			// Measured in the game at 2560x1440. Wrong for any other resolution,
