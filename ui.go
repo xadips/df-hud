@@ -1,4 +1,4 @@
-//go:build linux && cgo && !nolayershell
+//go:build (linux || windows) && cgo && !nolayershell
 
 package main
 
@@ -16,29 +16,22 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
-// The HUD surface. This is the part M0 existed to de-risk, and the call sequence
-// below is the one that spike validated:
+// The shared GTK HUD surface. Platform-specific overlay setup is deliberately
+// kept behind platformOverlay:
 //
-//   - assert gtk_layer_is_supported() BEFORE opening anything. When
-//     gtk4-layer-shell loses the link-order race against libwayland-client it
-//     does not fail, it silently no-ops into an ordinary toplevel window - which
-//     looks exactly like df-hud being broken. Failing loudly with the LD_PRELOAD
-//     remedy is the difference between a two-minute fix and an evening.
-//   - every layer-shell property must be set before Present().
-//   - IsLayerWindow() after Present() catches the same failure from the other
-//     side.
-//   - click-through needs a realized surface, which Present() does not guarantee
-//     synchronously, and GTK recreates the input region whenever it recreates
-//     the surface - hence the idle retry and the re-apply on map.
+//   - Linux validates and configures gtk4-layer-shell before Present().
+//   - Windows configures GTK before realization and the HWND after realization.
+//   - native click-through/window styles are re-applied on every map because GTK
+//     may recreate or reset the native surface during a hide/show cycle.
 //
 // GTK owns the main OS thread, so Run blocks. Every other component is already
 // running in its own goroutine by the time this is called, and they communicate
 // only through the store, so nothing here needs a lock.
 
 type hud struct {
-	app    *app
-	window *gtk.ApplicationWindow
-	handle uintptr
+	app     *app
+	window  *gtk.ApplicationWindow
+	overlay platformOverlay
 	// fixed places each group at its own coordinates. The surface spans the whole
 	// monitor, so those coordinates are screen coordinates.
 	//
@@ -64,25 +57,30 @@ type hud struct {
 	// a config reload can re-centre a group without waiting for the next remap.
 	monitorW, monitorH int
 	// monitorPinned is the connector the surface is currently pinned to, empty
-	// for "the compositor chooses".
+	// for the platform default.
 	monitorPinned  string
 	warnedMonitors map[string]bool
 }
 
+// platformOverlay is the window-system seam used by the shared GTK UI.
+// Implementations configure an unrealized GtkWindow first, then apply the
+// native details that require a mapped surface.
+type platformOverlay interface {
+	setup(*Config) error
+	applyPlacement(*Config)
+	defaultMonitor([]*gdk.Monitor) *gdk.Monitor
+	monitorName(*gdk.Monitor) string
+	setMonitor(*gdk.Monitor)
+	applyMapped(bool) bool
+	maintain(bool)
+	ready()
+}
+
 // runUI takes over the calling goroutine, which must be the main OS thread.
 func runUI(ctx context.Context, a *app) error {
-	if !LayerShellBuilt {
-		return fmt.Errorf("this binary was built with -tags nolayershell, so it has no HUD; " +
-			"run with -headless, or rebuild without that tag")
+	if err := checkPlatformOverlay(); err != nil {
+		return err
 	}
-	if !Supported() {
-		return fmt.Errorf("gtk4-layer-shell reports no zwlr_layer_shell_v1 support.\n" +
-			"On Hyprland this is almost certainly the library load order rather than the " +
-			"compositor.\nRemedy: LD_PRELOAD=/usr/lib/libgtk4-layer-shell.so df-hud")
-	}
-	major, minor, micro := Version()
-	log.Printf("hud: gtk4-layer-shell %d.%d.%d, zwlr_layer_shell_v1 v%d",
-		major, minor, micro, ProtocolVersion())
 
 	gtkApp := gtk.NewApplication("com.xadips.dfhud", gio.ApplicationFlagsNone)
 	h := &hud{app: a}
@@ -145,18 +143,14 @@ func (h *hud) build(gtkApp *gtk.Application) {
 	}
 
 	h.window = gtk.NewApplicationWindow(gtkApp)
-	h.handle = h.window.Native()
+	h.overlay = newPlatformOverlay(h.window)
 
-	// Everything from here to Present() is load-bearing order.
-	InitForWindow(h.handle)
-	if !IsLayerWindow(h.handle) {
-		log.Fatal("hud: InitForWindow did not take - this is an ordinary toplevel, not a " +
-			"layer surface, so it will not draw over the game. This is the gtk4-layer-shell " +
-			"load-order failure; try LD_PRELOAD=/usr/lib/libgtk4-layer-shell.so")
+	// Platform setup has to happen before realization. On Wayland this creates
+	// the layer surface; on Windows it sets GTK's decoration and focus policy
+	// before GDK creates the HWND.
+	if err := h.overlay.setup(cfg); err != nil {
+		log.Fatalf("hud: could not initialise overlay: %v", err)
 	}
-	SetNamespace(h.handle, namespace)
-	SetExclusiveZone(h.handle, -1)          // never reserve space, never be pushed around
-	SetKeyboardMode(h.handle, KeyboardNone) // the game keeps every keypress
 	h.applyPlacement(cfg)
 
 	h.fixed = gtk.NewFixed()
@@ -166,12 +160,10 @@ func (h *hud) build(gtkApp *gtk.Application) {
 	h.fixed.Put(h.status, float64(cfg.Widget.Status.X), float64(cfg.Widget.Status.Y))
 	h.rebuildWidgets(cfg)
 	h.window.SetChild(h.fixed)
-	if cfg.HUD.ClickThrough {
-		// Re-applied on every map, not just the first: GTK owns the input region
-		// and replaces ours whenever it recreates the surface, which now happens
-		// on every hide/show cycle rather than only at startup.
-		h.window.ConnectMap(h.applyClickThrough)
-	}
+	// Re-applied on every map, not just the first. GTK/GDK can recreate the
+	// native surface during a hide/show cycle, and both backends need the
+	// realized native surface before they can install input/window styles.
+	h.window.ConnectMap(h.applyMappedOverlay)
 
 	// The tray item keeps df-hud running with nothing on screen. Without this
 	// hold, hiding the HUD would be the last window going away and
@@ -212,6 +204,7 @@ func (h *hud) build(gtkApp *gtk.Application) {
 	// move with no network activity at all.
 	glib.TimeoutAdd(1000, func() bool {
 		if h.visible {
+			h.overlay.maintain(h.app.Config().HUD.ClickThrough)
 			h.update()
 		}
 		if err := h.app.state.MaybeSave(); err != nil {
@@ -220,26 +213,18 @@ func (h *hud) build(gtkApp *gtk.Application) {
 		return true
 	})
 
-	log.Printf("hud: ready (check: hyprctl layers | grep -A3 %s)", namespace)
+	h.overlay.ready()
 }
 
-// applyPlacement sets the layer-shell geometry. Every one of these can be set on
-// a live surface, which is what lets the margins be edited while playing.
+// applyPlacement updates the platform window geometry and opacity. Both backends
+// support applying it to a live surface, so margins can be edited while playing.
 //
 // All four edges are anchored, so the surface covers the monitor and the origin
 // every widget position is measured from is the top-left of the screen (inset by
 // the margins). A surface sized to its content could not do that: a group at
 // x=2340 would stretch it, and one group's text growing would move the others.
 func (h *hud) applyPlacement(cfg *Config) {
-	SetLayer(h.handle, cfg.HUD.LayerValue())
-	for _, edge := range []Edge{EdgeTop, EdgeRight, EdgeBottom, EdgeLeft} {
-		SetAnchor(h.handle, edge, true)
-	}
-	SetMargin(h.handle, EdgeTop, cfg.HUD.MarginTop)
-	SetMargin(h.handle, EdgeRight, cfg.HUD.MarginRight)
-	SetMargin(h.handle, EdgeBottom, cfg.HUD.MarginBottom)
-	SetMargin(h.handle, EdgeLeft, cfg.HUD.MarginLeft)
-	h.window.SetOpacity(cfg.HUD.Opacity)
+	h.overlay.applyPlacement(cfg)
 }
 
 // rebuildWidgets replaces the widget tree. The status label is kept: it is the
@@ -268,6 +253,9 @@ func (h *hud) applyConfig(cfg *Config) {
 	}
 	h.css.LoadFromData(styleSheet(cfg))
 	h.applyPlacement(cfg)
+	if h.visible {
+		h.applyMappedOverlay()
+	}
 	if widgetSignature(cfg) != h.widgetSig {
 		h.rebuildWidgets(cfg)
 		// Re-centre what asked to be centred. A rebuilt group is put back at its
@@ -308,9 +296,8 @@ func (h *hud) applyVisibility(state hudVisibility) {
 
 	want := h.wantMonitor(state)
 	if h.visible && want != h.monitorPinned {
-		// Re-pointing a mapped layer surface at a different output is not
-		// something gtk4-layer-shell promises to handle, so it is done the way
-		// that is certain to work: unmap, re-point, map again.
+		// Re-pointing a mapped native surface is backend-sensitive, so use the
+		// reliable sequence on both platforms: unmap, re-point, map again.
 		h.visible = false
 		h.window.SetVisible(false)
 	}
@@ -349,23 +336,24 @@ func (h *hud) wantMonitor(state hudVisibility) string {
 	return state.Monitor
 }
 
-// pinMonitor points the surface at one output, or at none, which is how
-// layer-shell spells "compositor's choice" (in practice the focused monitor). It
-// returns the output it resolved, for sizing, and nil when it could not.
+// pinMonitor points the surface at one output, or asks the backend for its
+// default. It returns the output resolved for sizing, or nil when the backend
+// deliberately leaves the choice to the compositor.
 //
 // An unknown connector is a warning rather than a failure: losing the whole HUD
 // because a connector got renamed after a cable swap would be a poor trade. The
 // warning is said once per name, since this now runs on every show.
 func (h *hud) pinMonitor(want string) *gdk.Monitor {
 	h.monitorPinned = want
-	if want == "" {
-		SetMonitor(h.handle, 0)
-		return nil
-	}
 	monitors := allMonitors()
-	monitor := monitorByConnector(monitors, want)
+	if want == "" {
+		monitor := h.overlay.defaultMonitor(monitors)
+		h.overlay.setMonitor(monitor)
+		return monitor
+	}
+	monitor := h.monitorByName(monitors, want)
 	if monitor != nil {
-		SetMonitor(h.handle, monitor.Native())
+		h.overlay.setMonitor(monitor)
 		return monitor
 	}
 	if h.warnedMonitors == nil {
@@ -373,12 +361,13 @@ func (h *hud) pinMonitor(want string) *gdk.Monitor {
 	}
 	if !h.warnedMonitors[want] {
 		h.warnedMonitors[want] = true
-		log.Printf("hud: no monitor named %q (found: %s); letting the compositor choose",
-			want, strings.Join(connectorNames(monitors), ", "))
+		log.Printf("hud: no monitor named %q (found: %s); using the platform default",
+			want, strings.Join(h.monitorNames(monitors), ", "))
 	}
 	h.monitorPinned = ""
-	SetMonitor(h.handle, 0)
-	return nil
+	monitor = h.overlay.defaultMonitor(monitors)
+	h.overlay.setMonitor(monitor)
+	return monitor
 }
 
 // allMonitors is every output GDK knows about, in its order.
@@ -401,24 +390,26 @@ func allMonitors() []*gdk.Monitor {
 	return out
 }
 
-func monitorByConnector(monitors []*gdk.Monitor, want string) *gdk.Monitor {
+func (h *hud) monitorByName(monitors []*gdk.Monitor, want string) *gdk.Monitor {
 	if want == "" {
 		return nil
 	}
 	for _, monitor := range monitors {
-		if monitor.Connector() == want {
+		if h.overlay.monitorName(monitor) == want {
 			return monitor
 		}
 	}
 	return nil
 }
 
-// connectorNames is for the "no monitor named X" warning, where the list of what
-// GDK actually sees is the whole answer.
-func connectorNames(monitors []*gdk.Monitor) []string {
+// monitorNames is for the "no monitor named X" warning. The Win32 backend
+// supplies native display device names when GDK has no connector string.
+func (h *hud) monitorNames(monitors []*gdk.Monitor) []string {
 	names := make([]string, 0, len(monitors))
 	for _, monitor := range monitors {
-		names = append(names, monitor.Connector())
+		if name := h.overlay.monitorName(monitor); name != "" {
+			names = append(names, name)
+		}
 	}
 	return names
 }
@@ -480,22 +471,31 @@ func (h *hud) centreGroups(width, height int) {
 	}
 }
 
-// applyClickThrough installs an empty input region so every pointer event lands
-// on the game instead of the HUD.
+// applyMappedOverlay installs the platform's native overlay styles after the
+// surface exists. This includes click-through when configured.
 //
-// The idle retry is because a mapped widget does not guarantee a realized
-// Wayland surface at the instant the signal fires, and there is no signal for
-// "the wl_surface now exists". It gives up if the HUD is hidden again in the
-// meantime, so a hide during the retry cannot leave an idle callback spinning.
-func (h *hud) applyClickThrough() {
-	if SetClickThrough(h.handle, true) {
+// A map signal does not guarantee that the backend's native surface handle is
+// available synchronously. The retry gives up if the HUD is hidden again, so a
+// hide cannot leave an idle callback spinning.
+func (h *hud) applyMappedOverlay() {
+	if h.overlay.applyMapped(h.app.Config().HUD.ClickThrough) {
+		// GDK can still normalize native window styles after emitting map. Apply
+		// once more from idle so Win32 keeps TOOLWINDOW/NOACTIVATE and Wayland
+		// keeps its input region after the map transaction settles.
+		glib.IdleAdd(func() bool {
+			if h.visible {
+				h.overlay.applyMapped(h.app.Config().HUD.ClickThrough)
+			}
+			return false
+		})
 		return
 	}
 	glib.IdleAdd(func() bool {
 		if !h.visible {
 			return false
 		}
-		return !SetClickThrough(h.handle, true) // keep trying until it takes
+		// Keep trying until GDK exposes the native surface.
+		return !h.overlay.applyMapped(h.app.Config().HUD.ClickThrough)
 	})
 }
 

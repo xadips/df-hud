@@ -13,3 +13,5 @@ positions.ndjson
 
 # Build output
 /df-hud
+/dist/
+/df-hud_windows_amd64.syso

@@ -340,9 +340,8 @@ func (c BossMapConfig) Intervals(onslaught bool) (min, max time.Duration) {
 type PresenceConfig struct {
 	Enabled bool `toml:"enabled"`
 
-	// Socket is where to listen. Empty means $XDG_RUNTIME_DIR/discord-ipc-0,
-	// which is the only path the game looks at first - so a custom one is only
-	// useful with rpc-bridge's BRIDGE_RPC_PATH pointed at the same place.
+	// Socket is where to listen. Empty selects discord-ipc-0 at the platform's
+	// standard endpoint: $XDG_RUNTIME_DIR on Linux or \\.\pipe on Windows.
 	//
 	// If a real Discord or Vesktop already holds that socket, df-hud logs it and
 	// falls back to the poll rather than fighting for it.
@@ -758,28 +757,6 @@ func defaultConfig() *Config {
 		},
 		Console: ConsoleConfig{Width: 720, Height: 560},
 	}
-}
-
-func defaultConfigPath() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "df-hud", "config.toml")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "config.toml"
-	}
-	return filepath.Join(home, ".config", "df-hud", "config.toml")
-}
-
-func defaultDataDir() string {
-	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
-		return filepath.Join(dir, "df-hud")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "."
-	}
-	return filepath.Join(home, ".local", "share", "df-hud")
 }
 
 // expandHome turns a leading ~ into the home directory, because paths in a

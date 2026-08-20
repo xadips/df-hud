@@ -9,8 +9,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -248,16 +246,6 @@ func (p *PresenceServer) Last() (PresenceState, bool) {
 	return p.last, p.haveLast
 }
 
-// defaultPresenceSocket is where Discord's own client would listen. The game
-// tries discord-ipc-0 first, so that is where df-hud has to be to be found.
-func defaultPresenceSocket() string {
-	dir := os.Getenv("XDG_RUNTIME_DIR")
-	if dir == "" {
-		dir = filepath.Join(os.TempDir())
-	}
-	return filepath.Join(dir, "discord-ipc-0")
-}
-
 // Run serves until the context ends.
 //
 // FAILS OPEN, always. Everything this provides is an improvement on a source
@@ -272,7 +260,7 @@ func (p *PresenceServer) Run(ctx context.Context) {
 	}
 	defer func() {
 		listener.Close()
-		os.Remove(p.path)
+		cleanupPresenceEndpoint(p.path)
 	}()
 	log.Printf("presence: listening on %s", p.path)
 
@@ -294,26 +282,8 @@ func (p *PresenceServer) Run(ctx context.Context) {
 	}
 }
 
-// listen binds the socket, clearing a stale one left by a crash.
-//
-// A socket file that nothing is listening on is ours to remove; one with a live
-// peer is somebody else's and is left alone. Dialling it is the only way to tell
-// the two apart, since both are just a file on disk.
 func (p *PresenceServer) listen() (net.Listener, error) {
-	if _, err := os.Stat(p.path); err == nil {
-		conn, dialErr := net.DialTimeout("unix", p.path, 300*time.Millisecond)
-		if dialErr == nil {
-			conn.Close()
-			return nil, fmt.Errorf("%s is already served by something else", p.path)
-		}
-		if err := os.Remove(p.path); err != nil {
-			return nil, fmt.Errorf("removing the stale socket at %s: %w", p.path, err)
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(p.path), 0o700); err != nil {
-		return nil, err
-	}
-	return net.Listen("unix", p.path)
+	return listenPresenceEndpoint(p.path)
 }
 
 func (p *PresenceServer) serve(ctx context.Context, conn net.Conn) {

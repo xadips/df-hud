@@ -1,4 +1,4 @@
-//go:build linux && cgo && !nolayershell
+//go:build (linux || windows) && cgo && !nolayershell
 
 package main
 

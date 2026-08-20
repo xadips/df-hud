@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"image/png"
 	"math"
+	"runtime"
 )
 
 // The tray icon, drawn in code rather than shipped as a file.
@@ -31,6 +33,39 @@ var (
 // trayIconSize is generous on purpose: the host scales down to the bar's height,
 // and downscaling is much kinder than upscaling.
 const trayIconSize = 64
+
+// trayIconBytes returns the encoded format expected by the platform tray.
+// Windows requires an ICO container; modern ICO files may embed PNG payloads,
+// so the same rendered pixels can be wrapped without maintaining a second
+// bitmap encoder.
+func trayIconBytes(c color.NRGBA, size int) []byte {
+	if size < 8 {
+		size = 8
+	}
+	data := trayIconPNG(c, size)
+	if runtime.GOOS != "windows" {
+		return data
+	}
+	var out bytes.Buffer
+	_ = binary.Write(&out, binary.LittleEndian, uint16(0)) // reserved
+	_ = binary.Write(&out, binary.LittleEndian, uint16(1)) // icon
+	_ = binary.Write(&out, binary.LittleEndian, uint16(1)) // one image
+	if size >= 256 {
+		out.WriteByte(0)
+		out.WriteByte(0)
+	} else {
+		out.WriteByte(byte(size))
+		out.WriteByte(byte(size))
+	}
+	out.WriteByte(0) // palette size
+	out.WriteByte(0) // reserved
+	_ = binary.Write(&out, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&out, binary.LittleEndian, uint16(32))
+	_ = binary.Write(&out, binary.LittleEndian, uint32(len(data)))
+	_ = binary.Write(&out, binary.LittleEndian, uint32(22))
+	out.Write(data)
+	return out.Bytes()
+}
 
 // trayIconPNG renders the icon and encodes it. SetIcon wants encoded image
 // bytes, so there is no point keeping an image.Image around.

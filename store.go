@@ -548,6 +548,22 @@ func (s *Store) RestartRun(at time.Time, why string) {
 	log.Printf("session: run clock started from %s", why)
 }
 
+// StartRunIfIdle starts an unconfirmed run without replacing one already
+// observed, restored or started by hand. Platform wiring uses this only when it
+// has evidence unavailable to the player record itself (on Windows: a real,
+// foreground game window rather than the launcher).
+func (s *Store) StartRunIfIdle(at time.Time, why string) bool {
+	s.mu.Lock()
+	if !s.game.Running || !s.runStart.IsZero() || s.runSeed != nil {
+		s.mu.Unlock()
+		return false
+	}
+	s.runStart = at
+	s.mu.Unlock()
+	log.Printf("session: run started (%s)", why)
+	return true
+}
+
 // SetRunSeed offers a persisted run to restore, so restarting df-hud mid-run
 // keeps the clock. Applied only once the game watcher confirms the same process
 // is still running.

@@ -1,3 +1,5 @@
+//go:build linux
+
 package main
 
 import (
@@ -190,89 +192,6 @@ type hyprMonitor struct {
 	} `json:"specialWorkspace"`
 }
 
-// windowPlacement is where the compositor says the game's window is. Known is
-// false when no window could be matched, which callers must treat as "no
-// information" rather than as "not visible".
-type windowPlacement struct {
-	Known bool
-
-	Class         string
-	Title         string
-	Address       string
-	Workspace     int
-	WorkspaceName string
-	Monitor       string
-
-	// OnActiveWorkspace is whether that workspace is the one currently shown on
-	// its monitor. This is computed rather than read from the window's own
-	// "visible" field, which does not mean this: a live check found windows on
-	// inactive workspaces reporting visible = true.
-	OnActiveWorkspace bool
-
-	// MatchedBy records which strategy found the window, so the log can say how
-	// it was identified rather than leaving it a mystery when it goes wrong.
-	MatchedBy string
-
-	// LauncherOnly is the game's class or pid appearing ONLY on windows that were
-	// ignored by title - which is to say the launcher is open and the game has not
-	// started.
-	//
-	// It exists because "we could not find the window" and "we found only the
-	// launcher" are different answers and Known cannot tell them apart. Known false
-	// fails OPEN, on the grounds that a window may not be mapped yet and a wrongly
-	// hidden HUD is indistinguishable from a broken one - so excluding the launcher
-	// without this made the HUD show on every workspace instead of just the
-	// launcher's, which is worse than the bug it fixed.
-	//
-	// This is positive evidence, so it can be acted on.
-	LauncherOnly bool
-
-	// LauncherAddress is that dialog's own window, when it is the one with the
-	// Play button rather than a sub-window. Empty unless LauncherOnly.
-	LauncherAddress string
-}
-
-// windowMatch is how to recognise the game's window.
-//
-// A class alone is not enough, which took a launcher to notice: Dead Frontier's
-// configuration dialogs are the same executable and report the same class, so the
-// class matched a 464x406 settings box and the HUD was drawn over it. IgnoreTitles is
-// what rules those out - see GameConfig.WindowTitleIgnore for why it is an exclusion
-// rather than a positive match on the game's own title.
-type windowMatch struct {
-	Class        string
-	IgnoreTitles []string
-	// LauncherTitle picks the ONE ignored window that is the dialog with the Play
-	// button on it, so a key can be sent to it and nothing else.
-	//
-	// Narrower than IgnoreTitles on purpose. That list contains "configuration",
-	// which matches both windows the launcher opens - the 464x406 dialog AND the
-	// 215x78 "Input Configuration" key-capture box - and only the first of those
-	// has a default button to press.
-	LauncherTitle string
-}
-
-// isLauncherDialog reports whether a title is the launcher's main dialog.
-func (m windowMatch) isLauncherDialog(title string) bool {
-	want := strings.ToLower(strings.TrimSpace(m.LauncherTitle))
-	if want == "" {
-		return false
-	}
-	return strings.Contains(strings.ToLower(title), want)
-}
-
-// ignored reports whether a title says "this is not the game".
-func (m windowMatch) ignored(title string) bool {
-	low := strings.ToLower(title)
-	for _, skip := range m.IgnoreTitles {
-		skip = strings.ToLower(strings.TrimSpace(skip))
-		if skip != "" && strings.Contains(low, skip) {
-			return true
-		}
-	}
-	return false
-}
-
 // findGameWindow decides which window is the game's.
 //
 // Ordered by how much the strategy can be trusted:
@@ -364,14 +283,6 @@ func findGameWindow(windows []hyprWindow, monitors []hyprMonitor, pid int, match
 	return windowPlacement{LauncherOnly: launcher, LauncherAddress: launcherAddr}
 }
 
-// normaliseClass makes "DeadFrontier.exe" and "deadfrontier.exe" the same thing,
-// because Wine lowercases the class it reports and the config carries the
-// executable's real name.
-func normaliseClass(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	return strings.TrimSuffix(s, ".exe")
-}
-
 // hyprClient queries the live compositor. The two decode steps are separate from
 // findGameWindow so the matching logic can be tested against canned JSON with no
 // compositor involved.
@@ -427,10 +338,7 @@ func (hyprClient) SendKey(ctx context.Context, key, address string) error {
 }
 
 // The two values interpolated into Lua source.
-var (
-	hyprKeyName = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
-	hyprAddress = regexp.MustCompile(`^0x[0-9a-fA-F]+$`)
-)
+var hyprAddress = regexp.MustCompile(`^0x[0-9a-fA-F]+$`)
 
 // firstLine keeps a compositor error to one log line: Hyprland appends a note
 // about Lua syntax to every dispatch reply.
@@ -460,7 +368,7 @@ func (hyprClient) ActiveAddress(ctx context.Context) (string, bool) {
 
 // Windows lists every window, for the -check-game diagnostic. When the game's
 // window cannot be matched, seeing the actual classes is the whole answer.
-func (hyprClient) Windows(ctx context.Context) ([]hyprWindow, error) {
+func (hyprClient) Windows(ctx context.Context) ([]desktopWindow, error) {
 	raw, err := hyprRequest(ctx, "j/clients")
 	if err != nil {
 		return nil, err
@@ -469,5 +377,9 @@ func (hyprClient) Windows(ctx context.Context) ([]hyprWindow, error) {
 	if err := json.Unmarshal(raw, &windows); err != nil {
 		return nil, err
 	}
-	return windows, nil
+	out := make([]desktopWindow, 0, len(windows))
+	for _, window := range windows {
+		out = append(out, desktopWindow{Class: window.Class, Title: window.Title, PID: window.PID})
+	}
+	return out, nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -209,7 +210,9 @@ func (s *credStore) save(f credsFile) error {
 	if err != nil {
 		return err
 	}
-	if perm := st.Mode().Perm(); perm != 0o600 {
+	// Windows reports synthetic POSIX permission bits and ignores chmod. The
+	// file inherits the current user's private AppData ACL instead.
+	if perm := st.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
 		return fmt.Errorf("credentials file is mode %o, want 600", perm)
 	}
 	return nil

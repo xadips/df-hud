@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -147,23 +148,65 @@ func runTray(ctx context.Context, actions trayActions) {
 	t := &trayItem{
 		actions: actions,
 		icons: map[bool][]byte{
-			true:  trayIconPNG(trayIconActive, trayIconSize),
-			false: trayIconPNG(trayIconIdle, trayIconSize),
+			true:  trayIconBytes(trayIconActive, trayIconSize),
+			false: trayIconBytes(trayIconIdle, trayIconSize),
 		},
 	}
 
-	// Set before the bus connection exists on purpose. systray bakes the current
-	// title and icon into the initial property set, so doing it here means the
-	// item is never published with a missing icon - and the title doubles as the
-	// SNI Id, which is what a tray host uses to remember per-application
-	// settings.
+	if runtime.GOOS == "windows" {
+		t.runWindows(ctx)
+		return
+	}
+
+	// Linux's SNI backend bakes these into its initial property set.
 	systray.SetTitle("df-hud")
 	systray.SetIcon(t.icons[false])
-
-	start, end := systray.RunWithExternalLoop(t.buildMenu, nil)
+	ready := make(chan struct{})
+	onReady := func() {
+		t.buildMenu()
+		close(ready)
+	}
+	start, end := systray.RunWithExternalLoop(onReady, nil)
 	start()
 	defer end()
+	select {
+	case <-ctx.Done():
+		return
+	case <-ready:
+	}
+	startTrayPlatformMaintenance(ctx)
+	t.refreshLoop(ctx)
+}
 
+// runWindows keeps tray window creation and GetMessage on the same locked OS
+// thread. RunWithExternalLoop starts the message loop in another goroutine,
+// whose OS thread is not the one that owns the HWND; whether it happened to work
+// then depended on scheduler placement and produced the observed one-click-only
+// tray.
+func (t *trayItem) runWindows(ctx context.Context) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ready := make(chan struct{})
+	onReady := func() {
+		systray.SetTitle("df-hud")
+		systray.SetIcon(t.icons[false])
+		t.buildMenu()
+		close(ready)
+	}
+	go func() {
+		<-ctx.Done()
+		systray.Quit()
+	}()
+	go func() {
+		<-ready
+		startTrayPlatformMaintenance(ctx)
+		t.refreshLoop(ctx)
+	}()
+	systray.Run(onReady, nil)
+}
+
+func (t *trayItem) refreshLoop(ctx context.Context) {
 	// One second, matching the HUD's own tick. The properties are only written
 	// when the rendered text changes, so this is a comparison per second rather
 	// than bus traffic per second.

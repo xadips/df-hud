@@ -65,6 +65,9 @@ func decideHUDVisible(r visibilityRules, game GameState, place windowPlacement) 
 	// place.Known false means the question could not be answered, not that the
 	// answer is no - see the fail-open note above.
 	if r.FollowGameWorkspace && place.Known && !place.OnActiveWorkspace {
+		if place.ForegroundRule {
+			return false, "the game is not the foreground window"
+		}
 		where := place.WorkspaceName
 		if where == "" {
 			where = fmt.Sprint(place.Workspace)
@@ -220,8 +223,8 @@ func (w *visibilityWatcher) refresh(ctx context.Context) {
 			// One line, once. Then stop asking: on a compositor without this
 			// socket the answer will not change, and the HUD stays visible
 			// everywhere, which is the pre-existing behaviour.
-			log.Printf("hud: cannot ask the compositor where the game's window is (%v); "+
-				"the HUD will show on every workspace", err)
+			log.Printf("hud: cannot ask the desktop where the game's window is (%v); "+
+				"window-following visibility is disabled", err)
 			w.mu.Lock()
 			w.queryFailed = true
 			w.mu.Unlock()
@@ -248,8 +251,13 @@ func (w *visibilityWatcher) refresh(ctx context.Context) {
 	if prevPlace.MatchedBy != place.MatchedBy && place.Known {
 		// Said once per identification change, because "how did it find the
 		// window" is the first question when the workspace rule misbehaves.
-		log.Printf("hud: the game's window is on %s workspace %s (matched by %s, class %q)",
-			place.Monitor, place.WorkspaceName, place.MatchedBy, place.Class)
+		if place.ForegroundRule {
+			log.Printf("hud: the game's window is on %s (matched by %s, class %q)",
+				place.Monitor, place.MatchedBy, place.Class)
+		} else {
+			log.Printf("hud: the game's window is on %s workspace %s (matched by %s, class %q)",
+				place.Monitor, place.WorkspaceName, place.MatchedBy, place.Class)
+		}
 	}
 	if prev == next {
 		return

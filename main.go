@@ -12,11 +12,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -85,7 +83,7 @@ func main() {
 			"to the mouse. Turn it back on unless you are debugging the surface.")
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer stop()
 
 	// The one-shot diagnostics use the credentials already on disk, so they must
@@ -123,12 +121,12 @@ func main() {
 // that does not match means df-hud never polls, which looks like the HUD being
 // broken rather than a one-word config problem.
 func reportGameDetection(cfg *Config) {
-	scanner := newProcScanner(cfg.Game.Process)
-	fmt.Printf("looking for a process whose argv[0] basename is %q\n", cfg.Game.Process)
+	scanner := newProcessScanner(cfg.Game.Process)
+	fmt.Println(processScanDescription(cfg.Game.Process))
 
 	state, err := scanner.scan()
 	if err != nil {
-		fmt.Printf("could not scan /proc: %v\n", err)
+		fmt.Println(processScanError(err))
 		return
 	}
 	if state.Running {
@@ -142,7 +140,7 @@ func reportGameDetection(cfg *Config) {
 	fmt.Println("NOT FOUND - the game does not appear to be running.")
 	// If it is running under another name, saying so is far more useful than
 	// "not found", since the fix is one config line.
-	if candidates := similarProcesses(scanner.procRoot, "frontier"); len(candidates) > 0 {
+	if candidates := similarProcesses("frontier"); len(candidates) > 0 {
 		fmt.Println("\nProcesses with a similar name, in case the executable is named differently:")
 		for _, c := range candidates {
 			fmt.Println("  " + c)
@@ -157,7 +155,7 @@ func reportGameDetection(cfg *Config) {
 	}
 }
 
-// reportWindowDetection answers the other half: whether the COMPOSITOR's view of
+// reportWindowDetection answers the other half: whether the desktop's view of
 // the game can be found. Its own silent failure - an unmatched window makes
 // follow_game_workspace do nothing and monitor = "auto" unable to follow. The
 // window classes are printed on a miss because that is the whole answer.
@@ -165,11 +163,11 @@ func reportWindowDetection(cfg *Config, game GameState) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	client := hyprClient{}
+	client := newDesktopClient()
 	place, err := client.GameWindow(ctx, game.PID, cfg.Game.WindowMatch())
 	if err != nil {
-		fmt.Printf("\nThe compositor could not be asked where the window is (%v).\n"+
-			"The HUD will still work; it just shows on every workspace.\n", err)
+		fmt.Printf("\nThe desktop could not be asked where the window is (%v).\n"+
+			"The HUD will still work; window-following visibility is disabled.\n", err)
 		return
 	}
 	if place.Known {
@@ -177,9 +175,15 @@ func reportWindowDetection(cfg *Config, game GameState) {
 		if place.OnActiveWorkspace {
 			shown = "yes"
 		}
-		fmt.Printf("\nWINDOW: class %q on monitor %s, workspace %s (matched by %s)\n",
-			place.Class, place.Monitor, place.WorkspaceName, place.MatchedBy)
-		fmt.Printf("        that workspace is being shown: %s\n", shown)
+		if place.ForegroundRule {
+			fmt.Printf("\nWINDOW: class %q on monitor %s (matched by %s)\n",
+				place.Class, place.Monitor, place.MatchedBy)
+			fmt.Printf("        that window is in the foreground: %s\n", shown)
+		} else {
+			fmt.Printf("\nWINDOW: class %q on monitor %s, workspace %s (matched by %s)\n",
+				place.Class, place.Monitor, place.WorkspaceName, place.MatchedBy)
+			fmt.Printf("        that workspace is being shown: %s\n", shown)
+		}
 		return
 	}
 
@@ -190,7 +194,7 @@ func reportWindowDetection(cfg *Config, game GameState) {
 			strings.Join(ignore, ", "))
 	}
 	if windows, err := client.Windows(ctx); err == nil {
-		fmt.Println("\nWindows the compositor knows about:")
+		fmt.Println("\nTop-level windows the desktop knows about:")
 		for _, w := range windows {
 			title := w.Title
 			if len(title) > 40 {
@@ -200,49 +204,8 @@ func reportWindowDetection(cfg *Config, game GameState) {
 		}
 		fmt.Println("\nIf one of those is the game, set game.window_class to its class.")
 	}
-	fmt.Println("\nUntil then the HUD shows on every workspace, and monitor = \"auto\" " +
-		"leaves the choice to the compositor.")
-}
-
-// similarProcesses looks for the substring anywhere in a command line - the
-// opposite of the strict argv[0] match the scanner uses, and appropriate here
-// because this is a diagnostic rather than a decision.
-func similarProcesses(procRoot, needle string) []string {
-	entries, err := os.ReadDir(procRoot)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	self, parent := os.Getpid(), os.Getppid()
-	for _, entry := range entries {
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid == self || pid == parent {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(procRoot, entry.Name(), "cmdline"))
-		if err != nil {
-			continue
-		}
-		line := strings.ReplaceAll(string(raw), "\x00", " ")
-		lower := strings.ToLower(line)
-		if !strings.Contains(lower, needle) {
-			continue
-		}
-		// Anything mentioning df-hud is our own tooling - the shell that invoked
-		// this check names the game in its own command line - and the game's
-		// command line will never mention us.
-		if strings.Contains(lower, "df-hud") {
-			continue
-		}
-		if len(line) > 120 {
-			line = line[:120] + "..."
-		}
-		out = append(out, fmt.Sprintf("pid %d: %s", pid, strings.TrimSpace(line)))
-		if len(out) >= 8 {
-			break
-		}
-	}
-	return out
+	fmt.Println("\nUntil then the HUD cannot follow the game window, and monitor = \"auto\" " +
+		"leaves placement to the desktop.")
 }
 
 func describeConfigSource(cfg *Config, path string) string {
@@ -331,7 +294,8 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 		UserAgent: cfg.DF.UserAgent,
 	}
 	a.game = newGameWatcher(cfg.Game.Process, cfg.Game.ScanInterval.Duration)
-	a.visibility = newVisibilityWatcher(a.game, a.Config, hyprClient{})
+	desktop := newDesktopClient()
+	a.visibility = newVisibilityWatcher(a.game, a.Config, desktop)
 	// A run persisted by a previous df-hud process. Restored only if the game it
 	// belongs to is still the one running, so restarting df-hud mid-run keeps the
 	// clock instead of resetting it.
@@ -381,8 +345,8 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 	// The game's FPS readout, which starts off at every launch because nothing in
 	// the game remembers it. Reads the window the visibility watcher has already
 	// resolved, so it costs no extra compositor queries.
-	a.gamekeys = newGameKeys(a.Config, a.game.State, a.visibility.Placement, hyprClient{})
-	a.gamekeys.active = hyprClient{}.ActiveAddress
+	a.gamekeys = newGameKeys(a.Config, a.game.State, a.visibility.Placement, desktop)
+	a.gamekeys.active = desktop.ActiveAddress
 	// Not while the client is still loading: a key pressed at the loading screen
 	// is simply discarded, which is what made the FPS key intermittent.
 	a.gamekeys.ready = func() bool { return a.store.ClientInWorld(time.Now()) }
@@ -409,19 +373,24 @@ func newApp(ctx context.Context, cfg *Config, cfgPath string, withBridge bool) (
 	levelSeen := false
 	var lastBlock [2]int
 	a.poller.SetOnTick(func(tick Tick) {
-		a.store.ApplyTick(tick)
+		applied := a.store.ApplyTick(tick)
 		a.store.SetPollerStatus(a.poller.Status())
+		snap, haveSnap := a.store.Snapshot()
+		if applied && haveSnap && snap.HasPosition && !snap.InOutpost && !snap.Dead &&
+			desktopCanStartRun(a.visibility.Placement()) {
+			a.store.StartRunIfIdle(tick.At, "the foreground game window entered the city")
+		}
 		a.recordXPSample()
 		a.persistRun()
 		if !levelSeen {
-			if snap, ok := a.store.Snapshot(); ok && snap.Level > 0 {
+			if haveSnap && snap.Level > 0 {
 				levelSeen = true
 				a.challenges.Wake()
 			}
 		}
 		// Arriving on a new block is the moment the event map matters. Subject
 		// to the minimum interval, so walking cannot turn into a burst.
-		if snap, ok := a.store.Snapshot(); ok && snap.HasPosition {
+		if haveSnap && snap.HasPosition {
 			block := [2]int{snap.PositionX, snap.PositionY}
 			if block != lastBlock {
 				lastBlock = block
@@ -611,16 +580,8 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 	// store, because GTK then takes the main thread and never gives it back.
 	go a.game.Run(ctx)
 	go a.visibility.Run(ctx)
-	// One event stream, two subscribers. Neither parses the payload: an event is
-	// only ever a hint to go and re-read the authoritative source.
-	go watchHyprEvents(ctx, func(name string) {
-		if hyprWindowEvents[name] {
-			a.game.Poke()
-		}
-		if hyprPlacementEvents[name] {
-			a.visibility.Poke()
-		}
-	})
+	// Platform events are hints to re-read the authoritative process/window APIs.
+	go watchPlatformEvents(ctx, a.game.Poke, a.visibility.Poke)
 	go a.poller.Run(ctx)
 	go a.challenges.Run(ctx)
 	go a.bosses.Run(ctx)
@@ -632,7 +593,7 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 	if a.watcher != nil {
 		go a.watcher.Run(ctx, a.Config, a.applyReload)
 	}
-	go a.reloadOnSIGHUP(ctx)
+	go watchReloadSignal(ctx, a.reloadConfig)
 	if opts.printView || opts.printHUD {
 		go a.printLoop(ctx, opts)
 	}
@@ -763,26 +724,6 @@ func (a *app) applyReload(next *Config, _ []string) {
 		fn(next)
 	}
 	log.Print("config: reloaded")
-}
-
-// reloadOnSIGHUP is `systemctl --user reload df-hud`, and the same by hand.
-//
-// It has to be HANDLED rather than left alone: the default disposition for
-// SIGHUP is to terminate, so an ExecReload of kill -HUP would kill the HUD - and
-// a "reload" that loses the run clock and the XP window is not a reload.
-func (a *app) reloadOnSIGHUP(ctx context.Context) {
-	hup := make(chan os.Signal, 1)
-	signal.Notify(hup, syscall.SIGHUP)
-	defer signal.Stop(hup)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-hup:
-			log.Print("config: SIGHUP")
-			a.reloadConfig()
-		}
-	}
 }
 
 // reloadConfig re-reads the file on demand, for the tray menu and SIGHUP. The

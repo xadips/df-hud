@@ -79,6 +79,27 @@ func TestRunClockDoesNotStartWhileTheLauncherSits(t *testing.T) {
 	}
 }
 
+func TestStartRunIfIdleDoesNotReplaceExistingEvidence(t *testing.T) {
+	s := newStore(nil)
+	if s.StartRunIfIdle(time.Now(), "no game") {
+		t.Fatal("a closed game cannot start a run")
+	}
+
+	gameStart := time.Now().Add(-time.Minute)
+	s.SetGame(runningGame(gameStart))
+	first := time.Now()
+	if !s.StartRunIfIdle(first, "foreground game window") {
+		t.Fatal("the first confirmed desktop signal should start the run")
+	}
+	if s.StartRunIfIdle(first.Add(time.Minute), "duplicate poll") {
+		t.Fatal("a later signal must not replace an existing run")
+	}
+	started, _ := s.Run()
+	if !started.Equal(first) {
+		t.Fatalf("run start = %s, want %s", started, first)
+	}
+}
+
 // Entering a building changes only the floor index, and that is still movement.
 func TestRunClockStartsOnAFloorChange(t *testing.T) {
 	s := newStore(nil)

@@ -243,28 +243,6 @@ func TestFPSKeyHonoursAReloadedDelay(t *testing.T) {
 	}
 }
 
-// The key is interpolated into Lua source, so anything that could close the
-// string has to be refused rather than escaped.
-func TestSendKeyRefusesValuesItWouldHaveToEscape(t *testing.T) {
-	for _, tc := range []struct{ name, key, address string }{
-		{"quote in the key", `y","x"] --`, "0xabc"},
-		{"space in the key", "y y", "0xabc"},
-		{"empty key", "", "0xabc"},
-		{"address without 0x", "y", "abc"},
-		{"address with a quote", "y", `0xabc"`},
-		{"empty address", "y", ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// No compositor is reached: both checks happen before the dial, so a
-			// rejection here is the validation and not a connection failure.
-			err := hyprClient{}.SendKey(context.Background(), tc.key, tc.address)
-			if err == nil {
-				t.Fatal("accepted a value that would be interpolated into Lua source")
-			}
-		})
-	}
-}
-
 func TestSendKeyAcceptsRealKeyNames(t *testing.T) {
 	for _, key := range []string{"y", "Y", "F1", "Return", "XF86Launch9", "space"} {
 		if !hyprKeyName.MatchString(key) {

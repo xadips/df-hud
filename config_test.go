@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -344,14 +345,14 @@ func TestValidateColor(t *testing.T) {
 
 func TestConfigDerivedPaths(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.Paths.DataDir = "/tmp/df-hud-test"
-	if got := cfg.CredentialsPath(); got != "/tmp/df-hud-test/credentials.json" {
+	cfg.Paths.DataDir = filepath.FromSlash("/tmp/df-hud-test")
+	if got, want := cfg.CredentialsPath(), filepath.Join(cfg.Paths.DataDir, "credentials.json"); got != want {
 		t.Errorf("CredentialsPath = %q", got)
 	}
-	if got := cfg.StatePath(); got != "/tmp/df-hud-test/state.json" {
+	if got, want := cfg.StatePath(), filepath.Join(cfg.Paths.DataDir, "state.json"); got != want {
 		t.Errorf("StatePath = %q", got)
 	}
-	if got := cfg.CatalogPath(); got != "/tmp/df-hud-test/catalog.json" {
+	if got, want := cfg.CatalogPath(), filepath.Join(cfg.Paths.DataDir, "catalog.json"); got != want {
 		t.Errorf("CatalogPath = %q", got)
 	}
 }
@@ -381,7 +382,7 @@ func TestEnsureDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	// credentials.json lives here, so the directory itself is private.
-	if perm := st.Mode().Perm(); perm != 0o700 {
+	if perm := st.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o700 {
 		t.Errorf("data dir mode = %o, want 700", perm)
 	}
 	if _, err := os.Stat(filepath.Join(cfg.Paths.DataDir, ".writable-probe")); err == nil {

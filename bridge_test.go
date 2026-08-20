@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -85,7 +86,7 @@ func TestBridgePersistsAt0600(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := st.Mode().Perm(); perm != 0o600 {
+	if perm := st.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
 		t.Errorf("credentials file mode = %o, want 600", perm)
 	}
 }
@@ -120,7 +121,7 @@ func TestBridgeStoresTheCookiePrivately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := st.Mode().Perm(); perm != 0o600 {
+	if perm := st.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
 		t.Errorf("credentials file mode = %o, want 600 now that it holds a session cookie", perm)
 	}
 	// A payload with no cookie must still be accepted: get_values needs none, so

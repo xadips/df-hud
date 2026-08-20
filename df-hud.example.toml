@@ -164,8 +164,10 @@ launcher_title = "Dead Frontier Configuration"
 launcher_delay = "500ms"
 
 [paths]
-# Holds credentials.json (mode 0600), state.json and catalog.json.
-# Defaults to $XDG_DATA_HOME/df-hud. Needs a RESTART to change.
+# Holds credentials.json (0600 on Linux; protected by AppData ACLs on Windows),
+# state.json and catalog.json.
+# Defaults to $XDG_DATA_HOME/df-hud on Linux or
+# %LOCALAPPDATA%\df-hud on Windows. Needs a RESTART to change.
 # data_dir = "~/.local/share/df-hud"
 
 [hud]
@@ -276,9 +278,9 @@ onslaught_max_interval = "1m"
 # df-hud says so once and carries on with the polled position.
 enabled = true
 
-# Where to listen. Empty is $XDG_RUNTIME_DIR/discord-ipc-0, which is the only
-# path the game tries first - a custom one is only useful with rpc-bridge's
-# BRIDGE_RPC_PATH pointed at the same place.
+# Where to listen. Empty is $XDG_RUNTIME_DIR/discord-ipc-0 on Linux or
+# \\.\pipe\discord-ipc-0 on Windows, which is the endpoint the game tries first.
+# A custom endpoint is mainly useful with a matching bridge configuration.
 socket = ""
 
 [tray]
