@@ -12,6 +12,9 @@ BIN     := df-hud
 PREFIX  ?= $(HOME)/.local
 BINDIR  := $(PREFIX)/bin
 UNITDIR ?= $(HOME)/.config/systemd/user
+DOCKER  ?= docker
+WINE    ?= wine
+WINDOWS_BUILDER_IMAGE ?= df-hud-windows-builder
 
 # Stamped into -version and the User-Agent, so a running daemon can be told from a
 # working tree. The base stays a dev string - nothing produces release numbers yet -
@@ -19,7 +22,7 @@ UNITDIR ?= $(HOME)/.config/systemd/user
 REV     := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 VERSION ?= 0.1.0-dev+$(REV)
 
-.PHONY: all build test check install uninstall enable disable restart logs status clean
+.PHONY: all build test check test-windows package-linux windows-builder package-windows smoke-windows install uninstall enable disable restart logs status clean
 
 all: build
 
@@ -35,6 +38,30 @@ check:
 
 test:
 	go test ./...
+
+test-windows:
+	WINEDEBUG=-all GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+		go test -tags nolayershell -exec "$(WINE)" ./... -count=1
+
+package-linux:
+	./build-linux.sh "$(VERSION)"
+
+windows-builder:
+	$(DOCKER) build -f Dockerfile.windows -t $(WINDOWS_BUILDER_IMAGE) .
+
+package-windows: windows-builder
+	$(DOCKER) run --rm \
+		-e HOST_UID="$$(id -u)" \
+		-e HOST_GID="$$(id -g)" \
+		-v "$(CURDIR):/src" \
+		-v df-hud-windows-go-mod:/root/go/pkg/mod \
+		-v df-hud-windows-go-build:/root/.cache/go-build \
+		$(WINDOWS_BUILDER_IMAGE) "$(VERSION)"
+
+smoke-windows:
+	cd dist/df-hud-windows-amd64 && \
+		WINEDEBUG=-all $(WINE) ./df-hud.exe -version && \
+		WINEDEBUG=-all $(WINE) ./df-hud.exe -check-config
 
 install: build
 	install -Dm755 $(BIN) $(BINDIR)/$(BIN)

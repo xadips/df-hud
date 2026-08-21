@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-linux:
+    runs-on: ubuntu-latest
+    container: archlinux:base
+    steps:
+      - name: Install Linux build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel \
+            git \
+            go \
+            gtk4-layer-shell
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check
+        env:
+          CGO_ENABLED: "1"
+        run: make check
+
+  test-windows-via-wine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Wine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine64
+      - name: Run Windows tests
+        run: |
+          WINE="$(command -v wine || command -v wine64 || printf /usr/lib/wine/wine64)"
+          make test-windows WINE="$WINE"
+
+  build-linux:
+    needs: [check-linux, test-windows-via-wine]
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    container: archlinux:base
+    steps:
+      - name: Install Linux build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel \
+            git \
+            go \
+            gtk4-layer-shell
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.1.0-dev+${GITHUB_SHA::12}"
+          fi
+          printf 'VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+      - name: Build Linux archive
+        env:
+          CGO_ENABLED: "1"
+        run: make package-linux VERSION="$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: df-hud-linux-amd64
+          path: dist/df-hud-linux-amd64.tar.gz
+          if-no-files-found: error
+
+  build-windows:
+    needs: [check-linux, test-windows-via-wine]
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - name: Preserve checkout line endings
+        run: git config --global core.autocrlf input
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-adwaita-icon-theme
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gobject-introspection
+            mingw-w64-ucrt-x86_64-gobject-introspection-runtime
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-ntldd
+            mingw-w64-ucrt-x86_64-pkgconf
+      - name: Set version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $version = $env:GITHUB_REF_NAME.TrimStart("v")
+          } else {
+            $version = "0.1.0-dev+$($env:GITHUB_SHA.Substring(0, 12))"
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+      - name: Build Windows archive
+        shell: pwsh
+        env:
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
+        run: ./build-windows.ps1 -Version $env:VERSION
+      - uses: actions/upload-artifact@v4
+        with:
+          name: df-hud-windows-amd64
+          path: dist/df-hud-windows-amd64.zip
+          if-no-files-found: error
+
+  release:
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: df-hud-*
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            df-hud-linux-amd64.tar.gz \
+            df-hud-windows-amd64.zip \
+            --generate-notes \
+            --title "df-hud ${GITHUB_REF_NAME#v}"

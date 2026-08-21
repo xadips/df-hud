@@ -596,6 +596,25 @@ make            # go build, with the commit stamped into -version
 CI or a machine with no Wayland. `make check` is everything CI runs: `gofmt`,
 `go vet`, `go test -race`, and that headless build.
 
+## Release builds
+
+`make package-linux` writes `dist/df-hud-linux-amd64.tar.gz`.
+
+`make package-windows` builds the Windows GTK application locally in a pinned
+Fedora MinGW container and writes `dist/df-hud-windows-amd64.zip`. The first
+build downloads the toolchain and compiles gotk4; Docker volumes keep Go's module
+and build caches for later runs.
+
+`make test-windows` cross-compiles the Windows tests headlessly and runs them
+through Wine. `make smoke-windows` checks the packaged GTK executable's version
+and configuration paths through Wine. These checks cover Windows code and DLL
+loading, but the overlay, tray and fullscreen behaviour still need testing on
+Windows itself.
+
+Manual and tagged GitHub Actions runs build both archives again, with the Windows
+release built natively on `windows-latest`. A `v*` tag publishes both archives
+as release assets.
+
 ## Running it
 
 ```sh
