@@ -453,9 +453,7 @@ func TestDismissLauncherIsOffByDefault(t *testing.T) {
 	}
 }
 
-// The tray switch is the authority once df-hud is running, so the config value
-// only seeds it. Worth pinning: the two got out of step during development and
-// every launcher test silently stopped exercising the send.
+// Config seeds the live tray state at startup; later reloads are covered below.
 func TestTheConfigSeedsTheTraySwitches(t *testing.T) {
 	cfg := config.Default()
 	cfg.GameKeys.FPSDisplay = true
@@ -466,6 +464,20 @@ func TestTheConfigSeedsTheTraySwitches(t *testing.T) {
 		&fakeSender{})
 	if !k.FPSDisplay() || !k.DismissLauncher() {
 		t.Fatal("the tray switches did not start from the config")
+	}
+}
+
+func TestConfigReloadUpdatesTraySwitches(t *testing.T) {
+	h := newKeysHarness(t)
+	h.keys.SetFPSDisplay(false)
+	h.keys.SetDismissLauncher(false)
+
+	next := *h.cfg
+	next.GameKeys.FPSDisplay = true
+	next.GameKeys.DismissLauncher = true
+	h.keys.ApplyConfig(next.GameKeys)
+	if !h.keys.FPSDisplay() || !h.keys.DismissLauncher() {
+		t.Fatal("reloaded config did not update tray-backed switches")
 	}
 }
 

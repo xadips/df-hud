@@ -22,12 +22,13 @@ import (
 // something at the 22px waybar actually renders it at, which rules out anything
 // with text in it - "DF" at 22px is two smudges.
 
-// trayIconColors are the two states. Yellow is the game's own HUD colour, so the
-// icon matches the overlay it controls; grey means the game is not running, which
-// is the answer to "is df-hud doing anything right now" at a glance.
+// Yellow is the game's own HUD colour, so the icon matches the overlay it
+// controls; grey means the game is not running; red means presence capture could
+// not bind and needs the tray retry after Discord is closed.
 var (
 	trayIconActive = color.NRGBA{R: 0xe6, G: 0xcc, B: 0x4d, A: 0xff}
 	trayIconIdle   = color.NRGBA{R: 0x8a, G: 0x90, B: 0x99, A: 0xff}
+	trayIconError  = color.NRGBA{R: 0xe6, G: 0x4d, B: 0x4d, A: 0xff}
 )
 
 // trayIconSize is generous on purpose: the host scales down to the bar's height,

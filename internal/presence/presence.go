@@ -208,15 +208,19 @@ type PresenceServer struct {
 	path               string
 	onState            func(PresenceState)
 	onConnectionChange func(bool)
+	retry              chan struct{}
+	listenFn           func() (net.Listener, error)
 
-	mu       sync.RWMutex
-	last     PresenceState
-	haveLast bool
-	clients  int
+	mu         sync.RWMutex
+	last       PresenceState
+	haveLast   bool
+	clients    int
+	listening  bool
+	bindFailed bool
 }
 
 func newPresenceServer(path string) *PresenceServer {
-	return &PresenceServer{path: path}
+	return &PresenceServer{path: path, retry: make(chan struct{}, 1)}
 }
 
 // NewServer creates a Discord IPC-compatible presence endpoint.
@@ -249,6 +253,32 @@ func (p *PresenceServer) Connected() bool {
 	return p.clients > 0
 }
 
+func (p *PresenceServer) Listening() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.listening
+}
+
+func (p *PresenceServer) BindFailed() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.bindFailed
+}
+
+// Retry asks a failed server to bind again. It is deliberately manual: if real
+// Discord still owns the endpoint, an automatic loop would only spam the log.
+func (p *PresenceServer) Retry() bool {
+	if p.Listening() {
+		return false
+	}
+	select {
+	case p.retry <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
 // Last is the most recent state, for diagnostics.
 func (p *PresenceServer) Last() (PresenceState, bool) {
 	p.mu.RLock()
@@ -260,39 +290,64 @@ func (p *PresenceServer) Last() (PresenceState, bool) {
 //
 // FAILS OPEN, always. Everything this provides is an improvement on a source
 // df-hud already has, so a socket that cannot be bound - most likely a real
-// Discord or Vesktop already there - is logged once and then dropped. Taking the
-// HUD down over it would trade a working position for a better one.
+// Discord or Vesktop already there - is logged and waits for a manual retry.
+// Taking the HUD down over it would trade a working position for a better one.
 func (p *PresenceServer) Run(ctx context.Context) {
+	for {
+		err := p.runListener(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		p.mu.Lock()
+		p.bindFailed = true
+		p.mu.Unlock()
+		log.Printf("presence: not listening (%v); position will come from the poll until retried", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-p.retry:
+			log.Print("presence: retrying IPC bind")
+		}
+	}
+}
+
+func (p *PresenceServer) runListener(ctx context.Context) error {
 	listener, err := p.listen()
 	if err != nil {
-		log.Printf("presence: not listening (%v); position will come from the poll only", err)
-		return
+		return err
 	}
+	p.mu.Lock()
+	p.listening = true
+	p.bindFailed = false
+	p.mu.Unlock()
 	defer func() {
+		p.mu.Lock()
+		p.listening = false
+		p.mu.Unlock()
 		listener.Close()
 		cleanupPresenceEndpoint(p.path)
 	}()
 	log.Printf("presence: listening on %s", p.path)
 
-	go func() {
-		<-ctx.Done()
-		listener.Close()
-	}()
+	stopClose := context.AfterFunc(ctx, func() { listener.Close() })
+	defer stopClose()
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return nil
 			}
-			log.Printf("presence: accept: %v", err)
-			return
+			return fmt.Errorf("accept: %w", err)
 		}
 		go p.serve(ctx, conn)
 	}
 }
 
 func (p *PresenceServer) listen() (net.Listener, error) {
+	if p.listenFn != nil {
+		return p.listenFn()
+	}
 	return listenPresenceEndpoint(p.path)
 }
 

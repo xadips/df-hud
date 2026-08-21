@@ -315,21 +315,32 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 	if a.Config().Tray.Enabled {
 		// tray.Run locks its own OS thread on Windows and uses the external
 		// D-Bus loop on Linux, so it remains safe to launch here.
+		var retryPresence func() bool
+		var presenceBindFailed func() bool
+		if a.presence != nil {
+			retryPresence = a.presence.Retry
+			presenceBindFailed = a.presence.BindFailed
+		}
 		go tray.Run(ctx, tray.Actions{
 			SetOverlayEnabled:   a.visibility.SetEnabled,
 			OverlayEnabled:      a.visibility.Enabled,
-			SetChallengesHidden: func(hidden bool) { a.groups.Set("challenges", hidden) },
-			ChallengesHidden:    func() bool { return a.groups.Hidden("challenges") },
-			SetFPSDisplay:       a.gamekeys.SetFPSDisplay,
-			FPSDisplay:          a.gamekeys.FPSDisplay,
-			SetDismissLauncher:  a.gamekeys.SetDismissLauncher,
-			DismissLauncher:     a.gamekeys.DismissLauncher,
-			ResetXPRate:         a.resetXPRate,
-			RestartRunClock:     func() { a.store.RestartRun(time.Now(), "the tray menu") },
-			ReloadConfig:        a.reloadConfig,
-			Quit:                opts.quit,
-			View:                func() *model.View { return a.store.Derive(time.Now()) },
-			Visibility:          a.visibility.State,
+			SetChallengesHidden: a.setChallengesHidden,
+			ChallengesHidden: func() bool {
+				return !a.Config().Widget.Challenges.Enabled || a.groups.Hidden("challenges")
+			},
+			SetFPSDisplay:      a.setFPSDisplay,
+			FPSDisplay:         a.gamekeys.FPSDisplay,
+			SetDismissLauncher: a.setDismissLauncher,
+			DismissLauncher:    a.gamekeys.DismissLauncher,
+			ResetXPRate:        a.resetXPRate,
+			RestartRunClock:    func() { a.store.RestartRun(time.Now(), "the tray menu") },
+			RetryPresence:      retryPresence,
+			PresenceBindFailed: presenceBindFailed,
+			ReloadConfig:       a.reloadConfig,
+			Quit:               opts.quit,
+			Version:            version,
+			View:               func() *model.View { return a.store.Derive(time.Now()) },
+			Visibility:         a.visibility.State,
 		})
 	}
 
@@ -418,7 +429,12 @@ func (a *app) printLoop(ctx context.Context, opts runOptions) {
 }
 
 func (a *app) applyReload(next *config.Config, _ []string) {
+	prev := a.Config()
 	a.cfg.Store(next)
+	a.gamekeys.ApplyConfig(next.GameKeys)
+	if prev.Widget.Challenges.Enabled != next.Widget.Challenges.Enabled {
+		a.groups.Set("challenges", !next.Widget.Challenges.Enabled)
+	}
 	a.poller.Wake()
 	a.visibility.Poke()
 	a.bosses.Wake()
@@ -442,6 +458,32 @@ func (a *app) reloadConfig() {
 
 func (a *app) resetXPRate() {
 	a.state.ResetXPWindow("reset by hand")
+}
+
+func (a *app) setFPSDisplay(on bool) {
+	if a.persistTrayOption(config.TrayFPSDisplay, on) {
+		a.gamekeys.SetFPSDisplay(on)
+	}
+}
+
+func (a *app) setDismissLauncher(on bool) {
+	if a.persistTrayOption(config.TrayDismissLauncher, on) {
+		a.gamekeys.SetDismissLauncher(on)
+	}
+}
+
+func (a *app) setChallengesHidden(hidden bool) {
+	if a.persistTrayOption(config.TrayShowChallenges, !hidden) {
+		a.groups.Set("challenges", hidden)
+	}
+}
+
+func (a *app) persistTrayOption(option config.TrayOption, enabled bool) bool {
+	if err := config.SetTrayOption(a.cfgPath, option, enabled); err != nil {
+		log.Printf("config: could not persist %s from tray: %v", option, err)
+		return false
+	}
+	return true
 }
 
 func (a *app) toggleOverlay() {

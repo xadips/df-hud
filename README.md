@@ -605,7 +605,7 @@ CI or a machine with no Wayland. `make check` is everything CI runs: `gofmt`,
 
 ## Release builds
 
-`make package-linux` writes `dist/df-hud-linux-amd64.tar.gz`.
+`make package-linux` writes `dist/df-hud-<version>-linux-amd64.tar.gz`.
 
 Windows releases use the native MSYS2 UCRT64 GTK runtime, matching both the
 GitHub Windows runner and the local Windows VM.
@@ -616,7 +616,7 @@ windows-vm-up` to start a persistent Windows 11 VM through Dockur. Open
 localhost-only SSH service. After that, `make package-windows VERSION=...`
 remotely copies the live shared repository to the Windows disk, runs
 `build-windows.ps1`, and writes
-`dist/df-hud-windows-amd64-native.zip` back on the host. The desktop shortcut
+`dist/df-hud-<version>-windows-amd64.zip` back on the host. The desktop shortcut
 does the same interactively. `make windows-vm-down` stops the VM without
 deleting its disk. The default login is `dfhud` / `dfhud-local`; override
 `WINDOWS_USER` and `WINDOWS_PASSWORD` in a `windows-vm/.env` file before first

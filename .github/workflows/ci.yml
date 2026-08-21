@@ -68,6 +68,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Set version
+        id: version
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"
@@ -75,14 +76,15 @@ jobs:
             version="0.1.0-dev+${GITHUB_SHA::12}"
           fi
           printf 'VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Build Linux archive
         env:
           CGO_ENABLED: "1"
         run: make package-linux VERSION="$VERSION"
       - uses: actions/upload-artifact@v4
         with:
-          name: df-hud-linux-amd64
-          path: dist/df-hud-linux-amd64.tar.gz
+          name: df-hud-${{ steps.version.outputs.version }}-linux-amd64
+          path: dist/df-hud-${{ steps.version.outputs.version }}-linux-amd64.tar.gz
           if-no-files-found: error
 
   build-windows:
@@ -111,6 +113,7 @@ jobs:
             mingw-w64-ucrt-x86_64-ntldd
             mingw-w64-ucrt-x86_64-pkgconf
       - name: Set version
+        id: version
         shell: pwsh
         run: |
           if ($env:GITHUB_REF_TYPE -eq "tag") {
@@ -119,6 +122,7 @@ jobs:
             $version = "0.1.0-dev+$($env:GITHUB_SHA.Substring(0, 12))"
           }
           "VERSION=$version" >> $env:GITHUB_ENV
+          "version=$version" >> $env:GITHUB_OUTPUT
       - name: Build Windows archive
         shell: pwsh
         env:
@@ -126,8 +130,8 @@ jobs:
         run: ./build-windows.ps1 -Version $env:VERSION
       - uses: actions/upload-artifact@v4
         with:
-          name: df-hud-windows-amd64
-          path: dist/df-hud-windows-amd64.zip
+          name: df-hud-${{ steps.version.outputs.version }}-windows-amd64
+          path: dist/df-hud-${{ steps.version.outputs.version }}-windows-amd64.zip
           if-no-files-found: error
 
   release:
@@ -146,8 +150,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          version="${GITHUB_REF_NAME#v}"
           gh release create "$GITHUB_REF_NAME" \
-            df-hud-linux-amd64.tar.gz \
-            df-hud-windows-amd64.zip \
+            "df-hud-$version-linux-amd64.tar.gz" \
+            "df-hud-$version-windows-amd64.zip" \
             --generate-notes \
             --title "df-hud ${GITHUB_REF_NAME#v}"

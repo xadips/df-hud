@@ -53,9 +53,8 @@ type Keys struct {
 	// screen. Nil, or true, means send anyway.
 	ready func() bool
 
-	// enabled and dismiss are the tray overrides, separate from the config keys
-	// for the same reason the overlay's is: they are things you switch between
-	// sessions, and writing the config file to do it would need an editor open.
+	// enabled and dismiss are the live copies behind the tray checkboxes. The app
+	// persists tray changes to config.toml and ApplyConfig updates them on reload.
 	enabled atomic.Bool
 	dismiss atomic.Bool
 
@@ -90,6 +89,13 @@ func New(cfg func() *config.Config, state func() model.GameState, place func() d
 func (k *Keys) SetFPSDisplay(on bool) { k.enabled.Store(on) }
 
 func (k *Keys) FPSDisplay() bool { return k.enabled.Load() }
+
+// ApplyConfig makes live config reloads authoritative over the two tray-backed
+// switches. Tray clicks persist these fields before changing the runtime state.
+func (k *Keys) ApplyConfig(cfg config.GameKeysConfig) {
+	k.enabled.Store(cfg.FPSDisplay)
+	k.dismiss.Store(cfg.DismissLauncher)
+}
 
 // KeysTick is the floor on how long the launcher dialog stays on screen: it
 // is noticed on one tick and dismissed on a later one. Reads cached state only;

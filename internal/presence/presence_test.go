@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -142,5 +143,64 @@ func TestPresenceReportsConnectionLifecycle(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for disconnection callback")
+	}
+}
+
+func TestPresenceRetriesFailedBindOnRequest(t *testing.T) {
+	p := newPresenceServer("test-endpoint")
+	attempts := make(chan int, 2)
+	attempt := 0
+	p.listenFn = func() (net.Listener, error) {
+		attempt++
+		attempts <- attempt
+		if attempt == 1 {
+			return nil, errors.New("endpoint already owned")
+		}
+		return net.Listen("tcp", "127.0.0.1:0")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		p.Run(ctx)
+		close(done)
+	}()
+
+	if got := <-attempts; got != 1 {
+		t.Fatalf("first bind attempt = %d", got)
+	}
+	deadline := time.Now().Add(time.Second)
+	for !p.BindFailed() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !p.BindFailed() {
+		t.Fatal("failed bind was not exposed")
+	}
+	if !p.Retry() {
+		t.Fatal("failed server rejected retry request")
+	}
+	if got := <-attempts; got != 2 {
+		t.Fatalf("retry bind attempt = %d", got)
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for !p.Listening() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !p.Listening() {
+		t.Fatal("server did not listen after retry")
+	}
+	if p.Retry() {
+		t.Fatal("listening server accepted redundant retry")
+	}
+	if p.BindFailed() {
+		t.Fatal("successful retry retained failed bind state")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("presence server did not stop")
 	}
 }

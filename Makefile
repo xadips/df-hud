@@ -66,10 +66,10 @@ package-windows: windows-vm-key
 		powershell.exe -NoProfile -ExecutionPolicy Bypass \
 		-File C:\\OEM\\build-df-hud.ps1 \
 		-Version "$(VERSION)" -NonInteractive
-	@test -f dist/df-hud-windows-amd64-native.zip
+	@test -f "dist/df-hud-$(VERSION)-windows-amd64.zip"
 
 smoke-windows:
-	cd dist/df-hud-windows-amd64 && \
+	cd "dist/df-hud-$(VERSION)-windows-amd64" && \
 		WINEDEBUG=-all $(WINE) ./df-hud.exe -version && \
 		WINEDEBUG=-all $(WINE) ./df-hud.exe -check-config
 

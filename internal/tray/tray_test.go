@@ -2,6 +2,7 @@ package tray
 
 import (
 	"bytes"
+	"image/color"
 	"image/png"
 	"strings"
 	"testing"
@@ -35,6 +36,9 @@ func TestTrayTooltip(t *testing.T) {
 		t.Errorf("tooltip lines = %q, want one fact per line", lines)
 	} else if !strings.HasPrefix(lines[0], "df-hud: in the city") {
 		t.Errorf("first line = %q, want the primary state on its own", lines[0])
+	}
+	if got := trayTooltipWithVersion(playing, visible, "1.2.3"); !strings.Contains(got, "version 1.2.3") {
+		t.Errorf("versioned tooltip = %q", got)
 	}
 
 	// The rate window survives a restart, so a rate with no snapshot behind it is
@@ -86,19 +90,30 @@ func TestTrayIconActiveFor(t *testing.T) {
 	if !trayIconActiveFor(&View{GameRunning: true}) {
 		t.Error("the game running is what the colour means")
 	}
+	if got := trayIconStateFor(&View{GameRunning: true}, true); got != trayIconErrorState {
+		t.Errorf("bind failure icon = %v, want red error state", got)
+	}
+	if got := trayIconStateFor(&View{}, false); got != trayIconIdleState {
+		t.Errorf("closed game icon = %v, want idle state", got)
+	}
+	if got := trayIconStateFor(&View{GameRunning: true}, false); got != trayIconActiveState {
+		t.Errorf("running game icon = %v, want active state", got)
+	}
 }
 
 // The icon is generated rather than shipped as a binary, so a test that it
 // decodes and has the intended shape is what stands in for looking at the file.
 func TestTrayIconPNG(t *testing.T) {
-	for _, size := range []int{16, 64} {
-		data := trayIconPNG(trayIconActive, size)
-		img, err := png.Decode(bytes.NewReader(data))
-		if err != nil {
-			t.Fatalf("size %d: %v", size, err)
-		}
-		if b := img.Bounds(); b.Dx() != size || b.Dy() != size {
-			t.Errorf("size %d: bounds = %v", size, b)
+	for _, color := range []color.NRGBA{trayIconActive, trayIconIdle, trayIconError} {
+		for _, size := range []int{16, 64} {
+			data := trayIconPNG(color, size)
+			img, err := png.Decode(bytes.NewReader(data))
+			if err != nil {
+				t.Fatalf("color %v size %d: %v", color, size, err)
+			}
+			if b := img.Bounds(); b.Dx() != size || b.Dy() != size {
+				t.Errorf("color %v size %d: bounds = %v", color, size, b)
+			}
 		}
 	}
 

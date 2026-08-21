@@ -67,8 +67,9 @@ if (-not [IO.Path]::IsPathRooted($OutputDirectory)) {
     $OutputDirectory = Join-Path $RepoRoot $OutputDirectory
 }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$Stage = Join-Path $OutputDirectory "df-hud-windows-amd64"
-$Archive = Join-Path $OutputDirectory "df-hud-windows-amd64.zip"
+$BaseName = "df-hud-$Version-windows-amd64"
+$Stage = Join-Path $OutputDirectory $BaseName
+$Archive = Join-Path $OutputDirectory "$BaseName.zip"
 $Executable = Join-Path $Stage "df-hud.exe"
 $ResourceObject = Join-Path $RepoRoot "cmd\df-hud\df-hud_windows_amd64.syso"
 

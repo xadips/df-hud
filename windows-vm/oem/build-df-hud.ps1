@@ -45,9 +45,10 @@ Remove-Item $output -Recurse -Force -ErrorAction SilentlyContinue
     -OutputDirectory $output `
     -Version $Version
 
-$sourceArchive = Join-Path $output "df-hud-windows-amd64.zip"
+$archiveName = "df-hud-$Version-windows-amd64.zip"
+$sourceArchive = Join-Path $output $archiveName
 $sharedDist = Join-Path $shared "dist"
-$targetArchive = Join-Path $sharedDist "df-hud-windows-amd64-native.zip"
+$targetArchive = Join-Path $sharedDist $archiveName
 New-Item $sharedDist -ItemType Directory -Force | Out-Null
 Copy-Item $sourceArchive $targetArchive -Force
 

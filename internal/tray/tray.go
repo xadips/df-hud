@@ -37,9 +37,8 @@ type Actions struct {
 	// SetOverlayEnabled is the manual show/hide override.
 	SetOverlayEnabled func(bool)
 	OverlayEnabled    func() bool
-	// SetChallengesHidden is the board's own show/hide, the same switch a keybind
-	// hits. Here as well as on a key because a menu is where you find out that the
-	// feature exists.
+	// The three feature checkboxes below are persisted to config.toml by the app;
+	// these accessors expose their effective live state to the menu.
 	SetChallengesHidden func(bool)
 	ChallengesHidden    func() bool
 	// SetFPSDisplay presses the game's own FPS key. Nil when the feature is not
@@ -56,8 +55,13 @@ type Actions struct {
 	ResetXPRate func()
 	// RestartRunClock starts the run clock from now.
 	RestartRunClock func()
-	ReloadConfig    func()
-	Quit            func()
+	// RetryPresence retries the Discord IPC bind after the user closes whichever
+	// Discord client owned it first. Nil when presence capture is disabled.
+	RetryPresence      func() bool
+	PresenceBindFailed func() bool
+	ReloadConfig       func()
+	Quit               func()
+	Version            string
 
 	// View and Visibility supply the icon state and the tooltip.
 	View       func() *model.View
@@ -74,7 +78,7 @@ type (
 // written when something actually changes. Setting them every second would emit
 // a NewIcon and a NewToolTip signal every second to every tray host on the bus.
 type trayFace struct {
-	active  bool
+	icon    trayIconState
 	tooltip string
 }
 
@@ -131,13 +135,39 @@ func trayTooltip(v *model.View, vis model.Visibility) string {
 	return strings.Join(lines, "\n")
 }
 
+func trayTooltipWithVersion(v *model.View, vis model.Visibility, version string) string {
+	text := trayTooltip(v, vis)
+	if version != "" {
+		text += "\nversion " + version
+	}
+	return text
+}
+
 // trayIconActiveFor decides which of the two icons to show: the game running is
 // the one bit of state visible from across the room.
 func trayIconActiveFor(v *model.View) bool { return v != nil && v.GameRunning }
 
+type trayIconState uint8
+
+const (
+	trayIconIdleState trayIconState = iota
+	trayIconActiveState
+	trayIconErrorState
+)
+
+func trayIconStateFor(v *model.View, presenceBindFailed bool) trayIconState {
+	if presenceBindFailed {
+		return trayIconErrorState
+	}
+	if trayIconActiveFor(v) {
+		return trayIconActiveState
+	}
+	return trayIconIdleState
+}
+
 type trayItem struct {
 	actions trayActions
-	icons   map[bool][]byte
+	icons   map[trayIconState][]byte
 
 	mu   sync.Mutex
 	face trayFace
@@ -155,9 +185,10 @@ type trayItem struct {
 func Run(ctx context.Context, actions Actions) {
 	t := &trayItem{
 		actions: actions,
-		icons: map[bool][]byte{
-			true:  trayIconBytes(trayIconActive, trayIconSize),
-			false: trayIconBytes(trayIconIdle, trayIconSize),
+		icons: map[trayIconState][]byte{
+			trayIconActiveState: trayIconBytes(trayIconActive, trayIconSize),
+			trayIconIdleState:   trayIconBytes(trayIconIdle, trayIconSize),
+			trayIconErrorState:  trayIconBytes(trayIconError, trayIconSize),
 		},
 	}
 
@@ -168,7 +199,7 @@ func Run(ctx context.Context, actions Actions) {
 
 	// Linux's SNI backend bakes these into its initial property set.
 	systray.SetTitle("df-hud")
-	systray.SetIcon(t.icons[false])
+	systray.SetIcon(t.icons[trayIconIdleState])
 	ready := make(chan struct{})
 	onReady := func() {
 		t.buildMenu()
@@ -198,7 +229,7 @@ func (t *trayItem) runWindows(ctx context.Context) {
 	ready := make(chan struct{})
 	onReady := func() {
 		systray.SetTitle("df-hud")
-		systray.SetIcon(t.icons[false])
+		systray.SetIcon(t.icons[trayIconIdleState])
 		t.buildMenu()
 		close(ready)
 	}
@@ -256,6 +287,16 @@ func (t *trayItem) buildMenu() {
 		fps = systray.AddMenuItemCheckbox("FPS display on launch",
 			"Press the game's FPS key once each time the client starts", t.actions.FPSDisplay())
 	}
+	// Unticking this is how you reach the launcher's Input tab, so the label says
+	// what it does to the dialog rather than naming the dialog.
+	var skipLnc *systray.MenuItem
+	if t.actions.SetDismissLauncher != nil && t.actions.DismissLauncher != nil {
+		skipLnc = systray.AddMenuItemCheckbox("Skip the launcher",
+			"Press Play on the configuration dialog. Untick to reach the Input tab.",
+			t.actions.DismissLauncher())
+	}
+	systray.AddSeparator()
+
 	// A challenge reward is a single lump of XP that no amount of killing
 	// produced, so it lands in the window and inflates the average for as long as
 	// the window is wide. The rate is not wrong - that XP really was earned - but
@@ -270,18 +311,18 @@ func (t *trayItem) buildMenu() {
 	// from activity and can be late.
 	restartRun := systray.AddMenuItem("Restart run clock",
 		"Time this run from now, when it started before you did")
-	systray.AddSeparator()
-	reload := systray.AddMenuItem("Reload config", "Re-read config.toml")
-	quit := systray.AddMenuItem("Quit df-hud", "Stop df-hud")
-
-	// Unticking this is how you reach the launcher's Input tab, so the label says
-	// what it does to the dialog rather than naming the dialog.
-	var skipLnc *systray.MenuItem
-	if t.actions.SetDismissLauncher != nil && t.actions.DismissLauncher != nil {
-		skipLnc = systray.AddMenuItemCheckbox("Skip the launcher",
-			"Press Play on the configuration dialog. Untick to reach the Input tab.",
-			t.actions.DismissLauncher())
+	var retryPresence *systray.MenuItem
+	if t.actions.RetryPresence != nil {
+		retryPresence = systray.AddMenuItem("Retry Discord IPC bind",
+			"Bind presence capture again after closing Discord or Vesktop")
 	}
+	reload := systray.AddMenuItem("Reload config", "Re-read config.toml")
+	systray.AddSeparator()
+	if t.actions.Version != "" {
+		versionItem := systray.AddMenuItem("df-hud "+t.actions.Version, "")
+		versionItem.Disable()
+	}
+	quit := systray.AddMenuItem("Quit df-hud", "Stop df-hud")
 
 	t.mu.Lock()
 	t.overlay, t.board, t.fps, t.skipLnc = overlay, board, fps, skipLnc
@@ -337,6 +378,17 @@ func (t *trayItem) buildMenu() {
 			}
 		}
 	}()
+	if retryPresence != nil {
+		go func() {
+			for range retryPresence.ClickedCh {
+				if t.actions.RetryPresence() {
+					log.Print("tray: Discord IPC bind retry requested")
+				} else {
+					log.Print("tray: Discord IPC bind is already active or retry is pending")
+				}
+			}
+		}()
+	}
 	go func() {
 		for range reload.ClickedCh {
 			if t.actions.ReloadConfig != nil {
@@ -363,15 +415,20 @@ func (t *trayItem) refresh() {
 	if t.actions.Visibility != nil {
 		vis = t.actions.Visibility()
 	}
-	next := trayFace{active: trayIconActiveFor(view), tooltip: trayTooltip(view, vis)}
+	bindFailed := t.actions.PresenceBindFailed != nil && t.actions.PresenceBindFailed()
+	tooltip := trayTooltipWithVersion(view, vis, t.actions.Version)
+	if bindFailed {
+		tooltip += "\nDiscord IPC unavailable - close Discord and retry the bind"
+	}
+	next := trayFace{icon: trayIconStateFor(view, bindFailed), tooltip: tooltip}
 
 	t.mu.Lock()
 	prev := t.face
 	t.face = next
 	t.mu.Unlock()
 
-	if prev.active != next.active {
-		systray.SetIcon(t.icons[next.active])
+	if prev.icon != next.icon {
+		systray.SetIcon(t.icons[next.icon])
 	}
 	if prev.tooltip != next.tooltip {
 		systray.SetTooltip(next.tooltip)
