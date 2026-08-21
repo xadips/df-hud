@@ -108,6 +108,43 @@ func TestPresenceMaintainsRunClock(t *testing.T) {
 	}
 }
 
+func TestPresenceRunClockIgnoresConflictingPollsAndPartyRefreshes(t *testing.T) {
+	now := time.Unix(10000, 0)
+	s := runningStore(now)
+	s.SetPresence(PresenceState{At: now, HasPosition: true, X: 1054, Y: 986})
+
+	// The player record can lag behind the client and still claim the character
+	// is in an outpost. It must not clear a clock whose boundary came from IPC,
+	// even after the position presence would be considered stale for rendering.
+	s.ApplyTick(Tick{
+		At: now.Add(presenceMaxAge + time.Minute), Vars: realPlayerRecord(), Scheduled: true,
+	})
+	if started, _ := s.Run(); !started.Equal(now) {
+		t.Fatalf("conflicting poll changed run start to %v, want %v", started, now)
+	}
+
+	// Multiplayer join/leave changes cause another SET_ACTIVITY with the same
+	// details. Reapplying that city state is not a new run boundary.
+	refresh := now.Add(presenceMaxAge + 2*time.Minute)
+	s.SetPresence(PresenceState{At: refresh, HasPosition: true, X: 1054, Y: 986})
+	if started, _ := s.Run(); !started.Equal(now) {
+		t.Fatalf("party refresh changed run start to %v, want %v", started, now)
+	}
+}
+
+func TestDeathStillEndsPresenceOwnedRun(t *testing.T) {
+	now := time.Unix(10000, 0)
+	s := runningStore(now)
+	s.SetPresence(PresenceState{At: now, HasPosition: true, X: 1054, Y: 986})
+
+	dead := cityRecord()
+	dead["df_dead"] = "1"
+	s.ApplyTick(Tick{At: now.Add(time.Minute), Vars: dead, Scheduled: true})
+	if started, _ := s.Run(); !started.IsZero() {
+		t.Fatalf("death left presence-owned run active at %v", started)
+	}
+}
+
 func TestPresenceDoesNotClobberRestoredRun(t *testing.T) {
 	now := time.Unix(10000, 0)
 	started := now.Add(-time.Hour)

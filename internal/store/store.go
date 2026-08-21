@@ -217,8 +217,9 @@ type Store struct {
 	// own record - see presence.go for the measurement. Kept beside the snapshot
 	// rather than folded into it because the two arrive independently and only
 	// this one is allowed to answer "where am I".
-	presence     PresenceState
-	havePresence bool
+	presence        PresenceState
+	havePresence    bool
+	presenceOwnsRun bool
 
 	bossMap     *BossMap
 	board       []Challenge
@@ -335,14 +336,21 @@ func (s *Store) updateRunLocked(snap Snapshot) {
 	leftOutpost := s.havePrev && s.prevSnap.InOutpost && !snap.InOutpost
 
 	switch {
-	case snap.InOutpost || snap.Dead:
+	case snap.Dead:
 		// Dying ends a run as surely as extracting does, and df_dead is the
-		// server's own flag rather than an inference from HP.
-		why := "the record says outpost"
-		if snap.Dead {
-			why = "you died"
-		}
-		s.endRunLocked(snap.At, why)
+		// server's own flag rather than an inference from HP. Presence does not
+		// publish death, so this remains authoritative even after IPC takes over.
+		s.endRunLocked(snap.At, "you died")
+	case s.presenceOwnsRun:
+		// Presence publishes run boundaries directly. Once it has spoken during
+		// this game session, a lagging or outright wrong df_inoutpost value must
+		// not clear the clock and let the next party/activity refresh restart it.
+		//
+		// This is deliberately not freshness-gated: presence is an edge feed and
+		// normally stays silent while the player stands still. Its last run state
+		// remains true until another presence edge, death, or the game closing.
+	case snap.InOutpost:
+		s.endRunLocked(snap.At, "the record says outpost")
 	case s.runStart.IsZero() && (leftOutpost || moved):
 		// Timed from the observation that proves it, not the one before: never
 		// claim to have been playing for longer than there is evidence for.
@@ -518,6 +526,9 @@ func (s *Store) SetPresence(p PresenceState) {
 		return
 	}
 	s.presence, s.havePresence = p, true
+	if p.HasPosition || p.InOutpost || p.Loading {
+		s.presenceOwnsRun = true
+	}
 	s.updateRunFromPresenceLocked(p)
 }
 
@@ -602,6 +613,11 @@ func (s *Store) SetGame(g GameState) {
 	s.mu.Lock()
 	prev := s.game
 	s.game = g
+	if !g.SameSession(prev) {
+		// Presence authority belongs to one game process. A new process gets poll
+		// fallback until its own Discord SDK publishes a recognized state.
+		s.presenceOwnsRun = false
+	}
 	switch {
 	case !g.Running:
 		// The commonest end to a run: you quit. Timed to now rather than to the
