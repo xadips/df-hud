@@ -15,6 +15,8 @@ UNITDIR ?= $(HOME)/.config/systemd/user
 DOCKER  ?= docker
 WINE    ?= wine
 WINDOWS_VM_COMPOSE := windows-vm/compose.yml
+WINDOWS_VM_SSH_DIR := windows-vm/.ssh
+WINDOWS_VM_USER ?= dfhud
 
 # Stamped into -version and the User-Agent, so a running daemon can be told from a
 # working tree. The base stays a dev string - nothing produces release numbers yet -
@@ -22,19 +24,19 @@ WINDOWS_VM_COMPOSE := windows-vm/compose.yml
 REV     := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 VERSION ?= 0.1.0-dev+$(REV)
 
-.PHONY: all build test check test-windows package-linux smoke-windows windows-vm-up windows-vm-down windows-vm-logs install uninstall enable disable restart logs status clean
+.PHONY: all build test check test-windows package-linux package-windows smoke-windows windows-vm-key windows-vm-up windows-vm-down windows-vm-logs install uninstall enable disable restart logs status clean
 
 all: build
 
 build:
-	go build -ldflags "-X main.version=$(VERSION)" -o $(BIN) ./cmd/df-hud
+	go build -buildvcs=false -ldflags "-X main.version=$(VERSION)" -o $(BIN) ./cmd/df-hud
 
 # Everything CI would run, in the order that fails fastest.
 check:
 	gofmt -l .
 	go vet ./...
 	go test ./... -race
-	go build -tags nolayershell -o /dev/null ./cmd/df-hud
+	go build -buildvcs=false -tags nolayershell -o /dev/null ./cmd/df-hud
 
 test:
 	go test ./...
@@ -45,6 +47,26 @@ test-windows:
 
 package-linux:
 	./build-linux.sh "$(VERSION)"
+
+windows-vm-key:
+	@mkdir -p $(WINDOWS_VM_SSH_DIR)
+	@if [ ! -f $(WINDOWS_VM_SSH_DIR)/id_ed25519 ]; then \
+		ssh-keygen -q -t ed25519 -N "" -C df-hud-windows-vm \
+			-f $(WINDOWS_VM_SSH_DIR)/id_ed25519; \
+	fi
+	@chmod 600 $(WINDOWS_VM_SSH_DIR)/id_ed25519
+
+package-windows: windows-vm-key
+	ssh -p 2222 \
+		-i $(WINDOWS_VM_SSH_DIR)/id_ed25519 \
+		-o BatchMode=yes \
+		-o StrictHostKeyChecking=accept-new \
+		-o UserKnownHostsFile=$(CURDIR)/$(WINDOWS_VM_SSH_DIR)/known_hosts \
+		$(WINDOWS_VM_USER)@127.0.0.1 \
+		powershell.exe -NoProfile -ExecutionPolicy Bypass \
+		-File C:\\OEM\\build-df-hud.ps1 \
+		-Version "$(VERSION)" -NonInteractive
+	@test -f dist/df-hud-windows-amd64-native.zip
 
 smoke-windows:
 	cd dist/df-hud-windows-amd64 && \

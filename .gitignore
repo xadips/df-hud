@@ -18,3 +18,4 @@ positions.ndjson
 
 # Local Windows VM credentials.
 /windows-vm/.env
+/windows-vm/.ssh/

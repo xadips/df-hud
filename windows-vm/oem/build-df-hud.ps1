@@ -1,20 +1,31 @@
 [CmdletBinding()]
 param(
-    [string]$Version = ""
+    [string]$Version = "",
+    [switch]$NonInteractive
 )
 
 $ErrorActionPreference = "Stop"
-$shared = "Z:\"
 $work = "C:\df-hud-build"
 $output = "C:\df-hud-output"
 
-if (-not (Test-Path (Join-Path $shared "go.mod"))) {
-    throw "The shared df-hud repository is not available at Z:\"
+$shared = $null
+foreach ($candidate in @("Z:\", "\\host.lan\Data")) {
+    if (Test-Path "$candidate\go.mod") {
+        $shared = $candidate
+        break
+    }
+}
+if (-not $shared) {
+    throw "The shared df-hud repository is unavailable at Z:\ or \\host.lan\Data"
 }
 if ([string]::IsNullOrWhiteSpace($Version)) {
-    $Version = Read-Host "Version [0.1.0-local]"
-    if ([string]::IsNullOrWhiteSpace($Version)) {
+    if ($NonInteractive) {
         $Version = "0.1.0-local"
+    } else {
+        $Version = Read-Host "Version [0.1.0-local]"
+        if ([string]::IsNullOrWhiteSpace($Version)) {
+            $Version = "0.1.0-local"
+        }
     }
 }
 
@@ -45,4 +56,6 @@ Write-Host ""
 Write-Host "Built df-hud $Version"
 Write-Host "Copied to $targetArchive"
 Write-Host "SHA-256: $hash"
-Read-Host "Press Enter to close"
+if (-not $NonInteractive) {
+    Read-Host "Press Enter to close"
+}

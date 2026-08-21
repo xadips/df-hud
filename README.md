@@ -612,14 +612,17 @@ The Fedora MinGW runtime compiles and passes Wine smoke tests but renders this
 fullscreen DirectComposition surface black on real Windows, so it is not a
 release path.
 
-For a local native build, `make windows-vm-up` starts a persistent Windows 11 VM
-through Dockur. Open `http://127.0.0.1:8006/`; the first start installs Windows,
-Go, MSYS2 and GTK, and puts **Build df-hud** on the VM's desktop. That shortcut
-copies the shared repository to the Windows disk, runs `build-windows.ps1`, and
-writes `dist/df-hud-windows-amd64-native.zip` back on the host. `make
-windows-vm-down` stops the VM without deleting its disk. The default login is
-`dfhud` / `dfhud-local`; override `WINDOWS_USER` and `WINDOWS_PASSWORD` in a
-`windows-vm/.env` file before first boot.
+For a local native build, run `make windows-vm-key` once, then `make
+windows-vm-up` to start a persistent Windows 11 VM through Dockur. Open
+`http://127.0.0.1:8006/`; the first start installs Windows, Go, MSYS2, GTK and a
+localhost-only SSH service. After that, `make package-windows VERSION=...`
+remotely copies the live shared repository to the Windows disk, runs
+`build-windows.ps1`, and writes
+`dist/df-hud-windows-amd64-native.zip` back on the host. The desktop shortcut
+does the same interactively. `make windows-vm-down` stops the VM without
+deleting its disk. The default login is `dfhud` / `dfhud-local`; override
+`WINDOWS_USER` and `WINDOWS_PASSWORD` in a `windows-vm/.env` file before first
+boot.
 
 `make test-windows` cross-compiles the Windows tests headlessly and runs them
 through Wine. `make smoke-windows` checks the packaged GTK executable's version
