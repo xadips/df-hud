@@ -15,7 +15,7 @@ Working today:
 
 - **Block Info** — where you are, which outpost, which region, block-support
   countdown, and **what is standing on your block**: bosses, bandit packs,
-  missions, QRF events and outpost attacks
+  missions, QRF events and outpost attacks, each with **how long it has left**
 - **Run clock** — time since you started playing, which is not the same as the
   client's uptime (see below)
 - **XP/hr** — averaged over five minutes, with the colour carrying whether recent

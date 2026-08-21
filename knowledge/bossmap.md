@@ -94,6 +94,19 @@ still just a countdown - so `threatLines` (the plain, uncoloured display used
 everywhere else on the map) never shows Onslaught's prev/next fields at all,
 only `onslaughtPanel` does.
 
+**How long the thing on your block has left goes on its first row, once.** A
+nest is one event carrying up to seven enemy types with a single `end_time`
+between them, so a countdown per row would print the same number seven times
+down a group that is already seven rows tall. The map's key had settled this
+first: `mapRow.Timer` is set on an entry's first row and empty on its
+continuations. Every one of the 30 events in the recorded capture carries an
+`end_time` - 5, 60, 120 and 700 minute windows - but nothing in their format
+promises it, so a missing or already-passed one shows no countdown rather than a
+placeholder. `withTimeLeft` uses `e.End` and NOT `onslaughtCycleEnd`: that adds
+a cycle per extra name, which is right for an Onslaught bundle of consecutive
+cycles and an hour wrong for a city nest whose types are all standing there at
+the same time.
+
 **Each row is two GTK labels, not one with a mixed-colour markup span.** The
 "prev"/"now"/"next" word stays one fixed grey regardless of section, while the
 content beside it takes the section's own colour - and both want the panel's

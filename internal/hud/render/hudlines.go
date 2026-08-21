@@ -255,6 +255,10 @@ func onslaughtSection(label string, events []CityEvent, class, emptyText string)
 //
 // Silent when the feed has nothing for your block: that is most of the map, and
 // "nothing here" everywhere would train you to stop reading it.
+//
+// Each event's first row carries how long it has left, which is the difference
+// between "there is a boss here" and "there is a boss here for another four
+// minutes" - see withTimeLeft.
 func threatLines(v *View) []string {
 	if !v.HaveData {
 		return nil
@@ -263,8 +267,39 @@ func threatLines(v *View) []string {
 	// appear here.
 	var rows []string
 	for _, e := range v.BlockEvents {
-		rows = append(rows, eventRows(e, "")...)
+		rows = append(rows, withTimeLeft(eventRows(e, ""), e, v.Now)...)
 	}
+	return rows
+}
+
+// withTimeLeft puts how long the thing on your block has left on its FIRST row,
+// and only there.
+//
+// ONE COUNTDOWN PER EVENT, not per row. A nest is a single event carrying up to
+// seven enemy types with one end time between them, so a countdown on every row
+// would print the same number seven times down the group. The map's key already
+// works exactly this way - see mapRow, whose Timer is set on an entry's first row
+// and left empty on its continuations.
+//
+// e.End, NOT onslaughtCycleEnd. That function adds a cycle per extra name,
+// because Onslaught bundles consecutive cycles into one entry; a city nest's
+// types are all standing there at the same time, so the same arithmetic here
+// would push every nest's countdown an hour into the future.
+//
+// A zero Now means nothing has told this View what time it is, which happens in
+// tests rather than in the running HUD, where Derive always sets it. Subtracting
+// from the zero time would print a countdown in hundreds of thousands of days.
+func withTimeLeft(rows []string, e CityEvent, now time.Time) []string {
+	if len(rows) == 0 || e.End.IsZero() || now.IsZero() {
+		return rows
+	}
+	// formatCountdown answers "" for anything already over, which is the same
+	// silence as an event that never gave an end time at all.
+	left := formatCountdown(e.End.Sub(now))
+	if left == "" {
+		return rows
+	}
+	rows[0] += "  " + left
 	return rows
 }
 
