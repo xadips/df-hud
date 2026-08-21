@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"df-hud/internal/autostart"
 	"df-hud/internal/config"
 	"flag"
 	"fmt"
@@ -66,6 +67,9 @@ func main() {
 
 	if err := prepareConfig(cfg); err != nil {
 		log.Fatalf("config: %v", err)
+	}
+	if err := autostart.Reconcile(); err != nil {
+		log.Printf("startup: could not refresh login launch entry: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)

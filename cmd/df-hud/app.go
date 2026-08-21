@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"df-hud/internal/autostart"
 	"df-hud/internal/bossmap"
 	"df-hud/internal/bridge"
 	"df-hud/internal/catalog"
@@ -321,7 +322,7 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 			retryPresence = a.presence.Retry
 			presenceBindFailed = a.presence.BindFailed
 		}
-		go tray.Run(ctx, tray.Actions{
+		actions := tray.Actions{
 			SetOverlayEnabled:   a.visibility.SetEnabled,
 			OverlayEnabled:      a.visibility.Enabled,
 			SetChallengesHidden: a.setChallengesHidden,
@@ -341,7 +342,15 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 			Version:            version,
 			View:               func() *model.View { return a.store.Derive(time.Now()) },
 			Visibility:         a.visibility.State,
-		})
+		}
+		if autostart.Available() {
+			actions.SetStartOnLogin = autostart.SetEnabled
+			actions.StartOnLogin = func() bool {
+				enabled, _ := autostart.Enabled()
+				return enabled
+			}
+		}
+		go tray.Run(ctx, actions)
 	}
 
 	log.Printf("polling budget: about %.0f requests/hour while playing, %.0f idle",

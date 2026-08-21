@@ -59,6 +59,8 @@ type Actions struct {
 	// Discord client owned it first. Nil when presence capture is disabled.
 	RetryPresence      func() bool
 	PresenceBindFailed func() bool
+	SetStartOnLogin    func(bool) error
+	StartOnLogin       func() bool
 	ReloadConfig       func()
 	Quit               func()
 	Version            string
@@ -178,6 +180,7 @@ type trayItem struct {
 	board   *systray.MenuItem
 	fps     *systray.MenuItem
 	skipLnc *systray.MenuItem
+	startup *systray.MenuItem
 }
 
 // runTray blocks until ctx ends. Safe to run in a goroutine: the Linux backend
@@ -316,6 +319,11 @@ func (t *trayItem) buildMenu() {
 		retryPresence = systray.AddMenuItem("Retry Discord IPC bind",
 			"Bind presence capture again after closing Discord or Vesktop")
 	}
+	var startOnLogin *systray.MenuItem
+	if t.actions.SetStartOnLogin != nil && t.actions.StartOnLogin != nil {
+		startOnLogin = systray.AddMenuItemCheckbox("Start df-hud with Windows",
+			"Launch df-hud automatically after signing in", t.actions.StartOnLogin())
+	}
 	reload := systray.AddMenuItem("Reload config", "Re-read config.toml")
 	systray.AddSeparator()
 	if t.actions.Version != "" {
@@ -325,7 +333,8 @@ func (t *trayItem) buildMenu() {
 	quit := systray.AddMenuItem("Quit df-hud", "Stop df-hud")
 
 	t.mu.Lock()
-	t.overlay, t.board, t.fps, t.skipLnc = overlay, board, fps, skipLnc
+	t.overlay, t.board, t.fps, t.skipLnc, t.startup =
+		overlay, board, fps, skipLnc, startOnLogin
 	t.mu.Unlock()
 
 	if skipLnc != nil {
@@ -389,6 +398,19 @@ func (t *trayItem) buildMenu() {
 			}
 		}()
 	}
+	if startOnLogin != nil {
+		go func() {
+			for range startOnLogin.ClickedCh {
+				want := !t.actions.StartOnLogin()
+				if err := t.actions.SetStartOnLogin(want); err != nil {
+					log.Printf("tray: could not update Windows startup: %v", err)
+					continue
+				}
+				syncCheckbox(startOnLogin, want)
+				log.Printf("tray: Windows startup enabled: %t", want)
+			}
+		}()
+	}
 	go func() {
 		for range reload.ClickedCh {
 			if t.actions.ReloadConfig != nil {
@@ -436,7 +458,7 @@ func (t *trayItem) refresh() {
 
 	// Sync the ticks to the real overrides, which keybinds can also change.
 	t.mu.Lock()
-	overlay, board, fps, skipLnc := t.overlay, t.board, t.fps, t.skipLnc
+	overlay, board, fps, skipLnc, startup := t.overlay, t.board, t.fps, t.skipLnc, t.startup
 	t.mu.Unlock()
 	if overlay != nil && t.actions.OverlayEnabled != nil {
 		syncCheckbox(overlay, t.actions.OverlayEnabled())
@@ -449,6 +471,9 @@ func (t *trayItem) refresh() {
 	}
 	if skipLnc != nil && t.actions.DismissLauncher != nil {
 		syncCheckbox(skipLnc, t.actions.DismissLauncher())
+	}
+	if startup != nil && t.actions.StartOnLogin != nil {
+		syncCheckbox(startup, t.actions.StartOnLogin())
 	}
 }
 
