@@ -163,6 +163,21 @@ launcher_title = "Dead Frontier Configuration"
 # is visible, so it is deliberately short; SilverOverlays uses the same 0.5s.
 launcher_delay = "500ms"
 
+[hotkeys]
+# Native Windows hotkeys. They are registered only while the real game window is
+# focused, then released immediately when you alt-tab. Linux ignores this table:
+# the compositor bindings described in contrib/ own global input there.
+enabled = true
+
+# A bare key consumes that key before the game receives it, exactly like the
+# former AutoHotkey helper. Chords are supported too: Ctrl+Shift+M, Alt+F8,
+# Win+K. Set one to "" to leave that action unbound.
+map = "V"
+challenges = "T"
+run_start = "Grave"
+xp_reset = "X"
+overlay = "K"
+
 [paths]
 # Holds credentials.json (0600 on Linux; protected by AppData ACLs on Windows),
 # state.json and catalog.json.

@@ -50,6 +50,13 @@ is yours:
 | `POST /api/widget/<group>/toggle` | show or hide one group: `block`, `bosses`, `session`, `xp`, `challenges`, `map` |
 | `POST /api/console/toggle` | the console window - **not built yet**, answers 503, and has no default bind |
 
+On Windows these are native hotkeys, with no AutoHotkey helper required. They
+are registered only while the real game window is focused and released when you
+alt-tab. The defaults are `V` for the map, `T` for challenges, grave/backtick for
+the run clock, `X` for the XP rate and `K` for the whole overlay. `[hotkeys]` in
+the config changes them; chords such as `Ctrl+Shift+M` and `Alt+F8` are accepted,
+and an empty value leaves one action unbound.
+
 Ready-made, with the layer rules: [contrib/df-hud.lua](contrib/df-hud.lua) for
 Hyprland's Lua configuration, [contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf)
 for `hyprland.conf`. Keep off the function keys and the number row, which Dead

@@ -11,6 +11,7 @@ import (
 	"df-hud/internal/dfclient"
 	"df-hud/internal/game"
 	"df-hud/internal/gamekeys"
+	"df-hud/internal/hotkeys"
 	"df-hud/internal/hud/groups"
 	hudgtk "df-hud/internal/hud/gtk"
 	"df-hud/internal/hud/render"
@@ -48,6 +49,7 @@ type app struct {
 	bosses     *bossmap.BossPoller
 	presence   *presence.PresenceServer
 	gamekeys   *gamekeys.Keys
+	hotkeys    *hotkeys.Hotkeys
 	poller     *poller.Poller
 	challenges *poller.ChallengePoller
 	gate       *rategate.Gate
@@ -152,6 +154,34 @@ func newApp(ctx context.Context, cfg *config.Config, cfgPath string, withBridge 
 	a.gamekeys = gamekeys.New(a.Config, a.game.State, a.visibility.Placement, desktopClient)
 	a.gamekeys.SetActive(desktopClient.ActiveAddress)
 	a.gamekeys.SetReady(func() bool { return a.store.ClientInWorld(time.Now()) })
+	a.hotkeys = hotkeys.New(
+		func() hotkeys.Config {
+			cfg := a.Config().Hotkeys
+			return hotkeys.Config{
+				Enabled: cfg.Enabled, Map: cfg.Map, Challenges: cfg.Challenges,
+				RunStart: cfg.RunStart, XPReset: cfg.XPReset, Overlay: cfg.Overlay,
+			}
+		},
+		func() bool {
+			placement := a.visibility.Placement()
+			if !desktop.CanStartRun(placement) {
+				return false
+			}
+			// The placement watcher reacts quickly, but a global key must be
+			// released even faster when alt-tab moves focus elsewhere. Compare
+			// the live foreground HWND as the final gate so a key typed into the
+			// next application is never consumed on stale placement state.
+			active, ok := desktopClient.ActiveAddress(context.Background())
+			return ok && active == placement.Address
+		},
+		hotkeys.Actions{
+			ToggleMap:        func() { _ = a.toggleWidget("map") },
+			ToggleChallenges: func() { _ = a.toggleWidget("challenges") },
+			StartRun:         func() { a.store.RestartRun(time.Now(), "a native keybind") },
+			ResetXP:          a.resetXPRate,
+			ToggleOverlay:    a.toggleOverlay,
+		},
+	)
 
 	a.challenges.SetOnBoard(func(board []model.Challenge) {
 		a.store.SetChallenges(board, time.Now())
@@ -200,21 +230,10 @@ func newApp(ctx context.Context, cfg *config.Config, cfgPath string, withBridge 
 		if err != nil {
 			return nil, err
 		}
-		bs.SetRunStart(func() { a.store.RestartRun(time.Now(), "a keybind") })
+		bs.SetRunStart(func() { a.store.RestartRun(time.Now(), "a compositor keybind") })
 		bs.SetXPReset(a.resetXPRate)
-		bs.SetOverlayToggle(func() { a.visibility.SetEnabled(!a.visibility.Enabled()) })
-		bs.SetWidgetToggle(func(group string) error {
-			if !groups.Known(group) {
-				return fmt.Errorf("no widget group %q", group)
-			}
-			hidden := a.groups.Toggle(group)
-			shown := "shown"
-			if hidden {
-				shown = "hidden"
-			}
-			log.Printf("hud: %s %s by hand", group, shown)
-			return nil
-		})
+		bs.SetOverlayToggle(a.toggleOverlay)
+		bs.SetWidgetToggle(a.toggleWidget)
 		a.bridgeSrv = srv
 	}
 	if !a.creds.UpdatedAt().IsZero() {
@@ -273,6 +292,7 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 		go a.presence.Run(ctx)
 	}
 	go a.gamekeys.Run(ctx)
+	go a.hotkeys.Run(ctx)
 	go a.reportChallengeStatus(ctx)
 	if a.watcher != nil {
 		go a.watcher.Run(ctx, a.Config, a.applyReload)
@@ -410,7 +430,24 @@ func (a *app) reloadConfig() {
 }
 
 func (a *app) resetXPRate() {
-	a.state.ResetXPWindow("reset from the tray menu")
+	a.state.ResetXPWindow("reset by hand")
+}
+
+func (a *app) toggleOverlay() {
+	a.visibility.SetEnabled(!a.visibility.Enabled())
+}
+
+func (a *app) toggleWidget(group string) error {
+	if !groups.Known(group) {
+		return fmt.Errorf("no widget group %q", group)
+	}
+	hidden := a.groups.Toggle(group)
+	shown := "shown"
+	if hidden {
+		shown = "hidden"
+	}
+	log.Printf("hud: %s %s by hand", group, shown)
+	return nil
 }
 
 func (a *app) persistRun() {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"df-hud/internal/hotkeys"
 	"errors"
 	"fmt"
 	"net"
@@ -97,6 +98,7 @@ type Config struct {
 	Poll     PollConfig     `toml:"poll"`
 	Game     GameConfig     `toml:"game"`
 	GameKeys GameKeysConfig `toml:"game_keys"`
+	Hotkeys  HotkeysConfig  `toml:"hotkeys"`
 	Paths    PathsConfig    `toml:"paths"`
 	HUD      HUDConfig      `toml:"hud"`
 	BossMap  BossMapConfig  `toml:"bossmap"`
@@ -294,6 +296,19 @@ type GameKeysConfig struct {
 	// LauncherDelay is how long to leave the dialog mapped before pressing. Long
 	// enough for it to have taken keyboard focus of its own default button.
 	LauncherDelay duration `toml:"launcher_delay"`
+}
+
+// HotkeysConfig is the native Windows replacement for the AutoHotkey helper.
+// Linux accepts and preserves the table so one shared config works on both
+// systems, but its compositor remains the owner of global shortcuts.
+type HotkeysConfig struct {
+	Enabled bool `toml:"enabled"`
+
+	Map        string `toml:"map"`
+	Challenges string `toml:"challenges"`
+	RunStart   string `toml:"run_start"`
+	XPReset    string `toml:"xp_reset"`
+	Overlay    string `toml:"overlay"`
 }
 
 type PathsConfig struct {
@@ -713,6 +728,14 @@ func defaultConfig() *Config {
 			LauncherTitle: "Dead Frontier Configuration",
 			LauncherDelay: duration{500 * time.Millisecond},
 		},
+		Hotkeys: HotkeysConfig{
+			Enabled:    true,
+			Map:        "V",
+			Challenges: "T",
+			RunStart:   "Grave",
+			XPReset:    "X",
+			Overlay:    "K",
+		},
 		Paths: PathsConfig{DataDir: defaultDataDir()},
 		HUD: HUDConfig{
 			Enabled:             true,
@@ -1001,6 +1024,37 @@ func (c *Config) validate() error {
 		}
 	}
 	errs = appendRange(errs, "game_keys.launcher_delay", c.GameKeys.LauncherDelay.Duration, 0, time.Minute)
+
+	// --- hotkeys ---
+	hotkeyValues := []struct {
+		name  string
+		value *string
+	}{
+		{"map", &c.Hotkeys.Map},
+		{"challenges", &c.Hotkeys.Challenges},
+		{"run_start", &c.Hotkeys.RunStart},
+		{"xp_reset", &c.Hotkeys.XPReset},
+		{"overlay", &c.Hotkeys.Overlay},
+	}
+	usedHotkeys := make(map[string]string, len(hotkeyValues))
+	for _, item := range hotkeyValues {
+		*item.value = strings.TrimSpace(*item.value)
+		if *item.value == "" {
+			continue // an empty value deliberately unbinds this action
+		}
+		binding, err := hotkeys.ParseBinding(*item.value)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("hotkeys.%s: %w", item.name, err))
+			continue
+		}
+		*item.value = binding.String()
+		if previous, exists := usedHotkeys[*item.value]; exists {
+			errs = append(errs, fmt.Errorf("hotkeys.%s and hotkeys.%s both use %q",
+				previous, item.name, *item.value))
+			continue
+		}
+		usedHotkeys[*item.value] = item.name
+	}
 
 	// --- paths ---
 	c.Paths.DataDir = expandHome(strings.TrimSpace(c.Paths.DataDir))

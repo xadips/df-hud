@@ -129,6 +129,41 @@ window = "2m"
 	}
 }
 
+func TestHotkeyConfigCanonicalisesBindingsAndAllowsUnboundActions(t *testing.T) {
+	cfg, err := loadConfig(writeConfig(t, `
+[hotkeys]
+map = "control + shift + m"
+challenges = ""
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Hotkeys.Map != "Ctrl+Shift+M" {
+		t.Errorf("map hotkey = %q, want canonical chord", cfg.Hotkeys.Map)
+	}
+	if cfg.Hotkeys.Challenges != "" {
+		t.Errorf("challenges hotkey = %q, want explicitly unbound", cfg.Hotkeys.Challenges)
+	}
+}
+
+func TestHotkeyConfigRejectsBadAndDuplicateBindings(t *testing.T) {
+	_, err := loadConfig(writeConfig(t, `
+[hotkeys]
+map = "Ctrl+Mouse4"
+challenges = "Alt+F8"
+overlay = "alt + f8"
+`))
+	if err == nil {
+		t.Fatal("invalid and duplicate hotkeys must be rejected")
+	}
+	message := err.Error()
+	for _, want := range []string{"hotkeys.map", "unsupported key", "hotkeys.challenges", "hotkeys.overlay"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("combined error should mention %q:\n%s", want, message)
+		}
+	}
+}
+
 // TestConfigIntervalFloors pins that every floor is an error, never a clamp.
 func TestConfigIntervalFloors(t *testing.T) {
 	cases := map[string]string{
