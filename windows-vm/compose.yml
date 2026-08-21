@@ -1,0 +1,26 @@
+services:
+  windows:
+    image: docker.io/dockurr/windows:latest
+    container_name: df-hud-windows
+    environment:
+      VERSION: "11"
+      RAM_SIZE: "${WINDOWS_RAM:-8G}"
+      CPU_CORES: "${WINDOWS_CPUS:-8}"
+      DISK_SIZE: "${WINDOWS_DISK:-64G}"
+      USERNAME: "${WINDOWS_USER:-dfhud}"
+      PASSWORD: "${WINDOWS_PASSWORD:-dfhud-local}"
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "127.0.0.1:8006:8006"
+      - "127.0.0.1:3389:3389/tcp"
+      - "127.0.0.1:3389:3389/udp"
+    volumes:
+      - "${HOME}/.local/share/df-hud-windows-vm:/storage"
+      - "..:/shared"
+      - "./oem:/oem"
+    restart: unless-stopped
+    stop_grace_period: 2m

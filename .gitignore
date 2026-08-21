@@ -15,3 +15,6 @@ positions.ndjson
 /df-hud
 /dist/
 /cmd/df-hud/df-hud_windows_amd64.syso
+
+# Local Windows VM credentials.
+/windows-vm/.env

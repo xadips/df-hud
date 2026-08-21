@@ -607,10 +607,19 @@ CI or a machine with no Wayland. `make check` is everything CI runs: `gofmt`,
 
 `make package-linux` writes `dist/df-hud-linux-amd64.tar.gz`.
 
-`make package-windows` builds the Windows GTK application locally in a pinned
-Fedora MinGW container and writes `dist/df-hud-windows-amd64.zip`. The first
-build downloads the toolchain and compiles gotk4; Docker volumes keep Go's module
-and build caches for later runs.
+The Windows overlay must be built against the native MSYS2 UCRT64 GTK runtime.
+The Fedora MinGW runtime compiles and passes Wine smoke tests but renders this
+fullscreen DirectComposition surface black on real Windows, so it is not a
+release path.
+
+For a local native build, `make windows-vm-up` starts a persistent Windows 11 VM
+through Dockur. Open `http://127.0.0.1:8006/`; the first start installs Windows,
+Go, MSYS2 and GTK, and puts **Build df-hud** on the VM's desktop. That shortcut
+copies the shared repository to the Windows disk, runs `build-windows.ps1`, and
+writes `dist/df-hud-windows-amd64-native.zip` back on the host. `make
+windows-vm-down` stops the VM without deleting its disk. The default login is
+`dfhud` / `dfhud-local`; override `WINDOWS_USER` and `WINDOWS_PASSWORD` in a
+`windows-vm/.env` file before first boot.
 
 `make test-windows` cross-compiles the Windows tests headlessly and runs them
 through Wine. `make smoke-windows` checks the packaged GTK executable's version
