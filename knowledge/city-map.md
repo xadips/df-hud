@@ -21,7 +21,7 @@ Nothing the game publishes says which coordinates are blocks:
 every real block by coordinate and paints it. `.coord` defaults to `opacity:0`, and
 a block is a coordinate the stylesheet gives a colour and `opacity:1;cursor:pointer`.
 
-`tools/citymapgen` turns that into `citymap.txt`, which is committed and embedded.
+`tools/citymapgen` turns that into `cmd/df-hud/citymap.txt`, which is committed and embedded.
 It is run by hand, once - the city changes when the game changes, which is to say
 almost never - and **df-hud never fetches the stylesheet at runtime**. Re-deriving
 its own map from someone else's CSS on every start would be both fragile and rude.

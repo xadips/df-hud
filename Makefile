@@ -24,14 +24,14 @@ VERSION ?= 0.1.0-dev+$(REV)
 all: build
 
 build:
-	go build -ldflags "-X main.version=$(VERSION)" -o $(BIN) .
+	go build -ldflags "-X main.version=$(VERSION)" -o $(BIN) ./cmd/df-hud
 
 # Everything CI would run, in the order that fails fastest.
 check:
 	gofmt -l .
 	go vet ./...
 	go test ./... -race
-	go build -tags nolayershell -o /dev/null .
+	go build -tags nolayershell -o /dev/null ./cmd/df-hud
 
 test:
 	go test ./...

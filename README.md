@@ -248,7 +248,7 @@ being wrong.
 
 **Nearest means nearest to walk to.** The city is not a rectangle: 1716 of the 3245
 coordinates in its bounding box are blocks, and the rest are gaps you have to go
-around. So df-hud holds the city's shape ([citymap.txt](citymap.txt), and
+around. So df-hud holds the city's shape ([citymap.txt](cmd/df-hud/citymap.txt), and
 [knowledge/city-map.md](knowledge/city-map.md) for where it comes from and what was
 checked), searches outward from the block you are on, and picks the event with the
 shortest walk - which is not always the one with the smallest difference in
@@ -265,7 +265,7 @@ rows are `y`, so the smallest `y` renders topmost - and was checked in the game 
 coordinates stay beside the words regardless, since they are what the game's own
 readout shows.
 
-That also settles the map's orientation: [citymap.txt](citymap.txt) is stored with
+That also settles the map's orientation: [citymap.txt](cmd/df-hud/citymap.txt) is stored with
 `y` increasing downwards and drawn the same way, so north on the overlay is north in
 the game.
 
@@ -562,7 +562,7 @@ server, the budget is set by what their own page already costs them:
 Turning `bossmap.enabled` off costs that one line of the HUD and nothing else.
 
 The city's own shape comes from there too, and this one is **not** a runtime
-request. `citymap.txt` is generated once by `tools/citymapgen` from their bossmap
+request. `cmd/df-hud/citymap.txt` is generated once by `tools/citymapgen` from their bossmap
 stylesheet - the only published thing that knows which coordinates are blocks and
 which are the gaps between them - then committed and embedded. The map changes when
 the game changes, so re-deriving it from someone else's CSS on every start would be
@@ -592,7 +592,7 @@ make            # go build, with the commit stamped into -version
 ./df-hud
 ```
 
-`go build -tags nolayershell` builds the headless core with no GTK at all, for
+`go build -tags nolayershell ./cmd/df-hud` builds the headless core with no GTK at all, for
 CI or a machine with no Wayland. `make check` is everything CI runs: `gofmt`,
 `go vet`, `go test -race`, and that headless build.
 

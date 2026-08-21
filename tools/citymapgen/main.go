@@ -13,7 +13,7 @@
 // map from someone else's CSS on every start would be both fragile and rude.
 //
 //	curl -o bosstable.css https://www.dfprofiler.com/css/bosstable.css
-//	go run ./tools/citymapgen bosstable.css > citymap.txt
+//	go run ./tools/citymapgen bosstable.css > cmd/df-hud/citymap.txt
 //
 // See knowledge/city-map.md for what was checked against the result.
 package main

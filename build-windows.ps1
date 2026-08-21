@@ -70,7 +70,7 @@ $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $Stage = Join-Path $OutputDirectory "df-hud-windows-amd64"
 $Archive = Join-Path $OutputDirectory "df-hud-windows-amd64.zip"
 $Executable = Join-Path $Stage "df-hud.exe"
-$ResourceObject = Join-Path $RepoRoot "df-hud_windows_amd64.syso"
+$ResourceObject = Join-Path $RepoRoot "cmd\df-hud\df-hud_windows_amd64.syso"
 
 if (Test-Path $ResourceObject) {
     throw "Refusing to overwrite existing generated resource: $ResourceObject"
@@ -90,7 +90,7 @@ try {
 
         & $Go build -trimpath `
             -ldflags "-H=windowsgui -X main.version=$Version" `
-            -o $Executable .
+            -o $Executable ./cmd/df-hud
         if ($LASTEXITCODE -ne 0) {
             throw "go build failed."
         }
