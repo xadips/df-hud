@@ -123,7 +123,7 @@ static int df_apply_win32_overlay(GtkWindow *win, const char *connector,
                                   int fallback_w, int fallback_h,
                                   int margin_top, int margin_right,
                                   int margin_bottom, int margin_left,
-                                  int click_through) {
+                                  int click_through, int alpha) {
 	if (win == NULL) return 0;
 	GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(win));
 	if (surface == NULL || !GDK_IS_WIN32_SURFACE(surface)) return 0;
@@ -148,12 +148,10 @@ static int df_apply_win32_overlay(GtkWindow *win, const char *connector,
 		exstyle &= ~WS_EX_TRANSPARENT;
 	}
 	SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exstyle);
-	// Do NOT call SetLayeredWindowAttributes here. GTK's Win32 backend renders
-	// transparent surfaces with per-pixel UpdateLayeredWindow calls, and Windows
-	// documents that SetLayeredWindowAttributes makes every later update fail
-	// until WS_EX_LAYERED is cleared and set again. The symptom is a full black
-	// rectangle where CSS asked for transparency. GtkWindow opacity remains the
-	// owner of the configured whole-window alpha.
+	if (click_through &&
+	    !SetLayeredWindowAttributes(hwnd, 0, (BYTE)alpha, LWA_ALPHA)) {
+		return -1;
+	}
 
 	RECT target;
 	if (!df_monitor_rect_for_connector(connector, &target)) {
@@ -231,6 +229,7 @@ type windowsOverlay struct {
 	marginBottom    int
 	marginLeft      int
 	clickThrough    bool
+	opacity         float64
 	placementWarned bool
 }
 
@@ -263,6 +262,7 @@ func (o *windowsOverlay) applyPlacement(cfg *Config) {
 	o.marginBottom = cfg.HUD.MarginBottom
 	o.marginLeft = cfg.HUD.MarginLeft
 	o.clickThrough = cfg.HUD.ClickThrough
+	o.opacity = cfg.HUD.Opacity
 	o.window.SetOpacity(cfg.HUD.Opacity)
 }
 
@@ -326,6 +326,13 @@ func (o *windowsOverlay) applyMapped(clickThrough bool) bool {
 	if clickThrough {
 		through = 1
 	}
+	alpha := int(o.opacity*255 + 0.5)
+	if alpha < 0 {
+		alpha = 0
+	}
+	if alpha > 255 {
+		alpha = 255
+	}
 	result := C.df_apply_win32_overlay(
 		C.df_as_gtk_window(C.uintptr_t(o.handle)),
 		connector,
@@ -336,6 +343,7 @@ func (o *windowsOverlay) applyMapped(clickThrough bool) bool {
 		C.int(o.marginTop*o.scaleFactor), C.int(o.marginRight*o.scaleFactor),
 		C.int(o.marginBottom*o.scaleFactor), C.int(o.marginLeft*o.scaleFactor),
 		through,
+		C.int(alpha),
 	)
 	if result < 0 && !o.placementWarned {
 		o.placementWarned = true

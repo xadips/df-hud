@@ -607,10 +607,8 @@ CI or a machine with no Wayland. `make check` is everything CI runs: `gofmt`,
 
 `make package-linux` writes `dist/df-hud-linux-amd64.tar.gz`.
 
-The Windows overlay must be built against the native MSYS2 UCRT64 GTK runtime.
-The Fedora MinGW runtime compiles and passes Wine smoke tests but renders this
-fullscreen DirectComposition surface black on real Windows, so it is not a
-release path.
+Windows releases use the native MSYS2 UCRT64 GTK runtime, matching both the
+GitHub Windows runner and the local Windows VM.
 
 For a local native build, run `make windows-vm-key` once, then `make
 windows-vm-up` to start a persistent Windows 11 VM through Dockur. Open
