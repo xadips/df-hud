@@ -25,6 +25,7 @@ jobs:
             base-devel \
             git \
             go \
+            gobject-introspection \
             gtk4-layer-shell
       - uses: actions/checkout@v4
         with:
@@ -63,6 +64,7 @@ jobs:
             base-devel \
             git \
             go \
+            gobject-introspection \
             gtk4-layer-shell
       - uses: actions/checkout@v4
         with:
