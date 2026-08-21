@@ -15,6 +15,8 @@ func TestWidgetStyleCSSOnlyEmitsWhatIsSetOrDerived(t *testing.T) {
 	bare.Widget.XP.Color = ""
 	bare.Widget.Challenges.Color = ""
 	bare.Widget.Map.Color = ""
+	bare.Widget.Map.Radius = 0
+	bare.Widget.Map.Scale = 1
 	// Every group but one now sets nothing at all. The map is the exception, and it
 	// is not an accident: its key's size is DERIVED from the blocks beside it rather
 	// than configured (mapListPt), so it emits a font-size from a file that says
@@ -30,12 +32,15 @@ func TestWidgetStyleCSSOnlyEmitsWhatIsSetOrDerived(t *testing.T) {
 	// fewer of them, so the blocks grow and the key has to grow with them.
 	cropped := defaultConfig()
 	cropped.Widget.Map.Radius = 15
+	cropped.Widget.Map.Scale = 1
 	if got := widgetStyleCSS(cropped); !strings.Contains(got, "font-size: 24.7pt") {
 		t.Errorf("a cropped map's key did not grow with its blocks:\n%s", got)
 	}
 
 	// Pinning font_size turns the derivation off, so the file wins.
 	pinned := defaultConfig()
+	pinned.Widget.Map.Radius = 0
+	pinned.Widget.Map.Scale = 1
 	pinned.Widget.Map.FontSize = 11
 	if got := widgetStyleCSS(pinned); !strings.Contains(got, "font-size: 11.0pt") ||
 		strings.Contains(got, "13.0pt") {

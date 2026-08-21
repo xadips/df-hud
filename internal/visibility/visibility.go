@@ -107,6 +107,12 @@ type Watcher struct {
 	state    Visibility
 	place    desktop.Placement
 	onChange func(Visibility)
+	// windowSeen is scoped to one game process. Before its first real window is
+	// mapped, an unknown compositor result means "not ready yet" and must stay
+	// hidden; after one has been seen, unknown keeps the established fail-open
+	// behaviour for transient compositor/window races.
+	windowSession model.GameState
+	windowSeen    bool
 	// queryFailed stops a compositor that is not Hyprland from being asked twice
 	// a second forever, and stops the log filling with the same failure.
 	queryFailed bool
@@ -198,19 +204,28 @@ func (w *Watcher) refresh(ctx context.Context) {
 		game = w.game.State()
 	}
 
-	w.mu.RLock()
+	w.mu.Lock()
 	rules := Rules{
 		OnlyWhenGameRunning: cfg.HUD.OnlyWhenGameRunning,
 		FollowGameWorkspace: cfg.HUD.FollowGameWorkspace,
 		Enabled:             w.enabled,
 	}
 	failed := w.queryFailed
-	w.mu.RUnlock()
+	switch {
+	case !game.Running:
+		w.windowSession, w.windowSeen = model.GameState{}, false
+	case !game.SameSession(w.windowSession):
+		w.windowSession, w.windowSeen = game, false
+	}
+	windowSeen := w.windowSeen
+	w.mu.Unlock()
 
 	// Only worth asking the compositor while the game is running: with it closed
 	// there is no window to place, and the rules above have already decided.
 	place := desktop.Placement{}
-	if game.Running && w.query != nil && !failed {
+	canQuery := game.Running && w.query != nil && !failed
+	queryFailedNow := false
+	if canQuery {
 		queryCtx, cancel := context.WithTimeout(ctx, w.timeout)
 		// launcherWindowMatch rather than the plain one, so the placement also
 		// carries the launcher dialog's address. Nothing here uses it; gamekeys.go
@@ -224,6 +239,7 @@ func (w *Watcher) refresh(ctx context.Context) {
 		cancel()
 		switch {
 		case err != nil:
+			queryFailedNow = true
 			// One line, once. Then stop asking: on a compositor without this
 			// socket the answer will not change, and the HUD stays visible
 			// everywhere, which is the pre-existing behaviour.
@@ -240,10 +256,24 @@ func (w *Watcher) refresh(ctx context.Context) {
 			place = got
 		default:
 			place = got
+			windowSeen = true
+			w.mu.Lock()
+			// A newer session may have arrived while the compositor was queried.
+			if game.SameSession(w.windowSession) {
+				w.windowSeen = true
+			}
+			w.mu.Unlock()
 		}
 	}
 
 	visible, reason := Decide(rules, game, place)
+	if rules.OnlyWhenGameRunning && game.Running && canQuery && !queryFailedNow &&
+		!windowSeen && !place.LauncherOnly {
+		// Process detection necessarily wins the race with window mapping. Failing
+		// open in this one state flashes the overlay over the launcher for a frame.
+		// Once a real game window has existed, unknown goes back to fail-open.
+		visible, reason = false, "waiting for the game window to appear"
+	}
 	next := Visibility{Visible: visible, Reason: reason, Monitor: place.Monitor}
 
 	w.mu.Lock()

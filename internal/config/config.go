@@ -807,11 +807,12 @@ func defaultConfig() *Config {
 				Placement: Placement{X: 700, Y: 240}, Enabled: true,
 				Color:  "#e8e8e8",
 				Center: true,
-				// The whole city by default: it is what the map is FOR the first
-				// time you open it, and cropping is a preference you arrive at.
-				Radius:  0,
-				Scale:   1,
-				Opacity: 1, ShowList: true, MaxListed: 40,
+				// A compact local view by default, nudged clear of the centre aim
+				// area while keeping enough nearby blocks to plan a route.
+				OffsetX: -100, OffsetY: 350,
+				Radius:  8,
+				Scale:   0.4,
+				Opacity: 0.9, ShowList: true, MaxListed: 10,
 			},
 			Challenges: ChallengesWidgetConfig{
 				Placement: Placement{X: 10, Y: 190}, Enabled: true,

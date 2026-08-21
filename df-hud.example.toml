@@ -425,8 +425,8 @@ y = 240
 # Nudge the centred map, in pixels: negative is left and up. Applied on top of
 # the centring, so "60 up from centre" keeps meaning that when the scale, radius
 # or monitor changes. Ignored when center = false.
-offset_x = 0
-offset_y = 0
+offset_x = -100
+offset_y = 350
 
 # Crop to a square around you, in blocks: 15 draws 31x31, 0 is the whole city.
 # The key crops to match, since a row about a boss you cannot see is a row about
@@ -435,7 +435,7 @@ offset_y = 0
 # The window is clamped into the city rather than hanging off the edge, so its
 # size never changes and the map does not jump sideways near a boundary. With no
 # position yet, or in Onslaught, it falls back to the whole city.
-radius = 0
+radius = 8
 
 # The size of the whole thing, grid AND key, from one number. 1.0 is 1180 pixels
 # across the longest side, 20 per block at the full 59x55, a 13pt key.
@@ -444,22 +444,21 @@ radius = 0
 # makes a cropped map BIGGER rather than merely smaller: the same budget over 31
 # blocks gives 38px cells where 59 gives 20, so cutting the radius zooms in. The
 # key's font follows the block size, so there is nothing to keep in step by hand.
-scale = 1.0
+scale = 0.4
 
 # Multiplies the map's own alpha, which is already partial (0.7, their value).
 # The markers are NOT faded: the point is to see through the map, not to make the
 # writing on it hard to read.
-opacity = 1.0
+opacity = 0.9
 
 # The key beside the grid - which identifier is what, how far to walk, how long
 # is left. Without it the digits in the cells mean nothing. Sorted nearest first,
 # because the question is not "what is on the map" but "what can I get to".
 show_list = true
 
-# Cap on entries, 0 for no cap. 40 never triggers on a real feed - a busy cycle
-# carries about thirty events - and keeps the list from running off the bottom of
-# the screen, so what does not fit is COUNTED ("+3 more") rather than clipped.
-max_listed = 40
+# Cap on entries, 0 for no cap. What does not fit is COUNTED ("+3 more") rather
+# than clipped by the edge of the screen.
+max_listed = 10
 
 # Font and colour for that list. Empty inherits from [hud].
 font_family = ""

@@ -200,6 +200,49 @@ func TestVisibilityWatcherPublishesChanges(t *testing.T) {
 	}
 }
 
+func TestVisibilityWatcherWaitsForFirstWindowWithoutFlashing(t *testing.T) {
+	q := &fakeQuerier{}
+	w, game := testVisibility(t, q)
+	session := model.GameState{Running: true, PID: 42, StartedAt: time.Now()}
+	game.SetStateForTesting(session)
+
+	// Process scanning beats window mapping. Unknown at this exact point is
+	// startup, not a compositor failure, so the previous hidden state must hold.
+	w.refresh(context.Background())
+	if state := w.State(); state.Visible || !strings.Contains(state.Reason, "waiting") {
+		t.Fatalf("pre-window state = %+v, want hidden while waiting", state)
+	}
+
+	q.set(desktop.Placement{LauncherOnly: true}, nil)
+	w.refresh(context.Background())
+	if state := w.State(); state.Visible || !strings.Contains(state.Reason, "launcher") {
+		t.Fatalf("launcher state = %+v, want hidden", state)
+	}
+
+	q.set(desktop.Placement{Known: true, OnActiveWorkspace: true, Monitor: "DP-2"}, nil)
+	w.refresh(context.Background())
+	if !w.State().Visible {
+		t.Fatal("real game window did not show the HUD")
+	}
+
+	// Once this session has had a real window, preserve the normal fail-open rule
+	// across a transient empty compositor result.
+	q.set(desktop.Placement{}, nil)
+	w.refresh(context.Background())
+	if !w.State().Visible {
+		t.Fatal("transient unknown hid an established game window")
+	}
+
+	// The startup guard is per process, not a one-time application flag.
+	game.SetStateForTesting(model.GameState{
+		Running: true, PID: 43, StartedAt: session.StartedAt.Add(time.Minute),
+	})
+	w.refresh(context.Background())
+	if state := w.State(); state.Visible || !strings.Contains(state.Reason, "waiting") {
+		t.Fatalf("new session state = %+v, want startup hidden again", state)
+	}
+}
+
 // A compositor that cannot answer is asked once, not twice a second forever.
 func TestVisibilityWatcherStopsAskingAfterAFailure(t *testing.T) {
 	q := &fakeQuerier{err: errors.New("no such socket")}
