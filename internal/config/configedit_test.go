@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -48,10 +49,12 @@ enabled = true
 			t.Errorf("edited config lost %q:\n%s", want, text)
 		}
 	}
-	if info, err := os.Stat(path); err != nil {
-		t.Fatal(err)
-	} else if info.Mode().Perm() != 0o600 {
-		t.Errorf("mode = %o, want 600", info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(path); err != nil {
+			t.Fatal(err)
+		} else if info.Mode().Perm() != 0o600 {
+			t.Errorf("mode = %o, want 600", info.Mode().Perm())
+		}
 	}
 
 	cfg, err := loadConfig(path)
