@@ -51,10 +51,13 @@ type State struct {
 
 // Store owns the file. Concurrency-safe, and saves are debounced.
 type Store struct {
-	mu       sync.Mutex
+	mu     sync.Mutex
+	saveMu sync.Mutex
+
 	path     string
 	state    State
 	dirty    bool
+	revision uint64
 	lastSave time.Time
 	now      func() time.Time
 }
@@ -102,6 +105,7 @@ func (s *Store) Update(fn func(*State)) {
 	fn(&s.state)
 	s.state.SchemaVersion = stateSchemaVersion
 	s.dirty = true
+	s.revision++
 	s.mu.Unlock()
 }
 
@@ -142,6 +146,9 @@ func (s *Store) MaybeSave() error {
 
 // Save writes unconditionally. Called on shutdown so the last window is kept.
 func (s *Store) Save() error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
 	s.mu.Lock()
 	if s.path == "" {
 		s.dirty = false
@@ -150,6 +157,7 @@ func (s *Store) Save() error {
 	}
 	s.state.SavedAt = s.now()
 	snapshot := s.state.clone()
+	revision := s.revision
 	s.mu.Unlock()
 
 	data, err := json.MarshalIndent(snapshot, "", "  ")
@@ -179,11 +187,20 @@ func (s *Store) Save() error {
 		return err
 	}
 
+	s.markSaved(revision)
+	return nil
+}
+
+func (s *Store) markSaved(revision uint64) {
 	s.mu.Lock()
-	s.dirty = false
+	// An Update may have landed while the snapshot was being written. The file
+	// then contains a valid older snapshot, but the newer state is still dirty
+	// and must be saved on the next pass.
+	if s.revision == revision {
+		s.dirty = false
+	}
 	s.lastSave = s.now()
 	s.mu.Unlock()
-	return nil
 }
 
 // AppendXPSample adds a point and drops everything older than window. A change

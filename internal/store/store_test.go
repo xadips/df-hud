@@ -420,10 +420,6 @@ func TestStoreLogsHowLongEachRunLasted(t *testing.T) {
 		{"relaunching it", func(s *Store, now time.Time) {
 			s.SetGame(GameState{Running: true, PID: 99, StartedAt: now})
 		}, "the game relaunched"},
-		{"walking into an outpost", func(s *Store, now time.Time) {
-			vars := realPlayerRecord() // which is in an outpost
-			s.ApplyTick(Tick{At: now.Add(time.Minute), Vars: vars, Scheduled: true})
-		}, "the record says outpost"},
 		{"dying", func(s *Store, now time.Time) {
 			vars := realPlayerRecord()
 			vars["df_inoutpost"], vars["df_dead"] = "0", "1"
@@ -444,9 +440,8 @@ func TestStoreLogsHowLongEachRunLasted(t *testing.T) {
 			now := time.Now().Add(-5 * time.Minute)
 			s.SetGame(GameState{Running: true, PID: 1, StartedAt: now.Add(-time.Hour)})
 
-			// A run has to be going before it can end, and the captured record is
-			// IN an outpost - which ends runs and never starts one. So: out in the
-			// city, then a block further on, which is the movement that starts it.
+			// A run has to be going before it can end. Move one block to start the
+			// poll fallback before applying the terminal event under test.
 			inCity := func(x string) map[string]string {
 				vars := realPlayerRecord()
 				vars["df_inoutpost"], vars["df_positionx"] = "0", x

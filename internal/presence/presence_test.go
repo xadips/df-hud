@@ -2,8 +2,10 @@ package presence
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"net"
 	"testing"
 	"time"
 
@@ -110,5 +112,35 @@ func TestPresenceAppliesActivity(t *testing.T) {
 	}
 	if last, ok := p.Last(); !ok || last.X != 1054 {
 		t.Errorf("Last() = %+v %v", last, ok)
+	}
+}
+
+func TestPresenceReportsConnectionLifecycle(t *testing.T) {
+	p := newPresenceServer("")
+	changes := make(chan bool, 2)
+	p.SetOnConnectionChange(func(connected bool) { changes <- connected })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server, client := net.Pipe()
+	go p.serve(ctx, server)
+
+	select {
+	case connected := <-changes:
+		if !connected || !p.Connected() {
+			t.Fatal("accepted client was not reported connected")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for connection callback")
+	}
+
+	client.Close()
+	select {
+	case connected := <-changes:
+		if connected || p.Connected() {
+			t.Fatal("closed last client was not reported disconnected")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for disconnection callback")
 	}
 }

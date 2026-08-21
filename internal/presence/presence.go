@@ -205,8 +205,9 @@ func writePresenceFrame(w io.Writer, op uint32, payload any) error {
 // answer is not an option: the SDK treats a silent peer as a failure and stops
 // publishing, which would cost the very thing this exists for.
 type PresenceServer struct {
-	path    string
-	onState func(PresenceState)
+	path               string
+	onState            func(PresenceState)
+	onConnectionChange func(bool)
 
 	mu       sync.RWMutex
 	last     PresenceState
@@ -230,6 +231,22 @@ func (p *PresenceServer) SetOnState(fn func(PresenceState)) {
 	p.mu.Lock()
 	p.onState = fn
 	p.mu.Unlock()
+}
+
+// SetOnConnectionChange reports transitions between no publishers and at least
+// one publisher. Run timing uses the actual connection rather than activity age:
+// silence is normal while the player stands still, whereas disconnect is proof
+// that the poll must become the fallback again.
+func (p *PresenceServer) SetOnConnectionChange(fn func(bool)) {
+	p.mu.Lock()
+	p.onConnectionChange = fn
+	p.mu.Unlock()
+}
+
+func (p *PresenceServer) Connected() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.clients > 0
 }
 
 // Last is the most recent state, for diagnostics.
@@ -282,12 +299,22 @@ func (p *PresenceServer) listen() (net.Listener, error) {
 func (p *PresenceServer) serve(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	p.mu.Lock()
+	first := p.clients == 0
 	p.clients++
+	onConnectionChange := p.onConnectionChange
 	p.mu.Unlock()
+	if first && onConnectionChange != nil {
+		onConnectionChange(true)
+	}
 	defer func() {
 		p.mu.Lock()
 		p.clients--
+		last := p.clients == 0
+		onConnectionChange := p.onConnectionChange
 		p.mu.Unlock()
+		if last && onConnectionChange != nil {
+			onConnectionChange(false)
+		}
 	}()
 
 	go func() {
@@ -304,7 +331,9 @@ func (p *PresenceServer) serve(ctx context.Context, conn net.Conn) {
 			return
 		}
 		if err := p.handle(conn, op, body); err != nil {
-			log.Printf("presence: %v", err)
+			if !errors.Is(err, io.EOF) {
+				log.Printf("presence: %v", err)
+			}
 			return
 		}
 	}

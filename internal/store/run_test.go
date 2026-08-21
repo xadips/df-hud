@@ -60,6 +60,47 @@ func TestStartRunIfIdleDoesNotReplaceExistingEvidence(t *testing.T) {
 	if started, _ := s.Run(); !started.Equal(first) {
 		t.Fatalf("run start = %s, want %s", started, first)
 	}
+
+	loading := New(nil)
+	loading.SetGame(runningGame(time.Now().Add(-time.Minute)))
+	loading.SetPresence(PresenceState{At: time.Now(), Loading: true})
+	if loading.StartRunIfIdle(time.Now(), "foreground window during loading") {
+		t.Fatal("poll fallback started while connected presence said loading")
+	}
+}
+
+func TestRestartRunRequiresLiveGame(t *testing.T) {
+	s := New(nil)
+	if s.RestartRun(time.Now(), "closed game") {
+		t.Fatal("manual correction started a run with no game process")
+	}
+	s.SetGame(runningGame(time.Now().Add(-time.Minute)))
+	if !s.RestartRun(time.Now(), "live game") {
+		t.Fatal("manual correction was rejected for a live game")
+	}
+}
+
+func TestRunChangeCallbackFiresOnlyOnBoundaries(t *testing.T) {
+	s := New(nil)
+	changes := 0
+	s.SetOnRunChange(func() { changes++ })
+	s.SetGame(runningGame(time.Now().Add(-time.Minute)))
+	now := time.Now()
+	s.SetPresence(PresenceState{At: now, HasPosition: true, X: 1054, Y: 986})
+	s.SetPresence(PresenceState{At: now.Add(time.Second), HasPosition: true, X: 1054, Y: 986})
+	if changes != 1 {
+		t.Fatalf("city start and refresh produced %d run changes, want 1", changes)
+	}
+	s.SetPresence(PresenceState{
+		At: now.Add(2 * time.Second), InOutpost: true, OutpostName: "Secronom Bunker",
+	})
+	if changes != 1 {
+		t.Fatalf("outpost block produced %d run changes, want 1", changes)
+	}
+	s.SetGame(GameState{})
+	if changes != 2 {
+		t.Fatalf("process close produced %d total run changes, want 2", changes)
+	}
 }
 
 func TestRunClockStartsOnFloorChange(t *testing.T) {
@@ -75,19 +116,27 @@ func TestRunClockStartsOnFloorChange(t *testing.T) {
 	}
 }
 
-func TestRunClockEndsInOutpostAndRestarts(t *testing.T) {
+func TestRunClockIgnoresOutpostBlockAndRestartsAfterClose(t *testing.T) {
 	s := New(nil)
 	start := time.Now().Add(-time.Hour)
 	s.SetGame(runningGame(start))
 	s.ApplyTick(Tick{At: start, Vars: movedTo(1058, 1016), Scheduled: true})
 	s.ApplyTick(Tick{At: start.Add(10 * time.Second), Vars: movedTo(1058, 1015), Scheduled: true})
 	s.ApplyTick(Tick{At: start.Add(20 * time.Minute), Vars: realPlayerRecord(), Scheduled: true})
-	if s.Derive(start.Add(21 * time.Minute)).HasSession {
-		t.Fatal("outpost left a run active")
+	if !s.Derive(start.Add(21 * time.Minute)).HasSession {
+		t.Fatal("outpost block ended the active game session")
 	}
+
+	s.SetGame(GameState{})
+	if s.Derive(start.Add(21 * time.Minute)).HasSession {
+		t.Fatal("closed process left a run active")
+	}
+
 	second := start.Add(25 * time.Minute)
+	s.SetGame(GameState{Running: true, PID: 2, StartedAt: second})
 	s.ApplyTick(Tick{At: second, Vars: movedTo(1058, 1016), Scheduled: true})
-	if view := s.Derive(second.Add(2 * time.Second)); !view.HasSession || view.SessionTime != 2*time.Second {
+	s.ApplyTick(Tick{At: second.Add(time.Second), Vars: movedTo(1058, 1015), Scheduled: true})
+	if view := s.Derive(second.Add(3 * time.Second)); !view.HasSession || view.SessionTime != 2*time.Second {
 		t.Fatalf("new run = %s (has=%v), want 2s", view.SessionTime, view.HasSession)
 	}
 }

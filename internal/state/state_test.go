@@ -212,6 +212,25 @@ func TestStateSaveIsDebounced(t *testing.T) {
 	}
 }
 
+func TestStateUpdateDuringSaveRemainsDirty(t *testing.T) {
+	s := NewStore("")
+	s.Update(func(st *State) { st.ChallengeDone = map[string]bool{"before": true} })
+	savedRevision := s.revision
+
+	// This models an Update landing after Save took its snapshot but before the
+	// disk write completed.
+	s.Update(func(st *State) { st.ChallengeDone["during"] = true })
+	s.markSaved(savedRevision)
+	if !s.dirty {
+		t.Fatal("update made during an older save was marked clean")
+	}
+
+	s.markSaved(s.revision)
+	if s.dirty {
+		t.Fatal("current revision remained dirty after being saved")
+	}
+}
+
 func TestStateGetReturnsACopy(t *testing.T) {
 	s := NewStore("")
 	s.Update(func(st *State) {

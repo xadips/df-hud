@@ -61,6 +61,7 @@ type app struct {
 	groups    *groups.Groups
 
 	lastRunStart time.Time
+	runPersistMu sync.Mutex
 
 	reloadMu       sync.Mutex
 	onConfigReload func(*config.Config)
@@ -122,6 +123,7 @@ func newApp(ctx context.Context, cfg *config.Config, cfgPath string, withBridge 
 		a.store.SetRunSeed(run)
 		a.lastRunStart = run.StartedAt
 	}
+	a.store.SetOnRunChange(a.persistRun)
 
 	a.groups = groups.New()
 	a.gate = rategate.New(poller.MinRequestGap)
@@ -136,8 +138,8 @@ func newApp(ctx context.Context, cfg *config.Config, cfgPath string, withBridge 
 		})
 	a.bosses = bossmap.NewPoller(&http.Client{Timeout: cfg.DF.Timeout.Duration}, a.game, a.Config,
 		func() bool {
-			snap, ok := a.store.Snapshot()
-			return ok && snap.PositionX == bossmap.OnslaughtCoord && snap.PositionY == bossmap.OnslaughtCoord
+			x, y, ok := a.store.EffectivePosition(time.Now())
+			return ok && x == bossmap.OnslaughtCoord && y == bossmap.OnslaughtCoord
 		})
 	a.bosses.SetOnMap(a.store.SetBossMap)
 
@@ -149,6 +151,7 @@ func newApp(ctx context.Context, cfg *config.Config, cfgPath string, withBridge 
 				a.bosses.Wake()
 			}
 		})
+		a.presence.SetOnConnectionChange(a.store.SetPresenceConnected)
 	}
 
 	a.gamekeys = gamekeys.New(a.Config, a.game.State, a.visibility.Placement, desktopClient)
@@ -189,6 +192,14 @@ func newApp(ctx context.Context, cfg *config.Config, cfgPath string, withBridge 
 	})
 	a.game.SetOnChange(func(g model.GameState) {
 		a.store.SetGame(g)
+		// Presence can beat the process scan at startup. Replay only an activity
+		// emitted during this process, otherwise a quiet client would not be
+		// recognized until its next block or party change.
+		if g.Running && a.presence != nil && a.presence.Connected() {
+			if p, ok := a.presence.Last(); ok && !p.At.Before(g.StartedAt) {
+				a.store.SetPresence(p)
+			}
+		}
 		a.poller.Wake()
 		a.challenges.Wake()
 		a.bosses.Wake()
@@ -206,7 +217,6 @@ func newApp(ctx context.Context, cfg *config.Config, cfgPath string, withBridge 
 			a.store.StartRunIfIdle(tick.At, "the foreground game window entered the city")
 		}
 		a.recordXPSample()
-		a.persistRun()
 		if !levelSeen && haveSnap && snap.Level > 0 {
 			levelSeen = true
 			a.challenges.Wake()
@@ -269,6 +279,7 @@ func (a *app) Close() {
 		defer cancel()
 		_ = a.bridgeSrv.Shutdown(shutdownCtx)
 	}
+	a.persistRun()
 	if err := a.state.Save(); err != nil {
 		log.Printf("state: could not save: %v", err)
 	}
@@ -451,6 +462,9 @@ func (a *app) toggleWidget(group string) error {
 }
 
 func (a *app) persistRun() {
+	a.runPersistMu.Lock()
+	defer a.runPersistMu.Unlock()
+
 	started, runningGame := a.store.Run()
 	a.state.Update(func(st *state.State) {
 		if started.IsZero() || !runningGame.Running {

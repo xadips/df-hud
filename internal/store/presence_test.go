@@ -86,7 +86,7 @@ func TestPresenceOutpostAndLoadingKeepPolledPosition(t *testing.T) {
 	}
 }
 
-func TestPresenceMaintainsRunClock(t *testing.T) {
+func TestPresenceMaintainsSessionAcrossOutpostBlocks(t *testing.T) {
 	now := time.Unix(10000, 0)
 	s := runningStore(now)
 	s.SetPresence(PresenceState{At: now, HasPosition: true, X: 1054, Y: 986})
@@ -98,13 +98,35 @@ func TestPresenceMaintainsRunClock(t *testing.T) {
 		t.Fatalf("loading changed run start to %v", started)
 	}
 	s.SetPresence(PresenceState{At: now.Add(2 * time.Minute), InOutpost: true, OutpostName: "Secronom Bunker"})
-	if started, _ := s.Run(); !started.IsZero() {
-		t.Fatalf("outpost left run active at %v", started)
+	if started, _ := s.Run(); !started.Equal(now) {
+		t.Fatalf("outpost block changed run start to %v", started)
 	}
-	out := now.Add(3 * time.Minute)
-	s.SetPresence(presence.ParseDetails("Supermarket 1058 x 1016", out))
-	if started, _ := s.Run(); !started.Equal(out) {
-		t.Fatalf("indoor city presence started at %v, want %v", started, out)
+	late := now.Add(3 * time.Minute)
+	s.SetPresence(presence.ParseDetails("Supermarket 1058 x 1016", late))
+	if started, _ := s.Run(); !started.Equal(now) {
+		t.Fatalf("later city activity changed run start to %v", started)
+	}
+
+	// Returning to the website is the process closing, not an outpost block label.
+	s.SetGame(GameState{})
+	if started, _ := s.Run(); !started.IsZero() {
+		t.Fatalf("closed game retained run at %v", started)
+	}
+	nextGame := GameState{Running: true, PID: 2, StartedAt: now.Add(4 * time.Minute)}
+	s.SetGame(nextGame)
+	next := now.Add(5 * time.Minute)
+	s.SetPresence(presence.ParseDetails("Supermarket 1058 x 1016", next))
+	if started, _ := s.Run(); !started.Equal(next) {
+		t.Fatalf("next launch started at %v, want %v", started, next)
+	}
+}
+
+func TestOutpostBlockStartsGameSession(t *testing.T) {
+	now := time.Unix(10000, 0)
+	s := runningStore(now)
+	s.SetPresence(presence.ParseDetails("Secronom Bunker", now))
+	if started, _ := s.Run(); !started.Equal(now) {
+		t.Fatalf("outpost block started session at %v, want %v", started, now)
 	}
 }
 
@@ -142,6 +164,60 @@ func TestDeathStillEndsPresenceOwnedRun(t *testing.T) {
 	s.ApplyTick(Tick{At: now.Add(time.Minute), Vars: dead, Scheduled: true})
 	if started, _ := s.Run(); !started.IsZero() {
 		t.Fatalf("death left presence-owned run active at %v", started)
+	}
+	s.SetPresence(PresenceState{
+		At: now.Add(2 * time.Minute), HasPosition: true, X: 1054, Y: 986,
+	})
+	if started, _ := s.Run(); !started.IsZero() {
+		t.Fatalf("late activity restarted dead session at %v", started)
+	}
+	if s.RestartRun(now.Add(3*time.Minute), "manual correction after death") {
+		t.Fatal("manual correction restarted a terminal game process")
+	}
+}
+
+func TestPresenceDisconnectRestoresPollFallback(t *testing.T) {
+	now := time.Unix(10000, 0)
+	s := runningStore(now)
+	s.SetPresence(PresenceState{At: now, Loading: true})
+
+	s.ApplyTick(Tick{At: now.Add(time.Second), Vars: movedTo(1058, 1016), Scheduled: true})
+	s.ApplyTick(Tick{At: now.Add(2 * time.Second), Vars: movedTo(1058, 1015), Scheduled: true})
+	if started, _ := s.Run(); !started.IsZero() {
+		t.Fatalf("poll started while connected presence said loading: %v", started)
+	}
+
+	s.SetPresenceConnected(false)
+	s.ApplyTick(Tick{At: now.Add(3 * time.Second), Vars: movedTo(1058, 1014), Scheduled: true})
+	if started, _ := s.Run(); !started.Equal(now.Add(3 * time.Second)) {
+		t.Fatalf("poll fallback started at %v after disconnect", started)
+	}
+}
+
+func TestPresenceDoesNotBleedIntoRelaunchedGame(t *testing.T) {
+	now := time.Unix(10000, 0)
+	s := runningStore(now)
+	polledPosition(s, now)
+	s.SetPresence(presence.ParseDetails("Inner City 1055 x 985", now))
+
+	s.SetGame(GameState{Running: true, PID: 2, StartedAt: now.Add(time.Second)})
+	view := s.Derive(now.Add(2 * time.Second))
+	if view.HasPosition || view.PositionSource != "" {
+		t.Fatalf("new game used previous process presence: %+v", view)
+	}
+}
+
+func TestEffectivePositionUsesPresenceAndRejectsOutpost(t *testing.T) {
+	now := time.Unix(10000, 0)
+	s := runningStore(now)
+	polledPosition(s, now)
+	s.SetPresence(presence.ParseDetails("Inner City 3000 x 3000", now))
+	if x, y, ok := s.EffectivePosition(now); !ok || x != 3000 || y != 3000 {
+		t.Fatalf("effective position = %d,%d %v", x, y, ok)
+	}
+	s.SetPresence(presence.ParseDetails("Secronom Bunker", now.Add(time.Second)))
+	if x, y, ok := s.EffectivePosition(now.Add(time.Second)); ok {
+		t.Fatalf("outpost retained effective city position %d,%d", x, y)
 	}
 }
 
