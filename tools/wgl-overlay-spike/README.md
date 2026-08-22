@@ -31,6 +31,12 @@ The product already proved a *transparent GLFW* overlay. The unknown is **our** 
 - Use `tools/windows-overlay-spike` (Ebitengine).
 - Start rewrite Phase 0 from a fail of gates 3–4.
 
+## Prebuilt exe (this branch)
+
+`tools/wgl-overlay-spike/wgl-overlay-spike.exe` is a Linux-cross-compiled `x86_64-pc-windows-gnu` build. Copy it to the Windows machine and run it from a console. SmartScreen may warn; that is not a spike fail.
+
+If it will not start (missing CRT), rebuild natively below.
+
 ## Build
 
 On the Windows laptop (preferred — MSVC or gnu both fine):
