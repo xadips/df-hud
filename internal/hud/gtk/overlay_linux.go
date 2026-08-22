@@ -15,6 +15,8 @@ type linuxOverlay struct {
 	handle uintptr
 }
 
+func preparePlatformRenderer() {}
+
 func checkPlatformOverlay() error {
 	if !LayerShellBuilt {
 		return fmt.Errorf("this binary was built with -tags nolayershell, so it has no HUD; " +

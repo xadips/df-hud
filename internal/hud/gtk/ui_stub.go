@@ -1,4 +1,4 @@
-//go:build (!linux && !windows) || !cgo || nolayershell
+//go:build !linux || !cgo || nolayershell
 
 package gtk
 

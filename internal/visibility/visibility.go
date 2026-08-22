@@ -69,6 +69,9 @@ func Decide(r Rules, game model.GameState, place desktop.Placement) (bool, strin
 	// place.Known false means the question could not be answered, not that the
 	// answer is no - see the fail-open note above.
 	if r.FollowGameWorkspace && place.Known && !place.OnActiveWorkspace {
+		if place.Minimized {
+			return false, "the game window is minimized"
+		}
 		if place.ForegroundRule {
 			return false, "the game is not the foreground window"
 		}

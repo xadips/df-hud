@@ -17,8 +17,10 @@ var (
 	user32                     = windows.NewLazySystemDLL("user32.dll")
 	procGetWindowTextLengthW   = user32.NewProc("GetWindowTextLengthW")
 	procGetWindowTextW         = user32.NewProc("GetWindowTextW")
+	procGetWindowRect          = user32.NewProc("GetWindowRect")
 	procMonitorFromWindow      = user32.NewProc("MonitorFromWindow")
 	procGetMonitorInfoW        = user32.NewProc("GetMonitorInfoW")
+	procIsIconic               = user32.NewProc("IsIconic")
 	procKeybdEvent             = user32.NewProc("keybd_event")
 	enumDesktopWindowsCallback = windows.NewCallback(enumDesktopWindow)
 )
@@ -30,16 +32,19 @@ func NewClient() Client { return windowsDesktopClient{} }
 
 // CanStartRun reports whether the matched game window is foreground.
 func CanStartRun(place windowPlacement) bool {
-	return place.Known && place.ForegroundRule && place.OnActiveWorkspace
+	return place.Known && place.Foreground
 }
 
 func desktopCanStartRun(place windowPlacement) bool { return CanStartRun(place) }
 
 type windowsWindow struct {
-	handle windows.HWND
-	class  string
-	title  string
-	pid    uint32
+	handle    windows.HWND
+	class     string
+	title     string
+	pid       uint32
+	minimized bool
+	width     int
+	height    int
 }
 
 type enumWindowsState struct {
@@ -59,15 +64,20 @@ func enumDesktopWindow(hwnd windows.HWND, param uintptr) uintptr {
 	if _, err := windows.GetWindowThreadProcessId(hwnd, &pid); err != nil || pid == 0 {
 		return 1
 	}
+	var rect windowsRect
+	procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rect)))
 	state := activeWindowScan
 	if state == nil {
 		return 0
 	}
 	state.windows = append(state.windows, windowsWindow{
-		handle: hwnd,
-		class:  windowsWindowClass(hwnd),
-		title:  windowsWindowTitle(hwnd),
-		pid:    pid,
+		handle:    hwnd,
+		class:     windowsWindowClass(hwnd),
+		title:     windowsWindowTitle(hwnd),
+		pid:       pid,
+		minimized: windowsWindowMinimized(hwnd),
+		width:     int(rect.right - rect.left),
+		height:    int(rect.bottom - rect.top),
 	})
 	return 1
 }
@@ -137,43 +147,77 @@ func findWindowsGameWindow(windowsList []windowsWindow, foreground windows.HWND,
 		}
 	}
 	place := func(window windowsWindow, matchedBy string) windowPlacement {
+		foreground := window.handle != 0 && window.handle == foreground
 		return windowPlacement{
 			Known:             true,
 			Class:             window.class,
 			Title:             window.title,
 			Address:           windowsWindowAddress(window.handle),
 			Monitor:           windowsWindowMonitor(window.handle),
-			OnActiveWorkspace: window.handle != 0 && window.handle == foreground,
+			OnActiveWorkspace: !window.minimized,
+			Foreground:        foreground,
+			Minimized:         window.minimized,
 			ForegroundRule:    true,
 			MatchedBy:         matchedBy,
 		}
 	}
 
-	if pid > 0 {
-		for _, window := range windowsList {
-			if window.pid != uint32(pid) {
+	bestWindow := func(matches func(windowsWindow) bool) (windowsWindow, bool) {
+		best := -1
+		bestArea := 0
+		for i, window := range windowsList {
+			if !matches(window) {
 				continue
 			}
 			if match.ignored(window.title) {
 				noteLauncher(window)
 				continue
 			}
+			if !windowsGameWindowCandidate(window) {
+				continue
+			}
+			if area := window.width * window.height; best < 0 || area > bestArea {
+				best = i
+				bestArea = area
+			}
+		}
+		if best < 0 {
+			return windowsWindow{}, false
+		}
+		return windowsList[best], true
+	}
+
+	if pid > 0 {
+		if window, ok := bestWindow(func(window windowsWindow) bool {
+			return window.pid == uint32(pid)
+		}); ok {
 			return place(window, "process id")
 		}
 	}
 	if want := normaliseClass(match.Class); want != "" {
-		for _, window := range windowsList {
-			if normaliseClass(window.class) != want {
-				continue
-			}
-			if match.ignored(window.title) {
-				noteLauncher(window)
-				continue
-			}
+		if window, ok := bestWindow(func(window windowsWindow) bool {
+			return normaliseClass(window.class) == want
+		}); ok {
 			return place(window, "window class")
 		}
 	}
 	return windowPlacement{LauncherOnly: launcher, LauncherAddress: launcherAddress}
+}
+
+func windowsGameWindowCandidate(window windowsWindow) bool {
+	// Launcher-owned popup/control HWNDs (observed class "ComboLBox") are
+	// top-level according to EnumWindows and share DeadFrontier.exe's PID. They
+	// briefly exist before UnityWndClass and previously flashed the HUD. A real
+	// standalone game window is titled and substantially larger than a control.
+	if strings.EqualFold(window.class, "ComboLBox") {
+		return false
+	}
+	return strings.TrimSpace(window.title) != "" && window.width >= 320 && window.height >= 200
+}
+
+func windowsWindowMinimized(hwnd windows.HWND) bool {
+	minimized, _, _ := procIsIconic.Call(uintptr(hwnd))
+	return minimized != 0
 }
 
 func windowsWindowAddress(hwnd windows.HWND) string {

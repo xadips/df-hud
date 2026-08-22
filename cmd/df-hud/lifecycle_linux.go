@@ -10,6 +10,10 @@ import (
 	"syscall"
 )
 
+func configurePlatformLogging() func() { return func() {} }
+
+func beginPlatformUILoop() func() { return func() {} }
+
 func shutdownSignals() []os.Signal {
 	return []os.Signal{syscall.SIGINT, syscall.SIGTERM}
 }

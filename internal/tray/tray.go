@@ -61,6 +61,7 @@ type Actions struct {
 	PresenceBindFailed func() bool
 	SetStartOnLogin    func(bool) error
 	StartOnLogin       func() bool
+	OpenConfig         func() error
 	ReloadConfig       func()
 	Quit               func()
 	Version            string
@@ -324,6 +325,11 @@ func (t *trayItem) buildMenu() {
 		startOnLogin = systray.AddMenuItemCheckbox("Start df-hud with Windows",
 			"Launch df-hud automatically after signing in", t.actions.StartOnLogin())
 	}
+	var openConfig *systray.MenuItem
+	if t.actions.OpenConfig != nil {
+		openConfig = systray.AddMenuItem("Open config file",
+			"Edit the configuration currently loaded by df-hud")
+	}
 	reload := systray.AddMenuItem("Reload config", "Re-read config.toml")
 	systray.AddSeparator()
 	if t.actions.Version != "" {
@@ -408,6 +414,15 @@ func (t *trayItem) buildMenu() {
 				}
 				syncCheckbox(startOnLogin, want)
 				log.Printf("tray: Windows startup enabled: %t", want)
+			}
+		}()
+	}
+	if openConfig != nil {
+		go func() {
+			for range openConfig.ClickedCh {
+				if err := t.actions.OpenConfig(); err != nil {
+					log.Printf("tray: could not open config file: %v", err)
+				}
 			}
 		}()
 	}

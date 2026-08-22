@@ -84,7 +84,8 @@ func reportWindowDetection(cfg *config.Config, state model.GameState) {
 		if place.ForegroundRule {
 			fmt.Printf("\nWINDOW: class %q on monitor %s (matched by %s)\n",
 				place.Class, place.Monitor, place.MatchedBy)
-			fmt.Printf("        that window is in the foreground: %s\n", shown)
+			fmt.Printf("        that window is visible and not minimized: %s\n", shown)
+			fmt.Printf("        that window is in the foreground: %v\n", place.Foreground)
 		} else {
 			fmt.Printf("\nWINDOW: class %q on monitor %s, workspace %s (matched by %s)\n",
 				place.Class, place.Monitor, place.WorkspaceName, place.MatchedBy)

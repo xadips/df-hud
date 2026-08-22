@@ -335,7 +335,7 @@ const nearestReportRange = 12
 // DFProfiler's map being an HTML table. This is the one claim here that could
 // send someone the wrong way.
 func nearestLine(v *View, cfg BossesWidgetConfig) (string, bool) {
-	if !cfg.ShowNearest || !v.HaveData || !v.HasNearest {
+	if !cfg.ShowNearest || !v.HaveData || !v.HasNearest || v.ClientLoading {
 		return "", false
 	}
 	if v.NearestDistanceInBlocks > nearestReportRange {
@@ -708,6 +708,12 @@ func (r challengeRow) Text() string {
 	}
 	return b.String()
 }
+
+// Label is the text before the progress/countdown column.
+func (r challengeRow) Label() string { return r.label() }
+
+// Padding is the whitespace between Label and the shared value column.
+func (r challengeRow) Padding() string { return r.padding(r.label()) }
 
 // Markup is the drawn form, in Pango markup.
 //
@@ -1388,6 +1394,7 @@ func ChallengeLines(v *View, cfg ChallengesWidgetConfig) []ChallengeRow {
 }
 func HUDLines(v *View, cfg *Config) []string { return hudLines(v, cfg) }
 func MapCellPx(cfg MapWidgetConfig) int      { return mapCellPx(cfg) }
+func MapListPt(cfg MapWidgetConfig) float64  { return mapListPt(cfg) }
 func MapWindowSize(cfg MapWidgetConfig) (int, int) {
 	return mapWindowSize(cfg)
 }

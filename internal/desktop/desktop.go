@@ -19,10 +19,14 @@ type windowPlacement struct {
 	Monitor       string
 
 	// OnActiveWorkspace is the common visibility result. On Linux it means the
-	// Hyprland workspace is displayed. On Windows it means the window is the
-	// foreground window, identified by ForegroundRule.
+	// Hyprland workspace is displayed. On Windows it means the window is visible
+	// and not minimized.
 	OnActiveWorkspace bool
-	ForegroundRule    bool
+	// Foreground is a separate Windows-only observation used to gate synthesized
+	// input and run starts. It must not hide a still-visible game after alt-tab.
+	Foreground     bool
+	Minimized      bool
+	ForegroundRule bool
 
 	MatchedBy string
 

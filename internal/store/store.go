@@ -768,10 +768,11 @@ func (s *Store) Derive(now time.Time) *View {
 	defer s.mu.RUnlock()
 
 	v := &View{
-		Now:          now,
-		GameRunning:  s.game.Running,
-		ClientUptime: s.game.Elapsed(now),
-		MissedTicks:  s.missedTicks,
+		Now:           now,
+		GameRunning:   s.game.Running,
+		ClientLoading: s.game.Running && s.presenceConnected && !s.havePresence,
+		ClientUptime:  s.game.Elapsed(now),
+		MissedTicks:   s.missedTicks,
 	}
 	if s.game.Running && !s.runStart.IsZero() {
 		v.HasSession = true
@@ -813,6 +814,7 @@ func (s *Store) Derive(now time.Time) *View {
 	// Only position and outpost state are taken. Everything else the client
 	// publishes is either absent from the presence or better from the poll.
 	if p, ok := s.presencePositionLocked(now); ok {
+		v.ClientLoading = p.Loading
 		switch {
 		case p.HasPosition:
 			v.HasPosition = true
@@ -863,7 +865,7 @@ func (s *Store) Derive(now time.Time) *View {
 
 		// Only when your own block is empty: with something in front of you, the
 		// nearest OTHER thing is a distraction.
-		if v.HasPosition && len(v.BlockEvents) == 0 && !v.InOutpost {
+		if v.HasPosition && len(v.BlockEvents) == 0 && !v.ClientLoading {
 			if m, ok := bossmap.NearestMark(v.CityMarks); ok {
 				v.HasNearest = true
 				v.NearestLabel = m.Label

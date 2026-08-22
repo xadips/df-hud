@@ -44,6 +44,8 @@ func parseOptions() options {
 
 func main() {
 	log.SetFlags(log.Ltime)
+	closeLog := configurePlatformLogging()
+	defer closeLog()
 	opts := parseOptions()
 	if opts.showVersion {
 		fmt.Printf("df-hud %s\n", version)

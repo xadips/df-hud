@@ -1,10 +1,11 @@
 # df-hud
 
-A Wayland-native heads-up display for Dead Frontier, for Hyprland.
+A native heads-up display for Dead Frontier on Windows and Wayland/Hyprland.
 
-It draws over the game — including fullscreen — using `zwlr_layer_shell_v1`, and
-passes every pointer event through to the game underneath. Data comes from the
-game's own API, so there is no screen scraping and no OCR anywhere.
+It draws over the game — including fullscreen — using Ebitengine/OpenGL on
+Windows and `zwlr_layer_shell_v1` on Linux, and passes every pointer event
+through to the game underneath. Data comes from the game's own API, so there is
+no screen scraping and no OCR anywhere.
 
 Replaces SilverOverlays, a Windows PyQt app that under Proton gives no reliable
 always-on-top over a fullscreen game, no global hotkeys on Wayland, and no tray.
@@ -586,9 +587,10 @@ hourly, it would send you somewhere for nothing.
 
 ## Requirements
 
-- Hyprland, or another compositor implementing `zwlr_layer_shell_v1`
-- `gtk4-layer-shell` (Arch: `pacman -S gtk4-layer-shell`), GTK 4, cgo
-- Go 1.26+
+- Windows: no external runtime; the release executable is cgo-free
+- Linux: Hyprland (or another layer-shell compositor), GTK 4,
+  `gtk4-layer-shell`, and cgo
+- Go 1.26+ to build from source
 
 The first build compiles gotk4, which is large and single-package, so expect
 several minutes; rebuilds are a few seconds.
@@ -607,29 +609,19 @@ CI or a machine with no Wayland. `make check` is everything CI runs: `gofmt`,
 
 `make package-linux` writes `dist/df-hud-<version>-linux-amd64.tar.gz`.
 
-Windows releases use the native MSYS2 UCRT64 GTK runtime, matching both the
-GitHub Windows runner and the local Windows VM.
-
-For a local native build, run `make windows-vm-key` once, then `make
-windows-vm-up` to start a persistent Windows 11 VM through Dockur. Open
-`http://127.0.0.1:8006/`; the first start installs Windows, Go, MSYS2, GTK and a
-localhost-only SSH service. After that, `make package-windows VERSION=...`
-remotely copies the live shared repository to the Windows disk, runs
-`build-windows.ps1`, and writes
-`dist/df-hud-<version>-windows-amd64.zip` back on the host. The desktop shortcut
-does the same interactively. `make windows-vm-down` stops the VM without
-deleting its disk. The default login is `dfhud` / `dfhud-local`; override
-`WINDOWS_USER` and `WINDOWS_PASSWORD` in a `windows-vm/.env` file before first
-boot.
+`make package-windows VERSION=...` cross-compiles the cgo-free native Windows
+frontend on Linux using MinGW `windres`, and writes
+`dist/df-hud-<version>-windows-amd64.zip`. On Windows,
+`build-windows.ps1 -Version ...` creates the same package.
 
 `make test-windows` cross-compiles the Windows tests headlessly and runs them
-through Wine. `make smoke-windows` checks the packaged GTK executable's version
-and configuration paths through Wine. These checks cover Windows code and DLL
-loading, but the overlay, tray and fullscreen behaviour still need testing on
-Windows itself.
+through Wine. `make smoke-windows` checks the packaged executable's version and
+configuration paths through Wine. Native Windows CI runs renderer tests without
+GTK or MSYS2; transparent overlay behavior remains covered by
+`tools/windows-overlay-spike` and manual GPU validation.
 
 Manual and tagged GitHub Actions runs build both archives again, with the Windows
-release built natively on `windows-latest`. A `v*` tag publishes both archives
+release cross-compiled on Linux. A `v*` tag publishes both archives
 as release assets.
 
 ## Running it

@@ -359,6 +359,12 @@ type HUDConfig struct {
 	TextColor  string  `toml:"text_color"`
 	Opacity    float64 `toml:"opacity"`
 
+	// ReferenceWidth/Height define the logical design space for widget x/y,
+	// fonts, gaps and map size. The runtime scales this uniformly into the game
+	// content rectangle, preserving aspect ratio.
+	ReferenceWidth  int `toml:"reference_width"`
+	ReferenceHeight int `toml:"reference_height"`
+
 	// CSS is an optional stylesheet loaded after the built-in one, so appearance
 	// can be changed without a rebuild.
 	CSS string `toml:"css"`
@@ -715,7 +721,7 @@ func defaultConfig() *Config {
 			// carry the game's own class and pid, so this one word is what keeps
 			// the HUD off a 464x406 settings box.
 			WindowTitleIgnore: []string{"configuration"},
-			ScanInterval:      duration{2 * time.Second},
+			ScanInterval:      duration{500 * time.Millisecond},
 		},
 		GameKeys: GameKeysConfig{
 			FPSKey: "y",
@@ -745,11 +751,13 @@ func defaultConfig() *Config {
 			Layer:               "overlay",
 			// Margins zero: each group carries its own coordinates, so the surface
 			// covers the monitor and a margin would only shift every group at once.
-			ClickThrough: true,
-			FontFamily:   "Courier New, monospace",
-			FontSize:     12,
-			TextColor:    "#e6cc4d", // the game's own HUD yellow
-			Opacity:      1.0,
+			ClickThrough:    true,
+			FontFamily:      "Courier New, monospace",
+			FontSize:        12,
+			TextColor:       "#e6cc4d", // the game's own HUD yellow
+			Opacity:         1.0,
+			ReferenceWidth:  2560,
+			ReferenceHeight: 1440,
 		},
 		BossMap: BossMapConfig{
 			Enabled: true,
@@ -796,7 +804,7 @@ func defaultConfig() *Config {
 			XP: XPWidgetConfig{
 				// White to match the clock, and because this sits beside the game's
 				// own "LV 415: 8,122,281,000" and reads as its continuation.
-				Placement: Placement{X: 160, Y: 85}, Enabled: true,
+				Placement: Placement{X: 220, Y: 85}, Enabled: true,
 				Color: "#ffffff", Prefix: "Xp/Hr: ",
 				Window: duration{5 * time.Minute}, MinSamples: 3,
 			},
@@ -819,7 +827,7 @@ func defaultConfig() *Config {
 				// Off-white: the longest column on screen, and the green and red it
 				// marks rows with need somewhere quieter to stand out from.
 				Color:          "#e8e8e8",
-				ShowRepeatable: true, ShowClan: true, ShowPersonal: true, ShowCompleted: true,
+				ShowRepeatable: false, ShowClan: true, ShowPersonal: true, ShowCompleted: true,
 				ShowSections: true,
 				UrgentWithin: duration{2 * time.Hour},
 			},
@@ -1095,6 +1103,9 @@ func (c *Config) validate() error {
 		}
 		if c.HUD.Opacity <= 0 || c.HUD.Opacity > 1 {
 			errs = append(errs, fmt.Errorf("hud.opacity %.2f must be in (0, 1]: 0 would render an invisible HUD", c.HUD.Opacity))
+		}
+		if c.HUD.ReferenceWidth <= 0 || c.HUD.ReferenceHeight <= 0 {
+			errs = append(errs, fmt.Errorf("hud.reference_width and hud.reference_height must be positive"))
 		}
 		if err := validateColor(c.HUD.TextColor); err != nil {
 			errs = append(errs, fmt.Errorf("hud.text_color: %w", err))

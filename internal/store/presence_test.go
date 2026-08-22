@@ -83,6 +83,9 @@ func TestPresenceOutpostAndLoadingKeepPolledPosition(t *testing.T) {
 		if details == "Secronom Bunker" && (!view.InOutpost || view.OutpostName != details) {
 			t.Errorf("outpost presence not applied: %+v", view)
 		}
+		if details == "Loading..." && !view.ClientLoading {
+			t.Errorf("loading presence not exposed to presentation: %+v", view)
+		}
 	}
 }
 
@@ -204,6 +207,9 @@ func TestPresenceDoesNotBleedIntoRelaunchedGame(t *testing.T) {
 	view := s.Derive(now.Add(2 * time.Second))
 	if view.HasPosition || view.PositionSource != "" {
 		t.Fatalf("new game used previous process presence: %+v", view)
+	}
+	if !view.ClientLoading {
+		t.Fatalf("new game with a live presence connection was not held in loading state: %+v", view)
 	}
 }
 

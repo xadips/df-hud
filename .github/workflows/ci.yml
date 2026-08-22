@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -50,8 +52,23 @@ jobs:
           WINE="$(command -v wine || command -v wine64 || printf /usr/lib/wine/wine64)"
           make test-windows WINE="$WINE"
 
+  test-windows-native:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test and build native Windows frontend
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go test ./... -count=1
+          go build -trimpath -buildvcs=false -ldflags "-H=windowsgui" -o df-hud.exe ./cmd/df-hud
+
   build-linux:
-    needs: [check-linux, test-windows-via-wine]
+    needs: [check-linux, test-windows-via-wine, test-windows-native]
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     container: archlinux:base
@@ -88,46 +105,57 @@ jobs:
           if-no-files-found: error
 
   build-windows:
-    needs: [check-linux, test-windows-via-wine]
+    needs: [check-linux, test-windows-via-wine, test-windows-native]
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
-      - name: Preserve checkout line endings
-        run: git config --global core.autocrlf input
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-      - uses: msys2/setup-msys2@v2
-        id: msys2
-        with:
-          msystem: UCRT64
-          update: true
-          install: >-
-            mingw-w64-ucrt-x86_64-adwaita-icon-theme
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-gobject-introspection
-            mingw-w64-ucrt-x86_64-gobject-introspection-runtime
-            mingw-w64-ucrt-x86_64-gtk4
-            mingw-w64-ucrt-x86_64-ntldd
-            mingw-w64-ucrt-x86_64-pkgconf
+      - name: Install Windows resource tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils-mingw-w64-x86-64 \
+            unzip \
+            zip
       - name: Set version
         id: version
-        shell: pwsh
         run: |
-          if ($env:GITHUB_REF_TYPE -eq "tag") {
-            $version = $env:GITHUB_REF_NAME.TrimStart("v")
-          } else {
-            $version = "0.1.0-dev+$($env:GITHUB_SHA.Substring(0, 12))"
-          }
-          "VERSION=$version" >> $env:GITHUB_ENV
-          "version=$version" >> $env:GITHUB_OUTPUT
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.1.0-dev+${GITHUB_SHA::12}"
+          fi
+          printf 'VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Build Windows archive
-        shell: pwsh
-        env:
-          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
-        run: ./build-windows.ps1 -Version $env:VERSION
+        run: make package-windows VERSION="$VERSION"
+      - name: Verify native Windows package
+        run: |
+          archive="dist/df-hud-$VERSION-windows-amd64.zip"
+          stage="dist/df-hud-$VERSION-windows-amd64"
+          unzip -Z1 "$archive" | sort > package-files.txt
+          printf '%s\n' LICENSE df-hud.exe df-hud.example.toml | sort > expected-files.txt
+          diff -u expected-files.txt package-files.txt
+
+          x86_64-w64-mingw32-objdump -p "$stage/df-hud.exe" \
+            | awk '/DLL Name:/ { print tolower($3) }' > imports.txt
+          if awk '/gtk|glib|gobject|cairo|pango|msys|libgcc|libstdc|libwinpthread/ { found=1 } END { exit !found }' imports.txt; then
+            echo "unexpected GTK/MSYS dependency:"
+            awk '/gtk|glib|gobject|cairo|pango|msys|libgcc|libstdc|libwinpthread/' imports.txt
+            exit 1
+          fi
+
+          go version -m "$stage/df-hud.exe" > modules.txt
+          if awk '/gotk4/ { found=1 } END { exit !found }' modules.txt; then
+            echo "Windows executable still links gotk4"
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: df-hud-${{ steps.version.outputs.version }}-windows-amd64

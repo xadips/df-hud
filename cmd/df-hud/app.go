@@ -14,8 +14,8 @@ import (
 	"df-hud/internal/gamekeys"
 	"df-hud/internal/hotkeys"
 	"df-hud/internal/hud/groups"
-	hudgtk "df-hud/internal/hud/gtk"
 	"df-hud/internal/hud/render"
+	hudui "df-hud/internal/hud/ui"
 	"df-hud/internal/model"
 	"df-hud/internal/poller"
 	"df-hud/internal/presence"
@@ -337,6 +337,7 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 			RestartRunClock:    func() { a.store.RestartRun(time.Now(), "the tray menu") },
 			RetryPresence:      retryPresence,
 			PresenceBindFailed: presenceBindFailed,
+			OpenConfig:         platformOpenConfigAction(a.configFilePath),
 			ReloadConfig:       a.reloadConfig,
 			Quit:               opts.quit,
 			Version:            version,
@@ -357,7 +358,9 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 		a.Config().RequestsPerHour(1), a.Config().RequestsPerHour(0))
 
 	if opts.hud {
-		if err := hudgtk.Run(ctx, hudgtk.Dependencies{
+		finishUILoop := beginPlatformUILoop()
+		defer finishUILoop()
+		if err := hudui.Run(ctx, hudui.Dependencies{
 			Config:             a.Config,
 			Derive:             a.store.Derive,
 			MaybeSave:          a.state.MaybeSave,
@@ -386,6 +389,13 @@ func (a *app) run(ctx context.Context, opts runOptions) {
 			}
 		}
 	}
+}
+
+func (a *app) configFilePath() string {
+	if path := a.Config().SourcePath(); path != "" {
+		return path
+	}
+	return a.cfgPath
 }
 
 func (a *app) reportChallengeStatus(ctx context.Context) {

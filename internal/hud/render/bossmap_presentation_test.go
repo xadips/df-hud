@@ -244,6 +244,28 @@ func TestThreatLines(t *testing.T) {
 	}
 }
 
+func TestNearestLineShownInOutpostButHiddenWhileLoading(t *testing.T) {
+	cfg := BossesWidgetConfig{ShowNearest: true}
+	base := View{
+		HaveData: true, HasNearest: true,
+		NearestDX: 1, NearestX: 1055, NearestY: 986,
+		NearestDistanceInBlocks: 1,
+	}
+	if _, show := nearestLine(&base, cfg); !show {
+		t.Fatal("ordinary city view should show the nearest event")
+	}
+	outpost := base
+	outpost.InOutpost = true
+	if _, show := nearestLine(&outpost, cfg); !show {
+		t.Error("nearest event disappeared in an outpost block")
+	}
+	loading := base
+	loading.ClientLoading = true
+	if _, show := nearestLine(&loading, cfg); show {
+		t.Error("stale nearest event appeared while the client was loading")
+	}
+}
+
 // A nest is ONE event with one end time and up to seven enemy types, so the
 // countdown belongs on its first row only. Repeated down every row it would print
 // the same number seven times, which is how a group that is already seven rows

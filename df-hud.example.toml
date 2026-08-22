@@ -108,10 +108,10 @@ window_class = ""
 # an invisible HUD, which looks exactly like df-hud being broken.
 window_title_ignore = ["configuration"]
 
-# How often /proc is scanned. A local read, not a network request, so there is no
-# politeness floor - only sanity limits of 250ms..5m. Under Hyprland a window
-# opening or closing also triggers an immediate rescan.
-scan_interval = "2s"
+# How often the local process list is scanned. This is not a network request, so
+# there is no politeness floor - only sanity limits of 250ms..5m. Desktop window
+# events also trigger an immediate rescan.
+scan_interval = "500ms"
 
 [game_keys]
 # Press a key in the game's own window at launch.
@@ -237,6 +237,10 @@ font_family = "Courier New, monospace"
 font_size = 12
 text_color = "#e6cc4d"
 opacity = 1.0
+# Widget coordinates and font sizes are authored in this logical design space,
+# then uniformly scaled to the game content rectangle.
+reference_width = 2560
+reference_height = 1440
 
 # Optional extra stylesheet, loaded after the built-in one. Must exist if set.
 # css = "~/.config/df-hud/style.css"
@@ -375,7 +379,7 @@ show_nearest = true
 [widget.session]
 [widget.xp]
 enabled = true
-x = 160
+x = 220
 y = 85
 # White to match the clock, and because this sits beside the game's own
 # "LV 415: 8,122,281,000" and reads as its continuation.
@@ -485,7 +489,7 @@ color = "#e8e8e8"
 #   show_personal    the ordinary dailies and weeklies.
 #   show_completed   cuts across all three: a finished challenge is a row that
 #                    will not change again this cycle.
-show_repeatable = true
+show_repeatable = false
 show_clan = true
 show_personal = true
 show_completed = true

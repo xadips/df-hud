@@ -1,4 +1,4 @@
-//go:build (linux || windows) && cgo && !nolayershell
+//go:build linux && cgo && !nolayershell
 
 package gtk
 
@@ -82,6 +82,7 @@ func Run(ctx context.Context, deps Dependencies) error {
 	if !deps.valid() {
 		return errors.New("incomplete GTK dependencies")
 	}
+	preparePlatformRenderer()
 	if err := checkPlatformOverlay(); err != nil {
 		return err
 	}

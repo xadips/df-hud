@@ -415,10 +415,11 @@ type View struct {
 	HaveData bool
 	DataAge  time.Duration
 
-	GameRunning  bool
-	HasSession   bool
-	SessionTime  time.Duration
-	ClientUptime time.Duration
+	GameRunning   bool
+	ClientLoading bool
+	HasSession    bool
+	SessionTime   time.Duration
+	ClientUptime  time.Duration
 
 	Level         int
 	ExpInLevel    int64

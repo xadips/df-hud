@@ -44,13 +44,20 @@ func TestDecideHUDVisible(t *testing.T) {
 		t.Errorf("reason = %q, want the workspace named", reason)
 	}
 
-	// Windows has no workspace relationship to follow. The same configured rule
-	// instead follows focus, so alt-tabbing away hides the overlay.
-	foreground := elsewhere
-	foreground.ForegroundRule = true
-	visible, reason = Decide(allRules(), running, foreground)
-	if visible || !strings.Contains(reason, "foreground") {
-		t.Errorf("Windows foreground decision = %v, %q; want hidden with a focus reason", visible, reason)
+	// Windows has no workspace relationship to follow. Alt-tabbing must leave a
+	// still-visible game shown; minimizing it is the positive hide signal.
+	altTabbed := onScreen
+	altTabbed.ForegroundRule = true
+	visible, reason = Decide(allRules(), running, altTabbed)
+	if !visible {
+		t.Errorf("Windows alt-tab decision = %v, %q; want still visible", visible, reason)
+	}
+	minimized := elsewhere
+	minimized.ForegroundRule = true
+	minimized.Minimized = true
+	visible, reason = Decide(allRules(), running, minimized)
+	if visible || !strings.Contains(reason, "minimized") {
+		t.Errorf("Windows minimized decision = %v, %q; want hidden with a minimized reason", visible, reason)
 	}
 
 	// THE LAUNCHER. /proc says the game is running, because the launcher is the same
