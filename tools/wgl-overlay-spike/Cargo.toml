@@ -1,0 +1,21 @@
+[package]
+name = "wgl-overlay-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Throwaway WGL layered HWND gate for the df-hud rewrite"
+
+[dependencies]
+glow = "0.16"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_OpenGL",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }

@@ -3,6 +3,8 @@
 // windows-overlay-spike is a deliberately small release gate for Ebitengine's
 // transparent Win32 overlay behavior. It does not import or launch df-hud's GTK
 // frontend.
+//
+// It is not the rewrite spike. Raw WGL (no GLFW) lives in tools/wgl-overlay-spike.
 package main
 
 import (
