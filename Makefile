@@ -20,7 +20,7 @@ WINE    ?= wine
 REV     := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 VERSION ?= 0.1.0-dev+$(REV)
 
-.PHONY: all build test check test-windows package-linux package-windows smoke-windows install uninstall enable disable restart logs status clean
+.PHONY: all build test check package-linux package-windows smoke-windows install uninstall enable disable restart logs status clean
 
 all: build
 
@@ -36,10 +36,6 @@ check:
 
 test:
 	go test ./...
-
-test-windows:
-	WINEDEBUG=-all GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-		go test -tags nolayershell -exec "$(WINE)" ./... -count=1
 
 package-linux:
 	./build-linux.sh "$(VERSION)"

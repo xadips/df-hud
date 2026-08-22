@@ -614,10 +614,9 @@ frontend on Linux using MinGW `windres`, and writes
 `dist/df-hud-<version>-windows-amd64.zip`. On Windows,
 `build-windows.ps1 -Version ...` creates the same package.
 
-`make test-windows` cross-compiles the Windows tests headlessly and runs them
-through Wine. `make smoke-windows` checks the packaged executable's version and
-configuration paths through Wine. Native Windows CI runs renderer tests without
-GTK or MSYS2; transparent overlay behavior remains covered by
+`make smoke-windows` can check a packaged executable's version and configuration
+paths through Wine. Required CI runs the complete cgo-free test graph and builds
+the GUI executable on `windows-latest`, without GTK or MSYS2. Transparent overlay behavior remains covered by
 `tools/windows-overlay-spike` and manual GPU validation.
 
 Manual and tagged GitHub Actions runs build both archives again, with the Windows
