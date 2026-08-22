@@ -1,0 +1,365 @@
+//! GLES 3.0 renderer: one shader, one VAO, fontdue atlas, draw list.
+//!
+//! Does not own the EGL/WGL window and does not see `WlSurface`. Wayland (and
+//! Phase 3 WGL) make the context current, call [`Gpu::draw`], then swap.
+//! Keep GLES 3.0 — do not request 3.2.
+
+use std::error::Error;
+
+use glow::{Context as Glow, HasContext, PixelUnpackData};
+
+use crate::font::{Atlas, Font};
+
+pub const REF_W: f32 = 2560.0;
+pub const REF_H: f32 = 1440.0;
+/// `hud.font_size` is CSS points (GTK `12pt`). Windows already converts with
+/// `size * 4/3` to pixels; 12pt → 16px at the 2560×1440 authoring size.
+pub const FONT_PT: f32 = 12.0;
+const PT_TO_PX: f32 = 4.0 / 3.0;
+
+/// One outlined string in 2560×1440 screenshot space. Dummy groups for now;
+/// Phase 4 replaces this with scene layout.
+pub struct TextLine {
+    pub x: f32,
+    pub y: f32,
+    pub color: [f32; 4],
+    pub text: String,
+}
+
+const VS: &str = r#"#version 300 es
+layout(location = 0) in vec2 a_pos;
+layout(location = 1) in vec4 a_color;
+layout(location = 2) in vec2 a_uv;
+uniform vec2 u_resolution;
+out vec4 v_color;
+out vec2 v_uv;
+void main() {
+    vec2 clip = (a_pos / u_resolution) * 2.0 - 1.0;
+    // y-down pixels → clip. Opposite flip draws the HUD off the top of the screen.
+    gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+    v_color = a_color;
+    v_uv = a_uv;
+}
+"#;
+
+const FS: &str = r#"#version 300 es
+precision mediump float;
+in vec4 v_color;
+in vec2 v_uv;
+uniform sampler2D u_atlas;
+out vec4 frag;
+void main() {
+    float coverage = texture(u_atlas, v_uv).r;
+    float a = v_color.a * coverage;
+    // Wayland compositors blend premultiplied. Straight RGB outlines fringe black.
+    frag = vec4(v_color.rgb * a, a);
+}
+"#;
+
+const STRIDE: i32 = 32;
+const OUTLINE_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+pub struct Gpu {
+    gl: Glow,
+    program: glow::Program,
+    vao: glow::VertexArray,
+    vbo: glow::Buffer,
+    atlas_tex: glow::Texture,
+    u_resolution: glow::UniformLocation,
+    font: Font,
+    atlas: Atlas,
+    px: f32,
+}
+
+impl Gpu {
+    pub fn new(gl: Glow, buf_w: i32, buf_h: i32) -> Result<Self, Box<dyn Error>> {
+        unsafe {
+            eprintln!(
+                "GLES renderer={} version={}",
+                gl.get_parameter_string(glow::RENDERER),
+                gl.get_parameter_string(glow::VERSION)
+            );
+        }
+
+        let font = Font::load()?;
+        let atlas = Atlas::new();
+        let program = unsafe { link_program(&gl)? };
+        let u_resolution = unsafe {
+            gl.get_uniform_location(program, "u_resolution")
+                .ok_or("u_resolution missing")?
+        };
+        let u_atlas = unsafe {
+            gl.get_uniform_location(program, "u_atlas")
+                .ok_or("u_atlas missing")?
+        };
+        let vao = unsafe { gl.create_vertex_array()? };
+        let vbo = unsafe { gl.create_buffer()? };
+        let atlas_tex = unsafe { gl.create_texture()? };
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.bind_vertex_array(Some(vao));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, STRIDE, 0);
+            gl.enable_vertex_attrib_array(0);
+            gl.vertex_attrib_pointer_f32(1, 4, glow::FLOAT, false, STRIDE, 8);
+            gl.enable_vertex_attrib_array(1);
+            gl.vertex_attrib_pointer_f32(2, 2, glow::FLOAT, false, STRIDE, 24);
+            gl.enable_vertex_attrib_array(2);
+            gl.enable(glow::BLEND);
+            gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+            gl.disable(glow::DEPTH_TEST);
+            gl.disable(glow::CULL_FACE);
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(atlas_tex));
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.use_program(Some(program));
+            gl.uniform_1_i32(Some(&u_atlas), 0);
+            gl.viewport(0, 0, buf_w, buf_h);
+        }
+
+        let mut gpu = Self {
+            gl,
+            program,
+            vao,
+            vbo,
+            atlas_tex,
+            u_resolution,
+            font,
+            atlas,
+            px: 0.0,
+        };
+        gpu.upload_atlas()?;
+        eprintln!(
+            "font=Go Mono Bold atlas={}x{} (grayscale AA, 1px outline, no subpixel)",
+            gpu.atlas.width, gpu.atlas.height
+        );
+        Ok(gpu)
+    }
+
+    pub fn resize(&self, buf_w: i32, buf_h: i32) {
+        unsafe { self.gl.viewport(0, 0, buf_w, buf_h) };
+    }
+
+    pub fn draw(
+        &mut self,
+        buf_w: i32,
+        buf_h: i32,
+        logical_w: i32,
+        logical_h: i32,
+        lines: &[TextLine],
+    ) -> Result<(), Box<dyn Error>> {
+        let sx = buf_w as f32 / logical_w.max(1) as f32;
+        let sy = buf_h as f32 / logical_h.max(1) as f32;
+        let px = FONT_PT * PT_TO_PX * (logical_h.max(1) as f32 / REF_H) * sy;
+        if (px - self.px).abs() > 0.05 {
+            self.atlas.reset();
+            self.px = px;
+        }
+        for line in lines {
+            for ch in line.text.chars() {
+                self.atlas.glyph(&self.font, ch, px)?;
+            }
+        }
+        if self.atlas.dirty {
+            self.upload_atlas()?;
+        }
+
+        let mut verts = Vec::new();
+        let ascent = self.font.ascent(px);
+        for line in lines {
+            let x0 = line.x * (logical_w.max(1) as f32 / REF_W) * sx;
+            let y0 = line.y * (logical_h.max(1) as f32 / REF_H) * sy;
+            self.push_text(&mut verts, x0, y0, ascent, px, line)?;
+        }
+
+        unsafe {
+            self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            self.gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            self.gl.clear(glow::COLOR_BUFFER_BIT);
+            self.gl.use_program(Some(self.program));
+            self.gl
+                .uniform_2_f32(Some(&self.u_resolution), buf_w as f32, buf_h as f32);
+            self.gl.active_texture(glow::TEXTURE0);
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(self.atlas_tex));
+            self.gl.bind_vertex_array(Some(self.vao));
+            self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
+            self.gl.buffer_data_u8_slice(
+                glow::ARRAY_BUFFER,
+                verts_as_bytes(&verts),
+                glow::STREAM_DRAW,
+            );
+            self.gl
+                .draw_arrays(glow::TRIANGLES, 0, (verts.len() / 8) as i32);
+        }
+        Ok(())
+    }
+
+    fn push_text(
+        &self,
+        verts: &mut Vec<f32>,
+        x0: f32,
+        y0: f32,
+        ascent: f32,
+        px: f32,
+        line: &TextLine,
+    ) -> Result<(), Box<dyn Error>> {
+        let baseline = y0 + ascent;
+        let mut pen = x0;
+        for ch in line.text.chars() {
+            let glyph = self
+                .atlas
+                .get(ch, px)
+                .ok_or("glyph missing from atlas after rasterize")?;
+            if glyph.width > 0 && glyph.height > 0 {
+                let gx = (pen + glyph.xmin as f32).round();
+                let gy = (baseline - glyph.ymin as f32 - glyph.height as f32).round();
+                let (ou0, ov0, ou1, ov1) = self.atlas.uv(
+                    glyph.outline_x,
+                    glyph.outline_y,
+                    glyph.outline_w,
+                    glyph.outline_h,
+                );
+                push_quad(
+                    verts,
+                    gx - 1.0,
+                    gy - 1.0,
+                    glyph.outline_w as f32,
+                    glyph.outline_h as f32,
+                    OUTLINE_COLOR,
+                    ou0,
+                    ov0,
+                    ou1,
+                    ov1,
+                );
+                let (u0, v0, u1, v1) =
+                    self.atlas
+                        .uv(glyph.atlas_x, glyph.atlas_y, glyph.width, glyph.height);
+                push_quad(
+                    verts,
+                    gx,
+                    gy,
+                    glyph.width as f32,
+                    glyph.height as f32,
+                    line.color,
+                    u0,
+                    v0,
+                    u1,
+                    v1,
+                );
+            }
+            pen += glyph.advance;
+        }
+        Ok(())
+    }
+
+    fn upload_atlas(&mut self) -> Result<(), Box<dyn Error>> {
+        unsafe {
+            self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(self.atlas_tex));
+            self.gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::R8 as i32,
+                self.atlas.width as i32,
+                self.atlas.height as i32,
+                0,
+                glow::RED,
+                glow::UNSIGNED_BYTE,
+                PixelUnpackData::Slice(Some(self.atlas.pixels.as_slice())),
+            );
+        }
+        self.atlas.dirty = false;
+        Ok(())
+    }
+}
+
+impl Drop for Gpu {
+    fn drop(&mut self) {
+        unsafe {
+            self.gl.delete_texture(self.atlas_tex);
+            self.gl.delete_buffer(self.vbo);
+            self.gl.delete_vertex_array(self.vao);
+            self.gl.delete_program(self.program);
+        }
+    }
+}
+
+fn verts_as_bytes(verts: &[f32]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(verts.as_ptr().cast(), std::mem::size_of_val(verts)) }
+}
+
+fn push_quad(
+    verts: &mut Vec<f32>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color: [f32; 4],
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+) {
+    let [r, g, b, a] = color;
+    let x2 = x + w;
+    let y2 = y + h;
+    let verts_px = [
+        [x, y, u0, v0],
+        [x2, y, u1, v0],
+        [x, y2, u0, v1],
+        [x, y2, u0, v1],
+        [x2, y, u1, v0],
+        [x2, y2, u1, v1],
+    ];
+    for [px, py, u, v] in verts_px {
+        verts.extend_from_slice(&[px, py, r, g, b, a, u, v]);
+    }
+}
+
+unsafe fn link_program(gl: &Glow) -> Result<glow::Program, Box<dyn Error>> {
+    unsafe {
+        let vs = compile(gl, glow::VERTEX_SHADER, VS)?;
+        let fs = compile(gl, glow::FRAGMENT_SHADER, FS)?;
+        let program = gl.create_program()?;
+        gl.attach_shader(program, vs);
+        gl.attach_shader(program, fs);
+        gl.link_program(program);
+        if !gl.get_program_link_status(program) {
+            return Err(gl.get_program_info_log(program).into());
+        }
+        gl.delete_shader(vs);
+        gl.delete_shader(fs);
+        Ok(program)
+    }
+}
+
+unsafe fn compile(gl: &Glow, kind: u32, src: &str) -> Result<glow::Shader, Box<dyn Error>> {
+    unsafe {
+        let shader = gl.create_shader(kind)?;
+        gl.shader_source(shader, src);
+        gl.compile_shader(shader);
+        if !gl.get_shader_compile_status(shader) {
+            return Err(gl.get_shader_info_log(shader).into());
+        }
+        Ok(shader)
+    }
+}

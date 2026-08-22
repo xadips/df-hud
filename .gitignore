@@ -1,7 +1,7 @@
 # Secrets and local state. The bridge payload is account-equivalent
 # (userID + password hash + sc), so nothing derived from it may ever be
 # committed.
-config.toml
+/config.toml
 credentials.json
 state.json
 catalog.json
@@ -13,6 +13,7 @@ positions.ndjson
 
 # Build output
 /df-hud
+/target/
 /dist/
 /cmd/df-hud/df-hud_windows_amd64.syso
 /tools/linux-overlay-spike/target/

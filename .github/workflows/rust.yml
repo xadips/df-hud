@@ -1,0 +1,108 @@
+# Product crate (overlay rewrite). Do not fold this into the Arch
+# check-linux job: pacman rust cannot cross-compile and conflicts with rustup.
+# Ubuntu + rustup + MinGW is the path in the rewrite plan (same as the Go
+# Windows package job). Not zigbuild, not windows-latest.
+name: Product crate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  linux-gnu-and-windows-gnu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Wayland headers and MinGW
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libwayland-dev \
+            binutils-mingw-w64-x86-64 \
+            gcc-mingw-w64-x86-64
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Reject GUI / async crates
+        run: |
+          set -euo pipefail
+          if grep -E '^name = "(gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne)"' Cargo.lock; then
+            echo "forbidden crate in Cargo.lock"
+            exit 1
+          fi
+          linux_tree="$(cargo tree --target x86_64-unknown-linux-gnu --edges no-dev --prefix none)"
+          printf 'linux-gnu tree:\n%s\n' "$linux_tree"
+          if printf '%s\n' "$linux_tree" | grep -Ei '^(gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne) '; then
+            echo "forbidden crate in linux-gnu tree"
+            exit 1
+          fi
+          win_tree="$(cargo tree --target x86_64-pc-windows-gnu --edges no-dev --prefix none)"
+          printf 'windows-gnu tree:\n%s\n' "$win_tree"
+          if printf '%s\n' "$win_tree" | grep -Ei '^(wayland|glow|gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne) '; then
+            echo "forbidden crate in windows-gnu tree"
+            exit 1
+          fi
+          if ! printf '%s\n' "$win_tree" | grep -q '^fontdue '; then
+            echo "windows-gnu should include fontdue in Phase 2"
+            exit 1
+          fi
+
+      - name: Build linux-gnu
+        run: cargo build --locked --release --target x86_64-unknown-linux-gnu
+
+      - name: Build windows-gnu
+        run: cargo build --locked --release --target x86_64-pc-windows-gnu
+
+      - name: Verify artifacts
+        run: |
+          set -euo pipefail
+          linux=target/x86_64-unknown-linux-gnu/release/df-hud
+          windows=target/x86_64-pc-windows-gnu/release/df-hud.exe
+          test -x "$linux"
+          test -f "$windows"
+          got="$(env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET "$linux")"
+          printf '%s\n' "$got"
+          case "$got" in
+            "df-hud "*) ;;
+            *) echo "unexpected version output"; exit 1 ;;
+          esac
+          file "$linux" | grep -E 'ELF.*x86-64'
+          file "$windows" | grep -E 'PE32\+'
+          ldd "$linux" | grep -E 'libwayland-client'
+          if ldd "$linux" | grep -Ei 'gtk|pango|cairo|gdk|adwaita'; then
+            echo "linux binary linked a GUI toolkit"
+            ldd "$linux"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: df-hud-linux-gnu
+          path: target/x86_64-unknown-linux-gnu/release/df-hud
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: df-hud-windows-gnu
+          path: target/x86_64-pc-windows-gnu/release/df-hud.exe
+          if-no-files-found: error
+          retention-days: 7

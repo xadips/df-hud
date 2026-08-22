@@ -1,0 +1,30 @@
+# Overlay rewrite product crate. The installed HUD is still the Go binary
+# until Phase 8. Throwaway spikes stay under tools/. Do not add gtk, tokio,
+# winit, wgpu, or copy internal/hud/gtk or internal/hud/ebiten.
+[package]
+name = "df-hud"
+version = "0.1.0-dev"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Dead Frontier overlay rewrite (Go HUD remains the installed product)"
+
+[dependencies]
+# Pure Rust. Allowed on windows-gnu in Phase 2; font_path/TOML waits for Phase 4.
+fontdue = "0.9"
+
+# Mesa EGL on a layer surface needs a libwayland wl_surface*. That is the
+# wayland-backend client_system feature (FFI for EGL), not GTK. khronos-egl
+# 6.0.0 did not compile on rustc 1.97; load libEGL / libGLESv2 with libloading.
+[target.'cfg(target_os = "linux")'.dependencies]
+glow = "0.16"
+libc = "0.2"
+libloading = "0.8"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-egl = "0.32"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+[profile.release]
+panic = "abort"

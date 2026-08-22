@@ -6,14 +6,14 @@ todos:
     content: "Throwaway spikes over Dead Frontier (not Wine, not a terminal): EGL on layer-shell + click-through surviving swap; WGL layered HWND without Ebitengine; swap interval vs game hitch; exclusive vs borderless fullscreen. Kill the stack if these fail."
     status: completed
   - id: phase0-skeleton
-    content: Empty Rust binary + CI that builds linux-gnu and windows-gnu from Linux (zigbuild). No GTK, no tokio, no features.
-    status: pending
+    content: Empty Rust binary + CI that builds linux-gnu and windows-gnu from Linux (MinGW). No GTK, no tokio, no features.
+    status: completed
   - id: phase1-wayland-hello
     content: "Layer-shell overlay: full-monitor, exclusive -1, keyboard none, empty input region, EGL GLES 3.0 clear to translucent. Clicks pass through to whatever is under it."
-    status: pending
+    status: completed
   - id: phase2-gles-text
     content: "Shared renderer on the Linux surface: one shader, VAO, fontdue atlas, outlined dummy text groups. Dirty/timer present, no 60fps loop."
-    status: pending
+    status: completed
   - id: phase3-win32-hello
     content: Same renderer on a layered click-through HWND (GL 3.3, PerMonitorV2, 1px DWM inset, one-step monitor placement).
     status: pending
@@ -133,11 +133,70 @@ Test on the GPU and compositor you actually play on (Hyprland + your NVIDIA/AMD/
 
 **Kill criteria:** if spikes 1–4 fail on the machine you play on, stop. Alternatives (wl_shm CPU, keep GTK, keep Ebitengine on Windows only) are then honest — not a surprise after the core port.
 
-## Handoff (2026-08-23) — spikes done, start Phase 0
+## Handoff (2026-08-23) — Phase 2 text passed over the game, Phase 3 is next (not started)
 
-This Linux session ran the EGL spike; a Windows Cursor session ran WGL. Context is ending here. Next agent: **do not re-spike.** Read this section, [`tools/wgl-overlay-spike/REPORT.md`](tools/wgl-overlay-spike/REPORT.md), then implement **Phase 0 skeleton** on a product crate (not inside the throwaway `tools/*-overlay-spike` bins). Keep Go `df-hud` installed until Phase 8.
+**Do not re-spike. Do not start Phase 4.** When resuming, implement Phase 3 in the product crate at the repo root — not `tools/*-overlay-spike`. Keep the Go `df-hud` installed until Phase 8. Do not copy `internal/hud/gtk` or `internal/hud/ebiten`. Font look is parked (Bold + LINEAR + 1px atlas outline is “okay, not final”).
 
-Branch with spikes + this plan: `spike/wgl-overlay`.
+Branch: `spike/wgl-overlay`.
+
+### Where Phase 2 landed
+
+Product crate (Linux overlay + shared font CPU):
+
+| File | Owns |
+|---|---|
+| [`src/wayland.rs`](src/wayland.rs) | layer-shell, `GlWindow` (EGL window + `eglSwapBuffers`), fd + 1s poll, remap |
+| [`src/egl.rs`](src/egl.rs) | `libloading` EGL 1.5 / GLES **3.0** (not 3.2 request) |
+| [`src/gpu.rs`](src/gpu.rs) | shader + VAO + atlas upload + draw list. **No `WlSurface`.** |
+| [`src/font.rs`](src/font.rs) | fontdue + atlas pack + 1px dilated outline (all targets) |
+| [`src/dummy.rs`](src/dummy.rs) | hardcoded groups, local clock (Linux) |
+| [`assets/fonts/Go-Mono-Bold.ttf`](assets/fonts/Go-Mono-Bold.ttf) | one bundled TTF (`include_bytes!`) |
+
+`Gpu` / `glow` / Wayland are still `#[cfg(target_os = "linux")]`. Windows-gnu is a version printer **plus** fontdue in the tree. CI ([`.github/workflows/rust.yml`](.github/workflows/rust.yml)) allows fontdue on windows-gnu; still **rejects** `wayland` / `glow` / gtk / tokio. Both artifacts required. Headless `env -u WAYLAND_DISPLAY` prints `df-hud 0.1.0-dev` and exits 0. Linker: [`.cargo/config.toml`](.cargo/config.toml) (`x86_64-w64-mingw32-gcc`). `.gitignore` uses `/config.toml` so that file is not ignored.
+
+Shader (keep): `#version 300 es`, `gl_Position = vec4(clip.x, -clip.y, 0, 1)`, `frag = vec4(rgb * a, a)`, blend `ONE, ONE_MINUS_SRC_ALPHA`, atlas R coverage, **LINEAR** (grayscale AA, not RGB subpixel). Outline is a dilated 1px ring in the atlas (two quads), not eight stacked offset draws.
+
+Font size: `hud.font_size` is **points**. `FONT_PT = 12` × `4/3` → 16px at 2560×1440 (same as Windows Ebitengine). Dummy coords from example.toml: status `(10,10)` `#e6cc4d`, session `(350,60)` `IC Time:` ticking, xp `(220,85)`, block `(2340,300)` `#9ecbff`. Scale with Phase 1 `sx/sy`.
+
+Loop: poll Wayland fd; wake on configure or 1s; swap only if dirty or the clock string changed; re-apply empty input region; swap-interval 0. 5s run → 5 swaps.
+
+### Gate (player machine)
+
+Hyprland 0.56, RX 7900 XTX, Mesa, DP-1 2560×1440 100%. Go HUD off. `cargo run --release -- --output DP-1`.
+
+- Outlined dummy text over Proton Dead Frontier; session second ticks.
+- Click-through / mouse-look / WASD still hit the game after 1 Hz swaps.
+- `hyprctl layers`: `df-hud` overlay `xywh: 0 0 2560 1440`, not on DP-2.
+- RSS ~28MB (GL driver + 1440p backbuffer), not GTK-sized.
+- Full-output overlay is **correct** (over desktop windows on DP-1 too). Visible on **all workspaces** until Phase 7 unmap (`follow_game_workspace`). `--unmap-at` already proves remap.
+
+### Phase 3 — do this
+
+Plug **this** `Gpu` into WGL on a layered HWND. Do not fork shaders. Linux stays the EGL/`GlWindow` path.
+
+**Done when:** the same dummy text is click-through on native Windows (Wine is only a context-create smoke); DWM alpha works; `cargo build --release --target x86_64-pc-windows-gnu` from Linux still produces the exe.
+
+Concrete:
+
+1. **Compile `Gpu` + `font` on windows-gnu.** Move `glow` (and `libloading`) off the linux-only table. CI must stop banning `glow` on windows-gnu; still ban wayland/gtk/tokio/winit/wgpu. `windows-sys` is allowed, kitchen-sink `windows` crate is not.
+2. **Shader dialect:** Linux stays GLES 3.0 `#version 300 es`. Windows is GL **3.3 core** (`#version 330 core` in the WGL spike). Same body; `cfg` only the version string. Do not write a second renderer.
+3. **HWND (mandatory Intel recipe):** `WS_POPUP` + `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`. `SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)` **and** `DwmEnableBlurBehindWindow` with empty `CreateRectRgn(0,0,-1,-1)`. Extend-frame alone was invisible on Iris Xe. **1px inset** stays. PerMonitorV2. Place on the target monitor in one `SetWindowPos`. Swap interval 0 (`wglSwapIntervalEXT`).
+4. **WGL bootstrap** from [`tools/wgl-overlay-spike`](tools/wgl-overlay-spike) (not the Ebitengine `tools/windows-overlay-spike`). Dummy-context dance for `wglCreateContextAttribsARB`. Dummy window must **not** share the overlay class (or `clear_closed()` after teardown) — `WM_DESTROY` on the dummy ended the spike process.
+5. **Loop:** `MsgWaitForMultipleObjects` (or equivalent) + 1s timer; swap only if dirty/clock changed. Same dummy strings. No 60fps.
+6. Headless / no display: Linux still prints version and skips. Windows without a desktop can stay a version printer until a window is created.
+
+### Must keep (do not rediscover)
+
+- Wayland remap after `attach(null)`: empty commit (re-apply role) → wait for `configure` → `ack_configure` in the **same** commit as `eglSwapBuffers`. Never ack with no buffer. `--unmap-at` already does this.
+- Mesa wants libwayland `wl_surface*` → `wayland-backend` `client_system`. `khronos-egl` 6.0.0 did not compile on rustc 1.97; keep `libloading`.
+- Cross-compile: rustup + `mingw-w64-gcc`, not pacman `rust`, not zigbuild, not `windows-latest`.
+- Hybrid GPU on the Windows play box was fine (overlay on iGPU, game on dGPU).
+
+### Do not
+
+Port `Derive`, scene/TOML layout (Phase 4), network, tray, visibility/workspace follow (Phase 7), or delete GTK. Do not pull tokio/reqwest/wgpu/GTK/winit/khronos-egl. Do not copy the Linux spike 5×7 bitmap. Do not restyle fonts as the Phase 3 gate. Do not add a `windows-latest` compile job.
+
+Test: native Windows over the game they actually play (fullscreen=1 D3D9 `WS_POPUP` already spike-passed). Linux `cargo run --release -- --output DP-1` must still work.
 
 ### Gate results
 
@@ -179,19 +238,25 @@ Kill Phase 0? **No.**
 
 **Shader:** premult `frag = vec4(rgb * a, a)`, blend `ONE, ONE_MINUS_SRC_ALPHA`. Same idea on both.
 
-### Next work (Phase 0)
+### Next work (Phase 3)
 
-Empty product crate + CI: `cargo build` linux-gnu and `cargo zigbuild --target x86_64-pc-windows-gnu`. `panic=abort` in release. Zero GTK/tokio/winit. Print version. **Done when:** both artifacts exist in CI.
+Same `Gpu` on a layered WGL HWND. Do not fork shaders. Intel DWM recipe + 1px inset. **Done when:** dummy outlined text is click-through on native Windows; gnu exe still cross-builds from Linux.
 
-On Arch, pacman `rust` cannot cross-compile; rustup + `mingw-w64-gcc` (or zigbuild) as in the [ArchWiki Rust page](https://wiki.archlinux.org/title/Rust). Do not stack pacman `rust` and `rustup` — they conflict.
+Must keep from Phase 1–2 / spikes:
+
+- Wayland remap after `attach(null)`: empty commit (re-apply role) → wait for `configure` → `ack_configure` in the same commit as `eglSwapBuffers`. Never ack during `roundtrip` with no buffer.
+- Product HWND (Phase 3, do not lose this): `SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)` **and** `DwmEnableBlurBehindWindow` with empty region `CreateRectRgn(0,0,-1,-1)`. Extend-frame alone was invisible on Intel Iris Xe. 1px inset stays.
+- Premult `frag = vec4(rgb * a, a)`, blend `ONE, ONE_MINUS_SRC_ALPHA`, vertex Y flip `gl_Position.y = -clip.y`. Grayscale/alpha atlas only (no RGB subpixel AA).
+
+On Arch, pacman `rust` cannot cross-compile; rustup + `mingw-w64-gcc` as in the [ArchWiki Rust page](https://wiki.archlinux.org/title/Rust). Same command as CI: `cargo build --release --target x86_64-pc-windows-gnu`. Do not stack pacman `rust` and `rustup` — they conflict. Keep zigbuild only if C deps or extra targets make MinGW hurt. Do not add a `windows-latest` compile job (more Actions minutes, usually MSVC, unreproducible here). Use a Windows box only to prove `opengl32` / DWM.
 
 Do **not** port `Derive` or delete GTK until Phase 8. Do not copy [`internal/hud/gtk`](internal/hud/gtk) or [`internal/hud/ebiten`](internal/hud/ebiten).
 
-Optional leftovers (not blocking Phase 0): Linux `--grid` at 125/150%; re-cross the WGL exe after dummy-window fix; Hyprland blur with namespace `df-hud`.
+Optional leftovers (not blocking): Linux `--grid` at 125/150%; re-cross the WGL exe after dummy-window fix; Hyprland blur with namespace `df-hud`.
 
 ## Build order (vertical slices, not layers)
 
-The old todo list (port all of core, then both overlays, then GL) is how a rewrite gets lost: months of a faithful poller with no pixels, then a second UI stack. Do **one runnable slice per phase**. Do not start the next phase until the gate passes. Keep the current Go `df-hud` installed and playing the game until Phase 8. **Spikes 1–5 passed over real Dead Frontier (2026-08-23).** Start Phase 0 product skeleton next. Phase 1 is the maintained version of the Linux spike, not a substitute for those throwaway tests.
+The old todo list (port all of core, then both overlays, then GL) is how a rewrite gets lost: months of a faithful poller with no pixels, then a second UI stack. Do **one runnable slice per phase**. Do not start the next phase until the gate passes. Keep the current Go `df-hud` installed and playing the game until Phase 8. **Spikes 1–5 passed over real Dead Frontier (2026-08-23).** Phase 0–2 are in the product crate. Phase 3 is the next slice (not started).
 
 ```mermaid
 flowchart TD
@@ -218,19 +283,19 @@ Phase 5 can overlap Phase 2–4 if two people work: core is pure tests and does 
 
 ### Phase 0 — Skeleton
 
-One crate, `src/main.rs` prints version. CI on Linux: `cargo build` and `cargo zigbuild --target x86_64-pc-windows-gnu`. `panic=abort` in release. **Done when:** both artifacts exist in CI with zero GUI deps.
+One crate, `src/main.rs` prints version. CI on Linux: `cargo build` linux-gnu and `cargo build --target x86_64-pc-windows-gnu` with apt MinGW. `panic=abort` in release. **Done when:** both artifacts exist in CI with zero GUI deps. **Done** (root crate + `.github/workflows/rust.yml`).
 
 ### Phase 1 — Wayland + EGL hello (hardest unique risk)
 
-Layer-shell surface, four-edge anchor, exclusive zone -1, keyboard none, empty input region, EGL GLES 3.0, clear to `0,0,0,0` plus one translucent colored rect. No fonts. **Done when:** on Hyprland, a tinted full-monitor overlay sits over the game (and over the desktop), mouse clicks land on the game, keys go to the game, `hyprctl layers` shows the namespace.
+Layer-shell surface, four-edge anchor, exclusive zone -1, keyboard none, empty input region, EGL GLES 3.0, clear to `0,0,0,0` plus one translucent colored rect. No fonts. Remap after `attach(null)`: empty commit → configure → ack + swap in one commit (never ack with no buffer). **Done when:** on Hyprland, a tinted full-monitor overlay sits over the game (and over the desktop), mouse clicks land on the game, keys go to the game, `hyprctl layers` shows the namespace. **Done** (product crate; cyan rect visible on Hyprland).
 
 ### Phase 2 — Shared GLES text (Linux only)
 
-One shader, VAO, bundled TTF via fontdue, atlas, 8-neighbor outline, a few hardcoded strings at screenshot coords. Event loop: Wayland fd + 1s timer; no swap if nothing changed. **Done when:** outlined text is crisp on the layer surface at 1 Hz; RSS is in the “GL driver + tiny app” range, not GTK-sized.
+One shader, VAO, bundled TTF via fontdue, atlas, outlined dummy strings at screenshot coords. Event loop: Wayland fd + 1s timer; no swap if nothing changed. **Done when:** outlined text is crisp on the layer surface at 1 Hz; RSS is in the “GL driver + tiny app” range, not GTK-sized. **Done** (product crate over the game; click-through held; font look parked).
 
 ### Phase 3 — Windows surface, same renderer
 
-Plug the Phase 2 renderer into WGL on a layered HWND. Do not fork shaders. **Done when:** the same dummy text appears click-through on native Windows (or Wine smoke for context create); DWM alpha works (1px inset); `cargo zigbuild` still produces the exe from Linux.
+Plug the Phase 2 renderer into WGL on a layered HWND. Do not fork shaders. Intel DWM recipe is mandatory: `SetLayeredWindowAttributes(..., 255, LWA_ALPHA)` plus `DwmEnableBlurBehindWindow` with empty `CreateRectRgn(0,0,-1,-1)` — extend-frame alone was invisible on Iris Xe. **Done when:** the same dummy text appears click-through on native Windows (or Wine smoke for context create); DWM alpha works (that recipe + 1px inset); `cargo build --target x86_64-pc-windows-gnu` still produces the exe from Linux.
 
 ### Phase 4 — Scene / layout, still dummy data
 
@@ -268,7 +333,7 @@ Go’s runtime is a ~10MB floor and the GC does not help a mostly-idle overlay. 
 
 Rust hits the requested middle:
 
-- Cross-compile both targets from Linux with `cargo zigbuild` (`x86_64-unknown-linux-gnu` and `x86_64-pc-windows-gnu`).
+- Cross-compile both targets from Linux: `cargo build --release` and `cargo build --release --target x86_64-pc-windows-gnu` (MinGW). Not zigbuild unless C deps appear; not `windows-latest` for compile.
 - Linux overlay via **`wayland-client` + `wayland-protocols-wlr`** (Rust protocol impl, **no libwayland, no GTK, no gtk4-layer-shell**).
 - Windows via **`windows-sys`** feature-gated to windowing/GDI/DPI — not the kitchen-sink `windows` crate.
 - No tokio. Polling is 10s; **std threads + channels**, same shape as today’s goroutines.
@@ -345,9 +410,9 @@ Linux GTK today is **not** GPU-accelerated in any useful sense (Pango/Cairo labe
 | Target | How |
 |--------|-----|
 | Linux | `cargo build --release`. Only *runtime* needs: glibc, libEGL, libGLESv2, a wlroots compositor. **Zero GTK.** Protocol code is generated from XML at compile time. |
-| Windows | `cargo zigbuild --release --target x86_64-pc-windows-gnu`. GL via `opengl32.dll` at runtime. Windres still embeds the manifest. |
+| Windows | `cargo build --release --target x86_64-pc-windows-gnu` with `x86_64-w64-mingw32-gcc` (apt `gcc-mingw-w64-x86-64` / pacman `mingw-w64-gcc`). GL via `opengl32.dll` at runtime. Windres still embeds the manifest. |
 
-CI: one Arch/Ubuntu runner builds both artifacts. Drop `windows-latest` as a compile host (keep it only if you want a native smoke test). No `nolayershell` GTK stub; headless is `if !hud { skip surface }`.
+CI: one Ubuntu + rustup runner builds both artifacts. Same MinGW packages as the Go Windows job. Do not pay for `windows-latest` to compile (higher Actions minute rate, usually MSVC, not your gnu binary). Keep a Windows box only to load `opengl32` and prove DWM. zigbuild is a fallback if C deps or extra targets make MinGW hurt. No `nolayershell` GTK stub; headless is `if !hud { skip surface }`.
 
 ## Dependencies (allowed vs rejected)
 
