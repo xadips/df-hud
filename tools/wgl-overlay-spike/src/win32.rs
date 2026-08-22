@@ -4,10 +4,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use windows_sys::Win32::Foundation::{
     GetLastError, BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
-use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
+use windows_sys::Win32::Graphics::Dwm::{
+    DwmEnableBlurBehindWindow, DwmExtendFrameIntoClientArea, DWM_BB_BLURREGION, DWM_BB_ENABLE,
+    DWM_BLURBEHIND,
+};
 use windows_sys::Win32::UI::Controls::MARGINS;
 use windows_sys::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
+    CreateRectRgn, DeleteObject, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
 };
 use windows_sys::Win32::UI::HiDpi::{
     GetDpiForMonitor, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -15,11 +18,11 @@ use windows_sys::Win32::UI::HiDpi::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW,
-    LoadCursorW, PeekMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW,
-    MONITORINFOF_PRIMARY, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA,
-    WM_CLOSE, WM_DESTROY, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    LoadCursorW, PeekMessageW, RegisterClassExW, SetLayeredWindowAttributes, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, GWL_EXSTYLE,
+    HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MONITORINFOF_PRIMARY, MSG, PM_REMOVE, SWP_NOACTIVATE,
+    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA, WM_CLOSE, WM_DESTROY, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 pub const CLASS_NAME: &str = "df-hud-wgl-spike";
@@ -29,6 +32,11 @@ static CLOSED: AtomicBool = AtomicBool::new(false);
 
 pub fn closed() -> bool {
     CLOSED.load(Ordering::SeqCst)
+}
+
+/// Dummy WGL window uses this class too; DestroyWindow on it must not end the spike.
+pub fn clear_closed() {
+    CLOSED.store(false, Ordering::SeqCst);
 }
 
 pub fn wide(s: &str) -> Vec<u16> {
@@ -268,6 +276,14 @@ impl OverlayWindow {
     }
 
     pub fn extend_dwm_frame(&self) -> Result<(), Box<dyn Error>> {
+        // WS_EX_LAYERED stays invisible until SetLayeredWindowAttributes,
+        // UpdateLayeredWindow, or DWM starts compositing the GL swapchain.
+        // Constant alpha 255 multiplies per-pixel alpha (does not flatten it).
+        let ok = unsafe { SetLayeredWindowAttributes(self.hwnd, 0, 255, LWA_ALPHA) };
+        if ok == 0 {
+            return Err(last_err("SetLayeredWindowAttributes"));
+        }
+
         let margins = MARGINS {
             cxLeftWidth: -1,
             cxRightWidth: -1,
@@ -278,6 +294,24 @@ impl OverlayWindow {
         if hr < 0 {
             return Err(format!("DwmExtendFrameIntoClientArea HRESULT 0x{hr:x}").into());
         }
+
+        // Empty blur region is the DWM switch that composites WGL alpha.
+        // DwmExtendFrame alone left this HWND fully invisible on Intel.
+        let region = unsafe { CreateRectRgn(0, 0, -1, -1) };
+        let bb = DWM_BLURBEHIND {
+            dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
+            fEnable: 1,
+            hRgnBlur: region,
+            fTransitionOnMaximized: 0,
+        };
+        let hr = unsafe { DwmEnableBlurBehindWindow(self.hwnd, &bb) };
+        if !region.is_null() {
+            unsafe { DeleteObject(region) };
+        }
+        if hr < 0 {
+            return Err(format!("DwmEnableBlurBehindWindow HRESULT 0x{hr:x}").into());
+        }
+        eprintln!("DWM: layered alpha 255 + extend-frame + blur-behind empty region");
         Ok(())
     }
 

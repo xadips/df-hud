@@ -98,6 +98,7 @@ fn windows_main(args: args::Args) -> Result<(), Box<dyn Error>> {
     let buf_h = monitor.height - 2 * inset;
 
     let surface = GlSurface::create(instance, win.hwnd, args.swap_interval)?;
+    win32::clear_closed();
     let gpu = Gpu::new(surface, buf_w, buf_h)?;
     win.extend_dwm_frame()?;
     win.reassert_exstyle();
