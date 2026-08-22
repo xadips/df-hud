@@ -4,7 +4,7 @@ overview: A from-scratch df-hud would keep the current data plane and replace GT
 todos:
   - id: phase0-spikes
     content: "Throwaway spikes over Dead Frontier (not Wine, not a terminal): EGL on layer-shell + click-through surviving swap; WGL layered HWND without Ebitengine; swap interval vs game hitch; exclusive vs borderless fullscreen. Kill the stack if these fail."
-    status: pending
+    status: completed
   - id: phase0-skeleton
     content: Empty Rust binary + CI that builds linux-gnu and windows-gnu from Linux (zigbuild). No GTK, no tokio, no features.
     status: pending
@@ -133,9 +133,65 @@ Test on the GPU and compositor you actually play on (Hyprland + your NVIDIA/AMD/
 
 **Kill criteria:** if spikes 1–4 fail on the machine you play on, stop. Alternatives (wl_shm CPU, keep GTK, keep Ebitengine on Windows only) are then honest — not a surprise after the core port.
 
+## Handoff (2026-08-23) — spikes done, start Phase 0
+
+This Linux session ran the EGL spike; a Windows Cursor session ran WGL. Context is ending here. Next agent: **do not re-spike.** Read this section, [`tools/wgl-overlay-spike/REPORT.md`](tools/wgl-overlay-spike/REPORT.md), then implement **Phase 0 skeleton** on a product crate (not inside the throwaway `tools/*-overlay-spike` bins). Keep Go `df-hud` installed until Phase 8.
+
+Branch with spikes + this plan: `spike/wgl-overlay`.
+
+### Gate results
+
+| # | Gate | Result |
+|---|---|---|
+| 1 | EGL GLES 3 on `zwlr_layer_shell_v1` overlay, exclusive -1, over Proton `DeadFrontier.exe` `fs=2` | **Pass** (Hyprland 0.56.2, RX 7900 XTX, Mesa 26.1.8, DP-1 2560×1440 100%) |
+| 2 | Click-through after `eglSwapBuffers` | **Pass** |
+| 3 | Raw WGL layered HWND, no GLFW, GL 3.3, alpha 8, 1px inset | **Pass** (class `df-hud-wgl-spike`) |
+| 4 | Overlay over the way they actually play | **Pass** Linux overlay-layer; **Pass** Windows Unity 4.7.2 fullscreen=1 D3D9 `WS_POPUP` |
+| 5 | Swap interval 0 at 1 Hz while walking | **Pass** both. Windows interval 1 also fine. |
+| 6 | Premult outlined text | **Pass** both |
+| 7 | Fractional scale 125/150% 1px grid | **Not run** (Linux play is 100%) |
+| 8 | No RGB subpixel AA | **Pass** by construction (5×7 grayscale bitmap) |
+| 9 | Unmap/remap, context + click-through | **Pass** both (see gotchas) |
+| 10 | Output pin | **Pass** Linux DP-1 only |
+| 11 | zigbuild gnu exe loads `opengl32` | **Partial** — native Windows `cargo build --release` (gnu 1.98) is the GL proof. Linux-cross gnu prebuilt died after 1 swap until dummy-window fix; re-cross after that fix if you care. |
+
+Kill Phase 0? **No.**
+
+### Do not rediscover
+
+**Linux** ([`tools/linux-overlay-spike`](tools/linux-overlay-spike)):
+
+- Product client is `wayland-client` + `wayland-protocols-wlr`, not a C sample. Mesa still wants a libwayland `wl_surface*` → `wayland-backend` feature `client_system`. `khronos-egl` 6.0.0 did **not** compile on rustc 1.97; spike uses `libloading` (`src/egl.rs`).
+- Never `ack_configure` until a buffer is attached in the same commit as `eglSwapBuffers`. Ack during `roundtrip` maps an empty surface (`hyprctl layers` shows it, grim/user see nothing).
+- Vertex Y: y-down pixels → `gl_Position = vec4(clip.x, -clip.y, 0, 1)`. The opposite flip drew the HUD off the top of the screen.
+- Layer-shell remap after `attach(null)`: Hyprland sets `m_configured = false`. Empty commit (re-apply anchor/exclusive/keyboard), wait for `configure`, ack, **then** swap. Swap first → `layerSurface was not configured, but a buffer was attached`.
+- Unmap is one-shot. Clearing `remap_at` and testing `unmap_at` again immediately re-hides.
+- Namespace `df-hud-spike` so [`contrib/df-hud.lua`](contrib/df-hud.lua) blur rules (`^(df-hud)$`) do not apply. Do not `pgrep -f DeadFrontier` (Discord/Firefox titles). Match `/proc` argv0 basename `DeadFrontier.exe`. Do not `pkill -f linux-overlay-spike` from a command line that contains that string.
+- Full-output overlay is correct (visible over other windows on DP-1), not clipped to the Unity HWND.
+
+**Windows** ([`tools/wgl-overlay-spike`](tools/wgl-overlay-spike), filled [`REPORT.md`](tools/wgl-overlay-spike/REPORT.md)):
+
+- `tools/windows-overlay-spike` is Ebitengine/GLFW. Ignore it for the rewrite.
+- `DwmExtendFrameIntoClientArea` **alone was invisible** on Intel Iris Xe. Need `SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)` **and** `DwmEnableBlurBehindWindow` with an **empty** region `CreateRectRgn(0,0,-1,-1)`. Constant 255 multiplies per-pixel alpha; it does not flatten it.
+- Dummy WGL window shares the overlay class. `DestroyWindow` on it fired `WM_DESTROY` → process `CLOSED`. Call `clear_closed()` after dummy teardown (or use a distinct dummy class).
+- Overlay GL ran on **iGPU** (Iris Xe 3.3.0); game on **RTX 4060** D3D9. That hybrid path worked. 1px inset expected.
+- `--inset 0` hole test skipped. Borderless contrast not run; they play exclusive-style fullscreen.
+
+**Shader:** premult `frag = vec4(rgb * a, a)`, blend `ONE, ONE_MINUS_SRC_ALPHA`. Same idea on both.
+
+### Next work (Phase 0)
+
+Empty product crate + CI: `cargo build` linux-gnu and `cargo zigbuild --target x86_64-pc-windows-gnu`. `panic=abort` in release. Zero GTK/tokio/winit. Print version. **Done when:** both artifacts exist in CI.
+
+On Arch, pacman `rust` cannot cross-compile; rustup + `mingw-w64-gcc` (or zigbuild) as in the [ArchWiki Rust page](https://wiki.archlinux.org/title/Rust). Do not stack pacman `rust` and `rustup` — they conflict.
+
+Do **not** port `Derive` or delete GTK until Phase 8. Do not copy [`internal/hud/gtk`](internal/hud/gtk) or [`internal/hud/ebiten`](internal/hud/ebiten).
+
+Optional leftovers (not blocking Phase 0): Linux `--grid` at 125/150%; re-cross the WGL exe after dummy-window fix; Hyprland blur with namespace `df-hud`.
+
 ## Build order (vertical slices, not layers)
 
-The old todo list (port all of core, then both overlays, then GL) is how a rewrite gets lost: months of a faithful poller with no pixels, then a second UI stack. Do **one runnable slice per phase**. Do not start the next phase until the gate passes. Keep the current Go `df-hud` installed and playing the game until Phase 8. **Do not start Phase 0 product code until the spikes above pass** — Phase 1 is the maintained version of spike 1, not a substitute for the throwaway test over the game.
+The old todo list (port all of core, then both overlays, then GL) is how a rewrite gets lost: months of a faithful poller with no pixels, then a second UI stack. Do **one runnable slice per phase**. Do not start the next phase until the gate passes. Keep the current Go `df-hud` installed and playing the game until Phase 8. **Spikes 1–5 passed over real Dead Frontier (2026-08-23).** Start Phase 0 product skeleton next. Phase 1 is the maintained version of the Linux spike, not a substitute for those throwaway tests.
 
 ```mermaid
 flowchart TD
