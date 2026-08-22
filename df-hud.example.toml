@@ -377,6 +377,14 @@ y = 344
 show_nearest = true
 
 [widget.session]
+enabled = true
+x = 350
+y = 60
+font_family = ""
+font_size = 0
+color = "#ffffff"
+prefix = "IC Time: "
+
 [widget.xp]
 enabled = true
 x = 220

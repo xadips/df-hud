@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -44,7 +46,21 @@ func createPresencePipe(path string, first bool) (windows.Handle, error) {
 	if first {
 		openMode |= windows.FILE_FLAG_FIRST_PIPE_INSTANCE
 	}
-	return windows.CreateNamedPipe(
+	// Discord's SDK can run at a different integrity level from df-hud when the
+	// browser/launcher was elevated. The default pipe DACL can then allow reads
+	// but reject the SDK's required GENERIC_WRITE open. Grant local authenticated
+	// users read/write explicitly; PIPE_REJECT_REMOTE_CLIENTS still excludes
+	// network clients and FIRST_PIPE_INSTANCE prevents endpoint replacement.
+	descriptor, err := windows.SecurityDescriptorFromString(
+		"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;GRGW;;;AU)")
+	if err != nil {
+		return windows.InvalidHandle, err
+	}
+	security := windows.SecurityAttributes{
+		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
+		SecurityDescriptor: descriptor,
+	}
+	handle, err := windows.CreateNamedPipe(
 		name,
 		openMode,
 		windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS,
@@ -52,8 +68,10 @@ func createPresencePipe(path string, first bool) (windows.Handle, error) {
 		presenceMaxFrame+8,
 		presenceMaxFrame+8,
 		0,
-		nil,
+		&security,
 	)
+	runtime.KeepAlive(descriptor)
+	return handle, err
 }
 
 type windowsPipeListener struct {

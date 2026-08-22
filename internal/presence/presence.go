@@ -358,6 +358,9 @@ func (p *PresenceServer) serve(ctx context.Context, conn net.Conn) {
 	p.clients++
 	onConnectionChange := p.onConnectionChange
 	p.mu.Unlock()
+	if first {
+		log.Print("presence: client connected")
+	}
 	if first && onConnectionChange != nil {
 		onConnectionChange(true)
 	}
@@ -367,6 +370,9 @@ func (p *PresenceServer) serve(ctx context.Context, conn net.Conn) {
 		last := p.clients == 0
 		onConnectionChange := p.onConnectionChange
 		p.mu.Unlock()
+		if last {
+			log.Print("presence: client disconnected")
+		}
 		if last && onConnectionChange != nil {
 			onConnectionChange(false)
 		}
@@ -397,6 +403,7 @@ func (p *PresenceServer) serve(ctx context.Context, conn net.Conn) {
 func (p *PresenceServer) handle(conn net.Conn, op uint32, body []byte) error {
 	switch op {
 	case presenceOpHandshake:
+		log.Print("presence: handshake received")
 		// The SDK waits for a READY dispatch before it will publish anything, so
 		// this reply is load-bearing rather than politeness. The user block is
 		// filled with placeholders: df-hud is not Discord and has no account to
