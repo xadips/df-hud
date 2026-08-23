@@ -1,8 +1,6 @@
 //! Bundled TTF → grayscale atlas. No Fontconfig, no Pango, no RGB subpixel AA.
 //!
-//! `font_path` / TOML waits for Phase 4. Gpu (Linux) and Phase 3 WGL share this.
-//! windows-gnu compiles this module so fontdue stays in that tree; the overlay
-//! path is still Linux-only until Phase 3.
+//! `font_path` / TOML waits for Phase 4. Gpu on EGL and WGL share this.
 
 #![allow(dead_code)]
 

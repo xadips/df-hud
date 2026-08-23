@@ -10,21 +10,36 @@ publish = false
 description = "Dead Frontier overlay rewrite (Go HUD remains the installed product)"
 
 [dependencies]
-# Pure Rust. Allowed on windows-gnu in Phase 2; font_path/TOML waits for Phase 4.
+# Pure Rust. font_path/TOML waits for Phase 4.
 fontdue = "0.9"
+# One renderer on both surfaces. Linux: GLES 3.0 via libEGL. Windows: GL 3.3 via WGL.
+glow = "0.16"
+# Runtime GL/EGL. khronos-egl 6.0.0 did not compile on rustc 1.97; keep this.
+libloading = "0.8"
 
 # Mesa EGL on a layer surface needs a libwayland wl_surface*. That is the
-# wayland-backend client_system feature (FFI for EGL), not GTK. khronos-egl
-# 6.0.0 did not compile on rustc 1.97; load libEGL / libGLESv2 with libloading.
+# wayland-backend client_system feature (FFI for EGL), not GTK.
 [target.'cfg(target_os = "linux")'.dependencies]
-glow = "0.16"
 libc = "0.2"
-libloading = "0.8"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-client = "0.31"
 wayland-egl = "0.32"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+# HWND / DWM / WGL. Feature-gated windows-sys, not the kitchen-sink windows crate.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_OpenGL",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 panic = "abort"

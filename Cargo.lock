@@ -58,6 +58,7 @@ dependencies = [
  "wayland-egl",
  "wayland-protocols",
  "wayland-protocols-wlr",
+ "windows-sys",
 ]
 
 [[package]]

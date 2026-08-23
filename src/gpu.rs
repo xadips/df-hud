@@ -1,8 +1,9 @@
-//! GLES 3.0 renderer: one shader, one VAO, fontdue atlas, draw list.
+//! GLES 3.0 / GL 3.3 renderer: one shader, one VAO, fontdue atlas, draw list.
 //!
-//! Does not own the EGL/WGL window and does not see `WlSurface`. Wayland (and
-//! Phase 3 WGL) make the context current, call [`Gpu::draw`], then swap.
-//! Keep GLES 3.0 — do not request 3.2.
+//! Does not own the EGL/WGL window and does not see `WlSurface` or HWND.
+//! Surfaces make the context current, call [`Gpu::draw`], then swap.
+//! Linux stays GLES 3.0 (`#version 300 es`). Windows is GL 3.3 core
+//! (`#version 330 core`). Same body; only the version string is `cfg`'d.
 
 use std::error::Error;
 
@@ -26,7 +27,12 @@ pub struct TextLine {
     pub text: String,
 }
 
-const VS: &str = r#"#version 300 es
+#[cfg(target_os = "windows")]
+const GLSL_VERSION: &str = "#version 330 core";
+#[cfg(not(target_os = "windows"))]
+const GLSL_VERSION: &str = "#version 300 es";
+
+const VS: &str = r#"
 layout(location = 0) in vec2 a_pos;
 layout(location = 1) in vec4 a_color;
 layout(location = 2) in vec2 a_uv;
@@ -42,7 +48,7 @@ void main() {
 }
 "#;
 
-const FS: &str = r#"#version 300 es
+const FS: &str = r#"
 precision mediump float;
 in vec4 v_color;
 in vec2 v_uv;
@@ -51,7 +57,8 @@ out vec4 frag;
 void main() {
     float coverage = texture(u_atlas, v_uv).r;
     float a = v_color.a * coverage;
-    // Wayland compositors blend premultiplied. Straight RGB outlines fringe black.
+    // Wayland compositors and DWM layered windows blend premultiplied.
+    // Straight RGB outlines fringe black.
     frag = vec4(v_color.rgb * a, a);
 }
 "#;
@@ -75,7 +82,7 @@ impl Gpu {
     pub fn new(gl: Glow, buf_w: i32, buf_h: i32) -> Result<Self, Box<dyn Error>> {
         unsafe {
             eprintln!(
-                "GLES renderer={} version={}",
+                "GL renderer={} version={}",
                 gl.get_parameter_string(glow::RENDERER),
                 gl.get_parameter_string(glow::VERSION)
             );
@@ -155,6 +162,7 @@ impl Gpu {
         Ok(gpu)
     }
 
+    #[allow(dead_code)]
     pub fn resize(&self, buf_w: i32, buf_h: i32) {
         unsafe { self.gl.viewport(0, 0, buf_w, buf_h) };
     }
@@ -337,8 +345,8 @@ fn push_quad(
 
 unsafe fn link_program(gl: &Glow) -> Result<glow::Program, Box<dyn Error>> {
     unsafe {
-        let vs = compile(gl, glow::VERTEX_SHADER, VS)?;
-        let fs = compile(gl, glow::FRAGMENT_SHADER, FS)?;
+        let vs = compile(gl, glow::VERTEX_SHADER, shader_src(VS))?;
+        let fs = compile(gl, glow::FRAGMENT_SHADER, shader_src(FS))?;
         let program = gl.create_program()?;
         gl.attach_shader(program, vs);
         gl.attach_shader(program, fs);
@@ -352,10 +360,14 @@ unsafe fn link_program(gl: &Glow) -> Result<glow::Program, Box<dyn Error>> {
     }
 }
 
-unsafe fn compile(gl: &Glow, kind: u32, src: &str) -> Result<glow::Shader, Box<dyn Error>> {
+fn shader_src(body: &str) -> String {
+    format!("{GLSL_VERSION}\n{body}")
+}
+
+unsafe fn compile(gl: &Glow, kind: u32, src: String) -> Result<glow::Shader, Box<dyn Error>> {
     unsafe {
         let shader = gl.create_shader(kind)?;
-        gl.shader_source(shader, src);
+        gl.shader_source(shader, &src);
         gl.compile_shader(shader);
         if !gl.get_shader_compile_status(shader) {
             return Err(gl.get_shader_info_log(shader).into());

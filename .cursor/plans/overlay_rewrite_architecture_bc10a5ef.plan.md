@@ -16,7 +16,7 @@ todos:
     status: completed
   - id: phase3-win32-hello
     content: Same renderer on a layered click-through HWND (GL 3.3, PerMonitorV2, 1px DWM inset, one-step monitor placement).
-    status: pending
+    status: completed
   - id: phase4-scene-layout
     content: "Port scene/layout only: 2560x1440 authoring space, per-group x/y, map primitives. Dummy View, no network."
     status: pending
@@ -133,70 +133,76 @@ Test on the GPU and compositor you actually play on (Hyprland + your NVIDIA/AMD/
 
 **Kill criteria:** if spikes 1–4 fail on the machine you play on, stop. Alternatives (wl_shm CPU, keep GTK, keep Ebitengine on Windows only) are then honest — not a surprise after the core port.
 
-## Handoff (2026-08-23) — Phase 2 text passed over the game, Phase 3 is next (not started)
+## Handoff (2026-08-23) — Phase 3 dummy text passed over the game, Phase 4 is next (not started)
 
-**Do not re-spike. Do not start Phase 4.** When resuming, implement Phase 3 in the product crate at the repo root — not `tools/*-overlay-spike`. Keep the Go `df-hud` installed until Phase 8. Do not copy `internal/hud/gtk` or `internal/hud/ebiten`. Font look is parked (Bold + LINEAR + 1px atlas outline is “okay, not final”).
+**Do not re-spike. Do not start Phase 5.** When resuming, implement Phase 4 in the product crate at the repo root — not `tools/*-overlay-spike`. Keep the Go `df-hud` installed until Phase 8. Do not copy `internal/hud/gtk` or `internal/hud/ebiten`. Font look is parked (Bold + LINEAR + 1px atlas outline is “okay, not final”; 1200p vs 1440p raster size looks different).
 
 Branch: `spike/wgl-overlay`.
 
-### Where Phase 2 landed
+### Where Phase 3 landed
 
-Product crate (Linux overlay + shared font CPU):
+Product crate (one `Gpu`, two surfaces):
 
 | File | Owns |
 |---|---|
-| [`src/wayland.rs`](src/wayland.rs) | layer-shell, `GlWindow` (EGL window + `eglSwapBuffers`), fd + 1s poll, remap |
-| [`src/egl.rs`](src/egl.rs) | `libloading` EGL 1.5 / GLES **3.0** (not 3.2 request) |
-| [`src/gpu.rs`](src/gpu.rs) | shader + VAO + atlas upload + draw list. **No `WlSurface`.** |
+| [`src/wayland.rs`](src/wayland.rs) | layer-shell, `GlWindow` (EGL + `eglSwapBuffers`), fd + 1s poll, remap |
+| [`src/egl.rs`](src/egl.rs) | `libloading` EGL 1.5 / GLES **3.0** (not 3.2) |
+| [`src/win32.rs`](src/win32.rs) | layered HWND, Intel DWM recipe, PerMonitorV2, `MsgWaitForMultipleObjects` + 1s, `--unmap-at` |
+| [`src/wgl.rs`](src/wgl.rs) | dummy-context WGL 3.3 core, alpha 8, `wglSwapIntervalEXT(0)`. Dummy class `df-hud-wgl-dummy` (not overlay class `df-hud`) |
+| [`src/gpu.rs`](src/gpu.rs) | shader + VAO + atlas + draw list. **No `WlSurface` / HWND.** GLSL version string is the only `cfg` |
 | [`src/font.rs`](src/font.rs) | fontdue + atlas pack + 1px dilated outline (all targets) |
-| [`src/dummy.rs`](src/dummy.rs) | hardcoded groups, local clock (Linux) |
+| [`src/dummy.rs`](src/dummy.rs) | hardcoded groups + local clock (both OS) |
 | [`assets/fonts/Go-Mono-Bold.ttf`](assets/fonts/Go-Mono-Bold.ttf) | one bundled TTF (`include_bytes!`) |
 
-`Gpu` / `glow` / Wayland are still `#[cfg(target_os = "linux")]`. Windows-gnu is a version printer **plus** fontdue in the tree. CI ([`.github/workflows/rust.yml`](.github/workflows/rust.yml)) allows fontdue on windows-gnu; still **rejects** `wayland` / `glow` / gtk / tokio. Both artifacts required. Headless `env -u WAYLAND_DISPLAY` prints `df-hud 0.1.0-dev` and exits 0. Linker: [`.cargo/config.toml`](.cargo/config.toml) (`x86_64-w64-mingw32-gcc`). `.gitignore` uses `/config.toml` so that file is not ignored.
+`glow` + `libloading` are shared deps. `windows-sys` **0.61.2** (not 0.59): `BOOL` lives in `windows_sys::core`, not `Foundation`. Kitchen-sink `windows` crate is banned. CI ([`.github/workflows/rust.yml`](.github/workflows/rust.yml)) requires fontdue/glow/libloading/windows-sys on windows-gnu; still rejects wayland/gtk/tokio/winit/wgpu/khronos-egl. Linker: [`.cargo/config.toml`](.cargo/config.toml) (`x86_64-w64-mingw32-gcc`). `.gitignore` uses `/config.toml`.
 
-Shader (keep): `#version 300 es`, `gl_Position = vec4(clip.x, -clip.y, 0, 1)`, `frag = vec4(rgb * a, a)`, blend `ONE, ONE_MINUS_SRC_ALPHA`, atlas R coverage, **LINEAR** (grayscale AA, not RGB subpixel). Outline is a dilated 1px ring in the atlas (two quads), not eight stacked offset draws.
+Shader (keep): Linux `#version 300 es`, Windows `#version 330 core`, same body. `gl_Position = vec4(clip.x, -clip.y, 0, 1)`, `frag = vec4(rgb * a, a)`, blend `ONE, ONE_MINUS_SRC_ALPHA`, atlas R coverage, **LINEAR**. Outline is a dilated 1px ring (two quads).
 
-Font size: `hud.font_size` is **points**. `FONT_PT = 12` × `4/3` → 16px at 2560×1440 (same as Windows Ebitengine). Dummy coords from example.toml: status `(10,10)` `#e6cc4d`, session `(350,60)` `IC Time:` ticking, xp `(220,85)`, block `(2340,300)` `#9ecbff`. Scale with Phase 1 `sx/sy`.
+Font size: `FONT_PT = 12` × `4/3` → 16px at 2560×1440. Dummy coords from example.toml: status `(10,10)` `#e6cc4d`, session `(350,60)` `IC Time:` ticking, xp `(220,85)`, block `(2340,300)` `#9ecbff`. Scale with `logical_h / 1440`.
 
-Loop: poll Wayland fd; wake on configure or 1s; swap only if dirty or the clock string changed; re-apply empty input region; swap-interval 0. 5s run → 5 swaps.
+Windows loop: `MsgWaitForMultipleObjects` + 1s; swap only if dirty/clock changed; reassert `WS_EX_*` each present. Flags: `--monitor`, `--list-monitors`, `--duration`, `--unmap-at`.
 
-### Gate (player machine)
+Native rust-mingw `dlltool` on the Windows play box **cannot** build (GNU 2.44 `CreateProcess` — no `as.exe` in rust-mingw `self-contained`). Cross from Linux/Docker (`df-hud-rs` image, same MinGW as CI). Do not chase native gnu `dlltool`.
 
-Hyprland 0.56, RX 7900 XTX, Mesa, DP-1 2560×1440 100%. Go HUD off. `cargo run --release -- --output DP-1`.
+### Gate (player machines)
 
-- Outlined dummy text over Proton Dead Frontier; session second ticks.
+**Linux** (Phase 2, still required): Hyprland 0.56, RX 7900 XTX, Mesa, DP-1 2560×1440 100%. `cargo run --release -- --output DP-1`.
+
+**Windows** (Phase 3, 2026-08-23): Unity 4.7.2 fullscreen=1 D3D9 `WS_POPUP` at 1920×1200. Go HUD off. Linux-cross gnu exe.
+
+- Outlined dummy text over Dead Frontier; session second ticks.
 - Click-through / mouse-look / WASD still hit the game after 1 Hz swaps.
-- `hyprctl layers`: `df-hud` overlay `xywh: 0 0 2560 1440`, not on DP-2.
-- RSS ~28MB (GL driver + 1440p backbuffer), not GTK-sized.
-- Full-output overlay is **correct** (over desktop windows on DP-1 too). Visible on **all workspaces** until Phase 7 unmap (`follow_game_workspace`). `--unmap-at` already proves remap.
+- Window `1918x1198 at 1,1` inset 1; pixel format alpha 8; swap-interval 0.
+- This product run: overlay GL on **RTX 4060** `3.3.0 NVIDIA` (spike had been Iris Xe; hybrid either way is fine).
+- Fonts look a bit heavier/softer than Linux 1440p (~13px vs 16px raster). Parked.
 
-### Phase 3 — do this
+### Phase 4 — do this
 
-Plug **this** `Gpu` into WGL on a layered HWND. Do not fork shaders. Linux stays the EGL/`GlWindow` path.
+Port the *idea* of [`internal/hud/scene`](internal/hud/scene): groups, 2560×1440 authoring space, per-group `x`/`y`, map rects/lines. Hardcode a `View`. Stub TOML only (`serde` + `toml` are allowed). No network, no `Derive`.
 
-**Done when:** the same dummy text is click-through on native Windows (Wine is only a context-create smoke); DWM alpha works; `cargo build --release --target x86_64-pc-windows-gnu` from Linux still produces the exe.
+**Done when:** moving `widget.block.x` in a stub TOML moves the block group; map draws; Linux and Windows **layout** look the same (not font hinting).
 
 Concrete:
 
-1. **Compile `Gpu` + `font` on windows-gnu.** Move `glow` (and `libloading`) off the linux-only table. CI must stop banning `glow` on windows-gnu; still ban wayland/gtk/tokio/winit/wgpu. `windows-sys` is allowed, kitchen-sink `windows` crate is not.
-2. **Shader dialect:** Linux stays GLES 3.0 `#version 300 es`. Windows is GL **3.3 core** (`#version 330 core` in the WGL spike). Same body; `cfg` only the version string. Do not write a second renderer.
-3. **HWND (mandatory Intel recipe):** `WS_POPUP` + `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`. `SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)` **and** `DwmEnableBlurBehindWindow` with empty `CreateRectRgn(0,0,-1,-1)`. Extend-frame alone was invisible on Iris Xe. **1px inset** stays. PerMonitorV2. Place on the target monitor in one `SetWindowPos`. Swap interval 0 (`wglSwapIntervalEXT`).
-4. **WGL bootstrap** from [`tools/wgl-overlay-spike`](tools/wgl-overlay-spike) (not the Ebitengine `tools/windows-overlay-spike`). Dummy-context dance for `wglCreateContextAttribsARB`. Dummy window must **not** share the overlay class (or `clear_closed()` after teardown) — `WM_DESTROY` on the dummy ended the spike process.
-5. **Loop:** `MsgWaitForMultipleObjects` (or equivalent) + 1s timer; swap only if dirty/clock changed. Same dummy strings. No 60fps.
-6. Headless / no display: Linux still prints version and skips. Windows without a desktop can stay a version printer until a window is created.
+1. Draw list beyond `TextLine`: colored rects + lines (map cells, district lines, player ring). `Gpu` already has an untextured white texel. Do not write a second renderer / second shader.
+2. Layout transform like [`layout.go`](internal/hud/scene/layout.go): reference 2560×1440 → content rect (letterbox later if game size is known; Linux can still ignore Unity registry). Independent `[widget.<group>]` `x`/`y`.
+3. Stub TOML: enough of [`df-hud.example.toml`](df-hud.example.toml) `[widget.status|session|xp|block|map]` to move groups. Unknown keys = error (same as Go). `notify` is banned; stat the file on the 1s tick if you reload.
+4. Hardcoded dummy `View` (clock still local). Map can be a tiny fake city grid, not the real `citymap.txt` (that is Phase 5).
+5. Both surfaces consume the same scene. Dummy strings in `dummy.rs` go away as the scene feed.
 
 ### Must keep (do not rediscover)
 
-- Wayland remap after `attach(null)`: empty commit (re-apply role) → wait for `configure` → `ack_configure` in the **same** commit as `eglSwapBuffers`. Never ack with no buffer. `--unmap-at` already does this.
-- Mesa wants libwayland `wl_surface*` → `wayland-backend` `client_system`. `khronos-egl` 6.0.0 did not compile on rustc 1.97; keep `libloading`.
-- Cross-compile: rustup + `mingw-w64-gcc`, not pacman `rust`, not zigbuild, not `windows-latest`.
-- Hybrid GPU on the Windows play box was fine (overlay on iGPU, game on dGPU).
+- Wayland remap after `attach(null)`: empty commit → wait for `configure` → `ack_configure` in the **same** commit as `eglSwapBuffers`. Never ack with no buffer.
+- Product HWND: `SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)` **and** `DwmEnableBlurBehindWindow` with empty `CreateRectRgn(0,0,-1,-1)`. 1px inset. Dummy WGL class is **not** the overlay class.
+- Premult `frag = vec4(rgb * a, a)`, blend `ONE, ONE_MINUS_SRC_ALPHA`, vertex Y flip. Grayscale atlas only.
+- Cross-compile windows-gnu from Linux/Docker + MinGW. Do not add `windows-latest`.
+- `windows-sys` 0.61: `BOOL` is `windows_sys::core::BOOL`.
 
 ### Do not
 
-Port `Derive`, scene/TOML layout (Phase 4), network, tray, visibility/workspace follow (Phase 7), or delete GTK. Do not pull tokio/reqwest/wgpu/GTK/winit/khronos-egl. Do not copy the Linux spike 5×7 bitmap. Do not restyle fonts as the Phase 3 gate. Do not add a `windows-latest` compile job.
+Port `Derive`, flsh/dfclient, network, tray, visibility/workspace follow (Phase 7), or delete GTK. Do not pull tokio/reqwest/wgpu/GTK/winit/khronos-egl. Do not restyle fonts as the Phase 4 gate. Do not invent a new layout language. Do not implement the console.
 
-Test: native Windows over the game they actually play (fullscreen=1 D3D9 `WS_POPUP` already spike-passed). Linux `cargo run --release -- --output DP-1` must still work.
+Test: same machines as Phase 2–3. Linux `cargo run --release -- --output DP-1`. Windows: cross-build, run the gnu exe over the game. Stub TOML `widget.block.x` change is visible on both.
 
 ### Gate results
 
@@ -238,25 +244,24 @@ Kill Phase 0? **No.**
 
 **Shader:** premult `frag = vec4(rgb * a, a)`, blend `ONE, ONE_MINUS_SRC_ALPHA`. Same idea on both.
 
-### Next work (Phase 3)
+### Next work (Phase 4)
 
-Same `Gpu` on a layered WGL HWND. Do not fork shaders. Intel DWM recipe + 1px inset. **Done when:** dummy outlined text is click-through on native Windows; gnu exe still cross-builds from Linux.
+Scene/layout, still dummy data. Port the idea of [`internal/hud/scene`](internal/hud/scene): groups, 2560×1440, map rects/lines, stub TOML `widget.*.x/y`. Hardcode a `View`. **Done when:** moving `widget.block.x` moves the block group; map draws; Linux and Windows layout match.
 
-Must keep from Phase 1–2 / spikes:
+Must keep from Phase 1–3 / spikes:
 
-- Wayland remap after `attach(null)`: empty commit (re-apply role) → wait for `configure` → `ack_configure` in the same commit as `eglSwapBuffers`. Never ack during `roundtrip` with no buffer.
-- Product HWND (Phase 3, do not lose this): `SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)` **and** `DwmEnableBlurBehindWindow` with empty region `CreateRectRgn(0,0,-1,-1)`. Extend-frame alone was invisible on Intel Iris Xe. 1px inset stays.
-- Premult `frag = vec4(rgb * a, a)`, blend `ONE, ONE_MINUS_SRC_ALPHA`, vertex Y flip `gl_Position.y = -clip.y`. Grayscale/alpha atlas only (no RGB subpixel AA).
+- Wayland remap after `attach(null)`: empty commit → configure → ack in the same commit as `eglSwapBuffers`. Never ack with no buffer.
+- Product HWND: `SetLayeredWindowAttributes(..., 255, LWA_ALPHA)` **and** empty-region `DwmEnableBlurBehindWindow`. 1px inset. WGL dummy class ≠ overlay class.
+- Premult `frag = vec4(rgb * a, a)`, blend `ONE, ONE_MINUS_SRC_ALPHA`, vertex Y flip. Grayscale atlas only.
+- windows-gnu from Linux/Docker + MinGW. Native rust-mingw `dlltool` on the Windows play box is broken (no `as.exe`). `windows-sys` 0.61 `BOOL` is in `core`.
 
-On Arch, pacman `rust` cannot cross-compile; rustup + `mingw-w64-gcc` as in the [ArchWiki Rust page](https://wiki.archlinux.org/title/Rust). Same command as CI: `cargo build --release --target x86_64-pc-windows-gnu`. Do not stack pacman `rust` and `rustup` — they conflict. Keep zigbuild only if C deps or extra targets make MinGW hurt. Do not add a `windows-latest` compile job (more Actions minutes, usually MSVC, unreproducible here). Use a Windows box only to prove `opengl32` / DWM.
+On Arch, pacman `rust` cannot cross-compile; rustup + `mingw-w64-gcc`. Do not add a `windows-latest` compile job. Do **not** port `Derive` or delete GTK until Phase 8.
 
-Do **not** port `Derive` or delete GTK until Phase 8. Do not copy [`internal/hud/gtk`](internal/hud/gtk) or [`internal/hud/ebiten`](internal/hud/ebiten).
-
-Optional leftovers (not blocking): Linux `--grid` at 125/150%; re-cross the WGL exe after dummy-window fix; Hyprland blur with namespace `df-hud`.
+Optional leftovers (not blocking): Linux `--grid` at 125/150%; font outline in em so 1200p matches 1440p; Hyprland blur with namespace `df-hud`.
 
 ## Build order (vertical slices, not layers)
 
-The old todo list (port all of core, then both overlays, then GL) is how a rewrite gets lost: months of a faithful poller with no pixels, then a second UI stack. Do **one runnable slice per phase**. Do not start the next phase until the gate passes. Keep the current Go `df-hud` installed and playing the game until Phase 8. **Spikes 1–5 passed over real Dead Frontier (2026-08-23).** Phase 0–2 are in the product crate. Phase 3 is the next slice (not started).
+The old todo list (port all of core, then both overlays, then GL) is how a rewrite gets lost: months of a faithful poller with no pixels, then a second UI stack. Do **one runnable slice per phase**. Do not start the next phase until the gate passes. Keep the current Go `df-hud` installed and playing the game until Phase 8. **Spikes 1–5 passed over real Dead Frontier (2026-08-23).** Phase 0–3 are in the product crate. Phase 4 is the next slice (not started).
 
 ```mermaid
 flowchart TD

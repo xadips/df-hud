@@ -1,5 +1,4 @@
-//! Phase 2: Wayland layer-shell + EGL window, GLES 3.0 text via [`crate::gpu`].
-//! Windows is still the Phase 0 version printer until Phase 3.
+//! Phase 3: one [`crate::gpu`] renderer on Wayland EGL and Win32 WGL.
 //!
 //! Keep the Go `df-hud` installed until Phase 8. Do not copy
 //! `internal/hud/gtk` or `internal/hud/ebiten`.
@@ -15,17 +14,22 @@
 //!   invisible. `SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)` **and**
 //!   `DwmEnableBlurBehindWindow` with an empty region `CreateRectRgn(0,0,-1,-1)`.
 //!   Constant 255 multiplies per-pixel alpha; it does not flatten it. Keep the
-//!   1px inset.
+//!   1px inset. Dummy WGL window uses a distinct class so `WM_DESTROY` on it
+//!   does not end the process.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod dummy;
 #[cfg(target_os = "linux")]
 mod egl;
 mod font;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod gpu;
 #[cfg(target_os = "linux")]
 mod wayland;
+#[cfg(windows)]
+mod wgl;
+#[cfg(windows)]
+mod win32;
 
 fn main() {
     if let Err(err) = run() {
@@ -41,7 +45,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("df-hud {}", env!("CARGO_PKG_VERSION"));
         wayland::run(args)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        let args = win32::Args::parse()?;
+        println!("df-hud {}", env!("CARGO_PKG_VERSION"));
+        win32::run(args)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         println!("df-hud {}", env!("CARGO_PKG_VERSION"));
         Ok(())

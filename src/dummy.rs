@@ -1,7 +1,5 @@
-//! Hardcoded Phase 2 groups. Not Derive. Screenshot coords are 2560×1440
+//! Hardcoded dummy groups. Not Derive. Screenshot coords are 2560×1440
 //! (`df-hud.example.toml` widget x/y). `font_path` waits for Phase 4.
-
-use libc::tm;
 
 use crate::gpu::TextLine;
 
@@ -19,14 +17,27 @@ const BLOCK_BLUE: [f32; 4] = [
     1.0,
 ];
 
+#[cfg(target_os = "linux")]
 pub fn clock_hms() -> String {
     let mut t: libc::time_t = 0;
     unsafe { libc::time(&mut t) };
-    let mut local = unsafe { std::mem::zeroed::<tm>() };
+    let mut local = unsafe { std::mem::zeroed::<libc::tm>() };
     unsafe { libc::localtime_r(&t, &mut local) };
     format!(
         "{:02}:{:02}:{:02}",
         local.tm_hour, local.tm_min, local.tm_sec
+    )
+}
+
+#[cfg(windows)]
+pub fn clock_hms() -> String {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    let mut local = SYSTEMTIME::default();
+    unsafe { GetLocalTime(&mut local) };
+    format!(
+        "{:02}:{:02}:{:02}",
+        local.wHour, local.wMinute, local.wSecond
     )
 }
 

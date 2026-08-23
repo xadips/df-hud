@@ -44,24 +44,40 @@ jobs:
       - name: Reject GUI / async crates
         run: |
           set -euo pipefail
-          if grep -E '^name = "(gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne)"' Cargo.lock; then
+          if grep -E '^name = "(gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne|khronos-egl)"' Cargo.lock; then
             echo "forbidden crate in Cargo.lock"
             exit 1
           fi
           linux_tree="$(cargo tree --target x86_64-unknown-linux-gnu --edges no-dev --prefix none)"
           printf 'linux-gnu tree:\n%s\n' "$linux_tree"
-          if printf '%s\n' "$linux_tree" | grep -Ei '^(gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne) '; then
+          if printf '%s\n' "$linux_tree" | grep -Ei '^(gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne|khronos-egl) '; then
             echo "forbidden crate in linux-gnu tree"
             exit 1
           fi
           win_tree="$(cargo tree --target x86_64-pc-windows-gnu --edges no-dev --prefix none)"
           printf 'windows-gnu tree:\n%s\n' "$win_tree"
-          if printf '%s\n' "$win_tree" | grep -Ei '^(wayland|glow|gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne) '; then
+          if printf '%s\n' "$win_tree" | grep -Ei '^(wayland|gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne|khronos-egl) '; then
             echo "forbidden crate in windows-gnu tree"
             exit 1
           fi
+          if printf '%s\n' "$win_tree" | grep -E '^windows '; then
+            echo "kitchen-sink windows crate is forbidden; use windows-sys"
+            exit 1
+          fi
           if ! printf '%s\n' "$win_tree" | grep -q '^fontdue '; then
-            echo "windows-gnu should include fontdue in Phase 2"
+            echo "windows-gnu should include fontdue"
+            exit 1
+          fi
+          if ! printf '%s\n' "$win_tree" | grep -q '^glow '; then
+            echo "windows-gnu should include glow in Phase 3"
+            exit 1
+          fi
+          if ! printf '%s\n' "$win_tree" | grep -q '^libloading '; then
+            echo "windows-gnu should include libloading in Phase 3"
+            exit 1
+          fi
+          if ! printf '%s\n' "$win_tree" | grep -q '^windows-sys '; then
+            echo "windows-gnu should include windows-sys in Phase 3"
             exit 1
           fi
 
