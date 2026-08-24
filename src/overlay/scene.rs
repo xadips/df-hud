@@ -41,6 +41,16 @@ pub struct Line {
     pub timer: String,
     /// Onslaught prev/now/next caption. Empty on continuation and non-panel rows.
     pub label: String,
+    /// Intra-line shades. Empty keeps a single `text` draw.
+    pub runs: Vec<TextRun>,
+}
+
+/// One stretch of a `Line` at a different opacity than the rest.
+#[derive(Clone, Debug)]
+pub struct TextRun {
+    pub text: String,
+    /// Multiplier on `Line.color` (or the widget default). 1.0 is full.
+    pub alpha: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -338,17 +348,39 @@ fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line
             });
         }
         let text_x = if label_col { content_x } else { x };
-        scene.texts.push(Text {
-            x: text_x,
-            y,
-            color,
-            text: row.text.clone(),
-            font_px,
-            outline: true,
-            outline_color: None,
-            lcd: true,
-            center_h: None,
-        });
+        let content_w = if row.runs.is_empty() {
+            scene.texts.push(Text {
+                x: text_x,
+                y,
+                color,
+                text: row.text.clone(),
+                font_px,
+                outline: true,
+                outline_color: None,
+                lcd: true,
+                center_h: None,
+            });
+            mono_advance(&row.text, font_px)
+        } else {
+            let mut run_x = text_x;
+            for run in &row.runs {
+                let mut run_color = color;
+                run_color[3] *= run.alpha;
+                scene.texts.push(Text {
+                    x: run_x,
+                    y,
+                    color: run_color,
+                    text: run.text.clone(),
+                    font_px,
+                    outline: true,
+                    outline_color: None,
+                    lcd: true,
+                    center_h: None,
+                });
+                run_x += mono_advance(&run.text, font_px);
+            }
+            run_x - text_x
+        };
         if !row.timer.is_empty() {
             let tw = mono_advance(&row.timer, font_px);
             scene.texts.push(Text {
@@ -364,14 +396,17 @@ fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line
             });
         }
         if row.strike {
-            let tw = mono_advance(&row.text, font_px);
+            let mut strike_color = color;
+            if let Some(run) = row.runs.first() {
+                strike_color[3] *= run.alpha;
+            }
             scene.strokes.push(Stroke {
                 x0: text_x,
                 y0: y + font_px * 0.55,
-                x1: text_x + tw,
+                x1: text_x + content_w,
                 y1: y + font_px * 0.55,
                 width: (font_px * 0.08).max(1.0),
-                color,
+                color: strike_color,
             });
         }
         y += font_px * LINE_HEIGHT;
@@ -1034,6 +1069,85 @@ mod tests {
                 .any(|s| (s.y0 - s.y1).abs() < 0.01 && s.x1 > s.x0 + 8.0),
             "strikethrough"
         );
+    }
+
+    #[test]
+    fn challenge_runs_draw_at_nested_alphas_and_strike_the_full_row() {
+        let mut view = dummy_view();
+        view.status.clear();
+        view.clock.clear();
+        view.xp.clear();
+        view.block.clear();
+        view.map = MapView::default();
+        view.challenges = vec![Line {
+            text: "  Loot Anything  10/10".into(),
+            color: Some([0.61, 0.9, 0.39, 1.0]),
+            strike: true,
+            runs: vec![
+                TextRun {
+                    text: "  ".into(),
+                    alpha: 0.60,
+                },
+                TextRun {
+                    text: "Loot Anything".into(),
+                    alpha: 0.60 * 0.78,
+                },
+                TextRun {
+                    text: "  ".into(),
+                    alpha: 0.60,
+                },
+                TextRun {
+                    text: "10/10".into(),
+                    alpha: 0.60,
+                },
+            ],
+            ..Line::default()
+        }];
+        let mut cfg = Config::default();
+        cfg.hud.opacity = 0.8;
+        cfg.widget.challenges.enabled = true;
+        let scene = build(&view, &cfg, vp_1440());
+
+        let objective = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "Loot Anything")
+            .expect("objective run");
+        let want = 0.8 * 0.60 * 0.78;
+        assert!(
+            (objective.color[3] - want).abs() < 1e-4,
+            "objective alpha {} want nested hud/done/objective {want}",
+            objective.color[3]
+        );
+
+        let name_pad = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "  " && (t.color[3] - 0.8 * 0.60).abs() < 1e-4)
+            .expect("name indent");
+        let progress = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "10/10")
+            .expect("progress");
+        let font_px = objective.font_px;
+        let want_w = mono_advance("  ", font_px)
+            + mono_advance("Loot Anything", font_px)
+            + mono_advance("  ", font_px)
+            + mono_advance("10/10", font_px);
+        let strike = scene
+            .strokes
+            .iter()
+            .find(|s| (s.y0 - s.y1).abs() < 0.01 && s.x1 > s.x0 + 8.0)
+            .expect("strikethrough");
+        assert!(
+            ((strike.x1 - strike.x0) - want_w).abs() < 0.05,
+            "strike {} want {want_w}",
+            strike.x1 - strike.x0
+        );
+        assert!((strike.x0 - name_pad.x).abs() < 0.05);
+        assert!((progress.x + mono_advance("10/10", font_px) - strike.x1).abs() < 0.05);
+        assert!((strike.color[3] - 0.8 * 0.60).abs() < 1e-4);
     }
 
     #[test]
