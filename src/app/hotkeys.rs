@@ -184,8 +184,9 @@ mod linux {
         fire, game_focused, slots_from_cfg, Arc, AtomicBool, Binding, Ordering, Slot, MOD_ALT,
         MOD_CONTROL, MOD_SHIFT, MOD_WIN,
     };
-    use std::fs::{self, OpenOptions};
+    use std::fs::{self, File, OpenOptions};
     use std::io::Read;
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::path::PathBuf;
     use std::time::Duration;
@@ -264,12 +265,28 @@ mod linux {
                     _ => {}
                 }
             }
-            std::thread::sleep(Duration::from_millis(200));
+            wait_fifo(fifo_file.as_ref());
         }
         unbind_all(&mut bound);
         let _ = fs::remove_file(&fifo);
         let _ = fs::remove_file(&script);
         let _ = leftover;
+    }
+
+    fn wait_fifo(fifo: Option<&File>) {
+        match fifo {
+            Some(f) => {
+                let mut pfd = libc::pollfd {
+                    fd: f.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                unsafe {
+                    libc::poll(&mut pfd, 1, 1000);
+                }
+            }
+            None => std::thread::sleep(Duration::from_secs(1)),
+        }
     }
 
     fn hypr_key(b: &Binding) -> String {

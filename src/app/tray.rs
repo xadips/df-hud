@@ -652,7 +652,7 @@ mod linux {
                             break;
                         }
                     }
-                    std::thread::sleep(Duration::from_millis(200));
+                    handle.ui.wait_timeout(Duration::from_secs(1));
                 }
                 svc.shutdown().wait();
             }
@@ -661,7 +661,7 @@ mod linux {
                     "tray: StatusNotifierItem failed ({err}); HTTP remains the control hatch"
                 );
                 while !stop.load(Ordering::SeqCst) && !handle.stopped() {
-                    std::thread::sleep(Duration::from_secs(1));
+                    handle.ui.wait_timeout(Duration::from_secs(1));
                 }
             }
         }
@@ -777,7 +777,7 @@ mod windows {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             } else {
-                std::thread::sleep(Duration::from_millis(200));
+                handle.ui.wait_timeout(Duration::from_millis(200));
             }
         }
         Shell_NotifyIconW(NIM_DELETE, &nid);

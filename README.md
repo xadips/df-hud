@@ -487,7 +487,7 @@ The game server is not ours, and bursty request patterns get accounts temp-banne
   `-check-config` prints it: about **540 requests/hour while playing, 60 idle**
   at the defaults (the player record every 10s, the challenge board every 30s,
   the event map every 60s).
-- **Two requests are never sent less than 5s apart**, whatever wakes them.
+- **Two requests are never sent less than 1s apart**, whatever wakes them.
   Credentials arriving, the game launching and compositor events can all fire at
   once; without that floor an event storm becomes a request burst. The floor is
   a single shared gate rather than one per scheduler — otherwise adding the
@@ -505,9 +505,9 @@ The game server is not ours, and bursty request patterns get accounts temp-banne
 - Jitter on every interval; exponential backoff on failure; zero traffic at all
   when the game is not running (`poll.only_when_game_running`, on by default).
 - **Write endpoints are unreachable.** `hunger`, `itemspawn` and `modify_values`
-  look like reads but mutate the account. There is a compile-time allowlist, plus
-  a test that walks the package AST and fails if any of those names appears in a
-  string literal anywhere.
+  look like reads but mutate the account. The HTTP client only has two named
+  calls (`get_values` and `hotrods/load_challenge`); anything else is refused
+  before a request is built.
 
 ## The event map, and somebody else's server
 

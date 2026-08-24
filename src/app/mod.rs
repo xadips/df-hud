@@ -23,11 +23,11 @@ use crate::model::{RunState, Tick, XpSample, XpSource};
 use crate::net::bridge::{self, Hooks};
 use crate::net::creds::Store as Creds;
 use crate::net::dfclient::Client;
-use crate::wake::Wake;
+use crate::wake::{Notify, Wake};
 
 use groups::Groups;
 use poller::{ChallengePoller, PlayerPoller, PollerRuntime, MIN_REQUEST_GAP};
-use rategate::Gate;
+use rategate::{sleep_cancellable, Gate};
 use store::Store;
 
 #[cfg(target_os = "linux")]
@@ -41,6 +41,7 @@ pub struct Handle {
     pub game_running: Arc<AtomicBool>,
     pub visible: Arc<AtomicBool>,
     pub wake: Arc<Wake>,
+    pub ui: Arc<Notify>,
     pub creds: Arc<Creds>,
     pub game: Arc<game::Watcher>,
     pub vis: Arc<visibility::Watcher>,
@@ -57,9 +58,14 @@ pub struct Handle {
 
 impl Handle {
     pub fn ping(&self) {
-        self.wake.ping();
+        self.wake_ui();
         self.player.wake();
         self.challenges.wake();
+    }
+
+    fn wake_ui(&self) {
+        self.wake.ping();
+        self.ui.ping();
     }
 
     pub fn resume_pollers(&self) {
@@ -77,7 +83,7 @@ impl Handle {
         let next = !self.overlay_on.load(Ordering::SeqCst);
         self.overlay_on.store(next, Ordering::SeqCst);
         self.vis.set_enabled(next);
-        self.wake.ping();
+        self.wake_ui();
         next
     }
 
@@ -91,7 +97,7 @@ impl Handle {
         self.vis.poke();
         self.player.wake();
         self.challenges.wake();
-        self.wake.ping();
+        self.wake_ui();
     }
 
     pub fn stopped(&self) -> bool {
@@ -100,13 +106,13 @@ impl Handle {
 
     pub fn toggle_group(&self, name: &str) -> Result<bool, String> {
         let hidden = self.groups.toggle(name)?;
-        self.wake.ping();
+        self.wake_ui();
         Ok(hidden)
     }
 
     pub fn restart_run(&self) {
         self.store.restart_run(Utc::now());
-        self.wake.ping();
+        self.wake_ui();
     }
 
     fn persist_run(&self) {
@@ -115,7 +121,7 @@ impl Handle {
 
     pub fn reset_xp(&self) {
         self.persist.reset_xp_window("reset by hand");
-        self.wake.ping();
+        self.wake_ui();
     }
 
     pub fn config_error(&self) -> Option<String> {
@@ -274,7 +280,7 @@ impl Drop for Handle {
         self.vis.poke();
         self.player.wake();
         self.challenges.wake();
-        self.wake.ping();
+        self.wake_ui();
     }
 }
 
@@ -367,6 +373,7 @@ pub fn start_with(
     let groups = Arc::new(Groups::new());
     let overlay_on = Arc::new(AtomicBool::new(true));
     let wake = Arc::new(Wake::new()?);
+    let ui = Arc::new(Notify::new());
     let presence = if cfg.lock().unwrap().presence.enabled {
         Some(presence::Control::new())
     } else {
@@ -393,7 +400,7 @@ pub fn start_with(
         creds: creds.clone(),
         store: store.clone(),
         cfg: cfg.clone(),
-        gate,
+        gate: gate.clone(),
         stop: stop.clone(),
         game_running: game_running.clone(),
         session_stale,
@@ -409,6 +416,7 @@ pub fn start_with(
         game_running: game_running.clone(),
         visible: visible.clone(),
         wake: wake.clone(),
+        ui: ui.clone(),
         creds: creds.clone(),
         game: game.clone(),
         vis: vis.clone(),
@@ -434,7 +442,7 @@ pub fn start_with(
                 &handle.last_run_start,
                 tick,
             );
-            handle.wake.ping();
+            handle.wake_ui();
         });
     }
 
@@ -454,7 +462,7 @@ pub fn start_with(
         vis.set_on_change(move |v| {
             handle.store.set_visibility(v.clone());
             handle.visible.store(v.visible, Ordering::SeqCst);
-            handle.wake.ping();
+            handle.wake_ui();
         });
     }
     handle.vis.refresh();
@@ -509,14 +517,16 @@ pub fn start_with(
         let store = store.clone();
         let cfg = cfg.clone();
         let stop = stop.clone();
-        move || catalog_loop(store, cfg, stop)
+        let gate = gate.clone();
+        move || catalog_loop(store, cfg, stop, gate)
     });
     poller::spawn("df-hud-bossmap", stop.clone(), {
         let store = store.clone();
         let cfg = cfg.clone();
         let stop = stop.clone();
         let wake = wake.clone();
-        move || bossmap_loop(store, cfg, stop, wake)
+        let gate = gate.clone();
+        move || bossmap_loop(store, cfg, stop, wake, gate)
     });
 
     {
@@ -712,12 +722,20 @@ fn persist_tray(handle: &Handle, option: crate::config::TrayOption, on: bool) ->
     true
 }
 
-fn catalog_loop(store: Arc<Store>, cfg: Arc<Mutex<Config>>, stop: Arc<AtomicBool>) {
+fn catalog_loop(
+    store: Arc<Store>,
+    cfg: Arc<Mutex<Config>>,
+    stop: Arc<AtomicBool>,
+    gate: Arc<Gate>,
+) {
     loop {
         if stop.load(Ordering::SeqCst) {
             return;
         }
         let c = cfg.lock().unwrap().clone();
+        if gate.wait(&stop).is_err() {
+            return;
+        }
         match catalog::ensure(
             &c.catalog_path(),
             &c.df.allstats_url,
@@ -730,15 +748,8 @@ fn catalog_loop(store: Arc<Store>, cfg: Arc<Mutex<Config>>, stop: Arc<AtomicBool
             Err(err) => eprintln!("catalog: {err}"),
         }
         let wait = c.poll.catalog_interval.0.max(Duration::from_secs(60));
-        let slice = Duration::from_millis(200);
-        let mut left = wait;
-        while left > Duration::ZERO {
-            if stop.load(Ordering::SeqCst) {
-                return;
-            }
-            let step = left.min(slice);
-            thread::sleep(step);
-            left -= step;
+        if sleep_cancellable(wait, &stop).is_err() {
+            return;
         }
     }
 }
@@ -748,6 +759,7 @@ fn bossmap_loop(
     cfg: Arc<Mutex<Config>>,
     stop: Arc<AtomicBool>,
     wake: Arc<Wake>,
+    gate: Arc<Gate>,
 ) {
     loop {
         if stop.load(Ordering::SeqCst) {
@@ -757,8 +769,13 @@ fn bossmap_loop(
         if !c.bossmap.enabled {
             store.clear_boss_map();
             wake.ping();
-            thread::sleep(Duration::from_secs(2));
+            if sleep_cancellable(Duration::from_secs(2), &stop).is_err() {
+                return;
+            }
             continue;
+        }
+        if gate.wait(&stop).is_err() {
+            return;
         }
         match bossmap::fetch(&c.bossmap.url, &c.df.user_agent, c.df.timeout.0, Utc::now()) {
             Ok(m) => {
@@ -775,7 +792,9 @@ fn bossmap_loop(
         } else {
             c.bossmap.interval.0
         };
-        thread::sleep(wait.max(Duration::from_secs(5)));
+        if sleep_cancellable(wait.max(Duration::from_secs(5)), &stop).is_err() {
+            return;
+        }
     }
 }
 

@@ -56,7 +56,7 @@ impl Gate {
     }
 }
 
-fn sleep_cancellable(mut delay: Duration, stop: &AtomicBool) -> Result<(), Cancelled> {
+pub(crate) fn sleep_cancellable(mut delay: Duration, stop: &AtomicBool) -> Result<(), Cancelled> {
     const SLICE: Duration = Duration::from_millis(5);
     while delay > Duration::ZERO {
         if stop.load(Ordering::SeqCst) {
@@ -141,5 +141,16 @@ mod tests {
         gate.wait(&stop).unwrap();
         let second = gate.reserved().unwrap();
         assert!(second - first >= Duration::from_millis(1));
+    }
+
+    #[test]
+    fn one_second_floor_spaces_reserved_slots() {
+        let gate = Gate::new(Duration::from_secs(1));
+        let stop = AtomicBool::new(false);
+        gate.wait(&stop).unwrap();
+        let first = gate.reserved().unwrap();
+        gate.wait(&stop).unwrap();
+        let second = gate.reserved().unwrap();
+        assert!(second - first >= Duration::from_secs(1));
     }
 }

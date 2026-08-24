@@ -179,50 +179,18 @@ changeover by the data's age.
 With one clock, the shift happens by construction and needs no state of its
 own. At the boundary instant the ended cycle fails `ActiveAt` and becomes
 `prev`, the cycle starting there becomes `now`, `next` empties until the feed
-publishes the one after (~100s ahead, below), and `BlockBoundary` returns that
-new cycle's end. `TestOnslaughtCyclesShiftWhenTheCountdownRollsOver` pins it
-at exactly the boundary and one second before, on a feed 53s stale.
+publishes the one after (~100s ahead), and `BlockBoundary` returns that
+new cycle's end.
 
-**"next" needs the poller to fetch EARLY, not just react.** `NextBoundary`
-alone schedules the next fetch for when the CURRENT cycle ends - but Onslaught
-runs back-to-back, so that is also when the NEXT one starts, and a fetch made
-then always finds it already "now", never having caught it as "next". Fixed
-with `Horizon`/`bossMapPublishWindow`: while in Onslaught the poller also wakes
-that far before the latest end time it already knows about, landing inside the
-window where the feed carries a cycle but it has not started.
-
-**The publish lead is 100s, measured.** Sampling the feed every 20s across a
-cycle on 2026-08-16, the 00:45:01 cycle first appeared at 00:43:18 - a lead of
-103s, at most 123s allowing for the sample gap, and the player watching
-dfprofiler's own page beside df-hud reported the same independently. The
-window was 150s before that, inherited from the userscript's
-`PUBLISH_WINDOW_MS` whose comment says "~2 minutes" as an impression rather
-than a measurement. So the aimed wake fired BEFORE publication every cycle,
-found nothing, and left discovery to the interval floor's retry - which is
-exactly the lag against their page that prompted the measurement. Aim late
-rather than early: early looks for something that does not exist yet, late
-merely finds it a few seconds after it could have been.
-
-Dropping the skew adjustment made that aim mean what it says. `Horizon` used to
-hand back the end time shifted by the skew, so a 100s aim really fired 47-81s
-out depending on how stale the feed was - late, and safe by accident. It is now
-100s against the measured 103s lead, which is only 3s of margin, so the
-one-sided jitter below is what the aim rests on.
-
-Jitter on that wake is **one-sided** (`jitteredLate`). Ten percent of a ~200s
-delay is 20s, which is most of the margin between aiming at 100s and the 123s
-upper bound - symmetric jitter would spend the very thing the aim depends on.
-Everywhere else it stays symmetric, because spreading load is what it is for.
-
-**Onslaught has its own floor and heartbeat**
-(`bossmap.onslaught_interval`/`onslaught_max_interval`, 30s and 1m). The city
-pair is sized against a 3600s cycle; against Onslaught's 300s one, a
+**Onslaught has its own poll period** (`bossmap.onslaught_interval`, 30s). The
+city interval is sized against a 3600s cycle; against Onslaught's 300s one, a
 five-minute heartbeat is a whole cycle wide and can miss a turnover outright.
 These are the only settings where df-hud costs dfprofiler what one of their own
 open tabs does rather than half of it - bounded, since they apply only while
 standing on 3000,3000 with the game running. `RequestsPerHour` deliberately
 does not fold that floor in: it reports what an hour of normal play costs, and
-an hour entirely inside Onslaught is a different activity.
+an hour entirely inside Onslaught is a different activity. `max_interval` and
+`onslaught_max_interval` are unused config keys kept so existing files load.
 
 
 ## Cycles, from the player rather than from the data
@@ -250,8 +218,7 @@ So a single fetch made at `:59` contains everything needed to be correct at
 clock rather than from the `started`/`ended` flags. The changeover then costs no
 request at all and lands on the second rather than at the next poll.
 
-The schedule that falls out of this: fetch shortly after the next boundary in the
-data, on arriving at a new block (which is the only question the feed answers),
-and otherwise on a heartbeat for the random spawns. The minimum gap is a floor
-none of those can breach, and jitter is applied before the floor rather than
-after, so it can never reduce it.
+The fetch loop is a heartbeat: `interval` in the city, `onslaught_interval` in
+Onslaught. Random daily spawns are why it cannot be an event-boundary scheduler.
+A shared 1s request gate still spaces this fetch from the player and challenge
+pollers.
