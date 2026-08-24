@@ -10,13 +10,13 @@ use crate::data::bossmap::{self, BossMap};
 use crate::data::catalog::Catalog;
 use crate::data::citymap;
 use crate::data::xp;
+use crate::data::TIME_OFFSET;
 use crate::format;
 use crate::model::{
     Challenge, Deadline, GameState, Ns, PollerStatus, PresenceState, RunState, Snapshot, Tick,
     View, XpRate, XpSample, XpSource, XpStability,
 };
 
-const DF_TIME_OFFSET: i64 = 1_200_000_000;
 const DF_FOREVER: i64 = (1 << 31) - 8;
 const DF_PLAUSIBLE_WINDOW: Duration = Duration::from_hours(8760);
 const PRESENCE_MAX_AGE: Duration = Duration::from_mins(2);
@@ -138,7 +138,7 @@ fn df_compact_time_var(vars: &HashMap<String, String>, key: &str) -> Option<Date
     if v <= 0 {
         return None;
     }
-    DateTime::from_timestamp(v + DF_TIME_OFFSET, 0)
+    DateTime::from_timestamp(v + TIME_OFFSET, 0)
 }
 
 fn deadline_var(vars: &HashMap<String, String>, key: &str, now: DateTime<Utc>) -> Deadline {
@@ -663,7 +663,9 @@ fn fire_run_change(on_change: Option<Arc<dyn Fn() + Send + Sync>>, changed: bool
 }
 
 fn clear_session_derived(s: &mut Inner) {
-    s.boss_map = None;
+    // The city event map is not session state. Keep the last fetch so the
+    // grid still has markers while the next poll is in flight (game start
+    // pokes bossmap_loop instead of waiting out the 60s interval).
     s.board.clear();
     s.have_board = false;
     s.board_status.clear();
@@ -1415,7 +1417,7 @@ mod tests {
     }
 
     #[test]
-    fn session_end_clears_boss_map_and_challenges() {
+    fn session_end_clears_challenges_and_keeps_the_city_map() {
         let now = DateTime::from_timestamp(1000, 0).unwrap();
         let s = running_store(now);
         let raw = br#"{
@@ -1434,7 +1436,10 @@ mod tests {
         assert!(s.derive(now).challenges.is_some());
         s.set_game(GameState::default());
         let view = s.derive(now);
-        assert!(!view.outpost_attack);
+        assert!(
+            view.outpost_attack,
+            "city map survives a relaunch so the overlay is not empty until the next fetch"
+        );
         assert!(view.challenges.is_none());
         assert!(view.challenge_status.is_empty());
     }

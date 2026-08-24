@@ -240,17 +240,23 @@ pub fn parse(data: &[u8], fetched_at: DateTime<Utc>) -> Result<BossMap, String> 
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let event_type = ev.get("event_type").and_then(|v| v.as_str()).unwrap_or("");
+        let kind = classify_boss_event(need_briefing, special, event_type);
+        let mut enemies = split_enemy_types(special);
+        if kind == CityEventKind::Mission {
+            // Some missions leave "{count} x {type_id}" (200 x 64) instead of a name.
+            enemies.retain(|s| named_enemy(s));
+        }
         let mut event = CityEvent {
             id: ev
                 .get("event_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or(key)
                 .to_string(),
-            kind: classify_boss_event(need_briefing, special, event_type),
+            kind,
             event_type: event_type.to_string(),
             title: html_unescape(ev.get("title").and_then(|v| v.as_str()).unwrap_or("")),
-            enemies: split_enemy_types(special),
-            objectives: Vec::new(),
+            enemies,
+            objectives: parse_objectives(ev.get("dfp_objectives")),
             reward_exp: ev
                 .get("reward_exp")
                 .and_then(|v| v.as_str())
@@ -326,6 +332,41 @@ fn classify_boss_event(need_briefing: &str, special: &str, event_type: &str) -> 
     } else {
         CityEventKind::Unknown
     }
+}
+
+/// True when `special_enemy_type` is a name (`3 x Flaming Titan`), not a
+/// leftover type id (`200 x 64`).
+pub(crate) fn named_enemy(s: &str) -> bool {
+    let Some((_, rest)) = s.split_once(" x ") else {
+        return !s.is_empty();
+    };
+    !rest.trim().bytes().all(|b| b.is_ascii_digit())
+}
+
+fn parse_objectives(v: Option<&Value>) -> Vec<String> {
+    let Some(obj) = v.and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (key, val) in obj {
+        if key == "area_highlight" || key.ends_with("_amount") {
+            continue;
+        }
+        let Some(text) = val.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let text = html_unescape(text);
+        let amount = obj
+            .get(&format!("{key}_amount"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|n| !n.is_empty() && *n != "1" && *n != "0");
+        out.push(match amount {
+            Some(n) => format!("{text} ({n})"),
+            None => text,
+        });
+    }
+    out
 }
 
 fn split_enemy_types(s: &str) -> Vec<String> {
@@ -538,6 +579,39 @@ mod tests {
     }
 
     #[test]
+    fn mission_uses_the_title_not_a_type_id() {
+        let now = DateTime::from_timestamp(1000, 0).unwrap();
+        let raw = br#"{
+	  "4":{"event_id":"4","isoa":"0","locations":[["1053","985"]],"started":"1","ended":"0",
+	       "reward_cash":"31000","reward_exp":"650000","need_briefing":"1","title":"Disarmed","briefing":"",
+	       "special_enemy_type":"200 x 64","special_enemy_amount":"200","boss_num":"4",
+	       "event_type":"mission","dfp_objectives":{"loot":"Find O'Connell's arms","loot_amount":"2","area_highlight":"1053_985"},
+	       "start_time":"900","end_time":"5000"},
+	  "bosshash":"abc","servertime":1000,"version":"1"}"#;
+        let m = parse(raw, now).unwrap();
+        assert_eq!(m.events[0].kind, CityEventKind::Mission);
+        assert_eq!(m.events[0].title, "Disarmed");
+        assert!(
+            m.events[0].enemies.is_empty(),
+            "type id leaked: {:?}",
+            m.events[0].enemies
+        );
+        assert_eq!(m.events[0].objectives, ["Find O'Connell's arms (2)"]);
+
+        let named = br#"{
+	  "1":{"event_id":"1","isoa":"0","locations":[["1029","1006"]],"started":"1","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"1","title":"Red Inferno","briefing":"",
+	       "special_enemy_type":"3 x Flaming Titan","special_enemy_amount":"3","boss_num":"1",
+	       "event_type":"mission","dfp_objectives":{"kill":"Eliminate the Flaming Titans","kill_amount":"3","area_highlight":"1029_1006"},
+	       "start_time":"900","end_time":"5000"},
+	  "bosshash":"abc","servertime":1000,"version":"1"}"#;
+        let m = parse(named, now).unwrap();
+        assert_eq!(m.events[0].title, "Red Inferno");
+        assert_eq!(m.events[0].enemies, ["3 x Flaming Titan"]);
+        assert_eq!(m.events[0].objectives, ["Eliminate the Flaming Titans (3)"]);
+    }
+
+    #[test]
     fn classify_checks_briefing_before_special_enemy() {
         assert_eq!(
             classify_boss_event("1", "3 x Flaming Titan", "mission"),
@@ -631,6 +705,7 @@ mod tests {
             }
             if mk.kind == CityEventKind::Mission && mk.x == 1047 && mk.y == 987 {
                 assert_eq!(mk.marker, "M5");
+                assert_eq!(mk.label, "To The Slaughter");
             }
         }
         assert!(got.contains_key("N1") && got.contains_key("N8"));

@@ -3,9 +3,8 @@
 use chrono::{DateTime, TimeZone, Utc};
 use std::collections::HashMap;
 
+use crate::data::TIME_OFFSET;
 use crate::model::{Challenge, Objective};
-
-const DF_TIME_OFFSET: i64 = 1_200_000_000;
 
 pub fn parse(vars: &HashMap<String, String>, level: i32, gold: bool) -> Vec<Challenge> {
     let mut vars = vars.clone();
@@ -164,7 +163,7 @@ fn challenge_time(raw: &str) -> DateTime<Utc> {
     if v <= 0 {
         return DateTime::<Utc>::UNIX_EPOCH;
     }
-    Utc.timestamp_opt(v + DF_TIME_OFFSET, 0)
+    Utc.timestamp_opt(v + TIME_OFFSET, 0)
         .single()
         .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
 }
@@ -284,7 +283,7 @@ mod tests {
         assert!(!got[0].objectives[0].done());
         assert!(got[0].repeatable);
         assert_eq!(got[0].reward_special, "summerticket|10");
-        let want = Utc.timestamp_opt(587299200 + DF_TIME_OFFSET, 0).unwrap();
+        let want = Utc.timestamp_opt(587299200 + TIME_OFFSET, 0).unwrap();
         assert_eq!(got[0].end, want);
         assert_eq!(got[1].name, "What Doc Ordered");
         assert!(got.iter().all(|c| c.name != "Hidden"));
@@ -392,7 +391,7 @@ mod tests {
 
     #[test]
     fn cycle_key_ignores_index_and_seconds() {
-        let end = Utc.timestamp_opt(586_953_931 + DF_TIME_OFFSET, 0).unwrap();
+        let end = Utc.timestamp_opt(586_953_931 + TIME_OFFSET, 0).unwrap();
         let a = Challenge {
             index: 3,
             name: "Travel".into(),
@@ -426,7 +425,7 @@ mod tests {
 
     #[test]
     fn sticky_completion_latches_a_cycle() {
-        let end = Utc.timestamp_opt(586_953_931 + DF_TIME_OFFSET, 0).unwrap();
+        let end = Utc.timestamp_opt(586_953_931 + TIME_OFFSET, 0).unwrap();
         let mut board = vec![Challenge {
             name: "Travel".into(),
             end,

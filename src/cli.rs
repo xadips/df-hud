@@ -957,9 +957,11 @@ mod tests {
         vars.insert("challenge_0_objectives_1_target".into(), "100".into());
         vars.insert("challenge_0_objective_1_player_score".into(), "55".into());
         vars.insert("challenge_0_reward_exp".into(), "2500".into());
-        let now =
-            chrono::DateTime::<chrono::Utc>::from_timestamp(1_200_000_000 + 584_880_000 + 60, 0)
-                .unwrap();
+        let now = chrono::DateTime::<chrono::Utc>::from_timestamp(
+            crate::data::TIME_OFFSET + 584_880_000 + 60,
+            0,
+        )
+        .unwrap();
         let text = format_challenge_board(&vars, 100, false, now);
         assert!(text.starts_with("1 challenges (level 100)\n"), "{text}");
         assert!(text.contains("[ ] personal Summer Death"), "{text}");
