@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "df-hud"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "chrono",
  "embed-resource",
