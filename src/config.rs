@@ -601,7 +601,7 @@ impl Config {
     pub fn parse(text: &str) -> Result<Self, Box<dyn Error>> {
         let overlay: toml::Value =
             toml::from_str(text).map_err(|err| format!("invalid TOML ({err})"))?;
-        let mut base = toml::Value::try_from(&Self::default())
+        let mut base = toml::Value::try_from(Self::default())
             .map_err(|err| format!("internal config serialize: {err}"))?;
         reject_unknown(&overlay, &base, "")?;
         merge_value(&mut base, overlay);
@@ -631,13 +631,8 @@ impl Config {
         }
     }
 
-    pub fn requests_per_hour(&self, mut active_fraction: f64) -> f64 {
-        if active_fraction < 0.0 {
-            active_fraction = 0.0;
-        }
-        if active_fraction > 1.0 {
-            active_fraction = 1.0;
-        }
+    pub fn requests_per_hour(&self, active_fraction: f64) -> f64 {
+        let active_fraction = active_fraction.clamp(0.0, 1.0);
         let per_hour = |d: StdDuration| {
             if d.is_zero() {
                 0.0
@@ -1289,10 +1284,8 @@ fn set_toml_bool(src: &str, table: &str, key: &str, enabled: bool) -> String {
         }
     }
     let mut out = lines.join(newline);
-    if src.ends_with('\n') || src.is_empty() {
-        if !out.ends_with('\n') {
-            out.push_str(newline);
-        }
+    if (src.ends_with('\n') || src.is_empty()) && !out.ends_with('\n') {
+        out.push_str(newline);
     }
     out
 }

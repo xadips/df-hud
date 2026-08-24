@@ -16,14 +16,16 @@ use crate::net::creds::{Credentials, Store as Creds};
 
 const MAX_BODY: usize = 1 << 20;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+type Hook = Arc<dyn Fn() + Send + Sync>;
+type WidgetToggleHook = Arc<dyn Fn(&str) -> Result<bool, String> + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct Hooks {
-    pub on_credentials: Option<Arc<dyn Fn() + Send + Sync>>,
-    pub run_start: Option<Arc<dyn Fn() + Send + Sync>>,
-    pub xp_reset: Option<Arc<dyn Fn() + Send + Sync>>,
-    pub overlay_toggle: Option<Arc<dyn Fn() + Send + Sync>>,
-    pub widget_toggle: Option<Arc<dyn Fn(&str) -> Result<bool, String> + Send + Sync>>,
+    pub on_credentials: Option<Hook>,
+    pub run_start: Option<Hook>,
+    pub xp_reset: Option<Hook>,
+    pub overlay_toggle: Option<Hook>,
+    pub widget_toggle: Option<WidgetToggleHook>,
 }
 
 pub struct Server {

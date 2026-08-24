@@ -26,7 +26,7 @@ use crate::net::dfclient::Client;
 use crate::wake::Wake;
 
 use groups::Groups;
-use poller::{ChallengePoller, PlayerPoller, MIN_REQUEST_GAP};
+use poller::{ChallengePoller, PlayerPoller, PollerRuntime, MIN_REQUEST_GAP};
 use rategate::Gate;
 use store::Store;
 
@@ -390,27 +390,17 @@ pub fn start_with(
     let query = Some(Arc::new(desktop_client) as Arc<dyn visibility::Querier>);
     let vis = visibility::Watcher::new(game.clone(), cfg.clone(), query);
 
-    let player = PlayerPoller::new(
-        player_client,
-        creds.clone(),
-        store.clone(),
-        cfg.clone(),
-        gate.clone(),
-        stop.clone(),
-        game_running.clone(),
-        session_stale.clone(),
-    );
-    let challenges = ChallengePoller::new(
-        challenge_client,
-        creds.clone(),
-        store.clone(),
-        persist.clone(),
-        cfg.clone(),
+    let poller_runtime = PollerRuntime {
+        creds: creds.clone(),
+        store: store.clone(),
+        cfg: cfg.clone(),
         gate,
-        stop.clone(),
-        game_running.clone(),
+        stop: stop.clone(),
+        game_running: game_running.clone(),
         session_stale,
-    );
+    };
+    let player = PlayerPoller::new(player_client, poller_runtime.clone());
+    let challenges = ChallengePoller::new(challenge_client, persist.clone(), poller_runtime);
 
     let handle = Arc::new(Handle {
         store: store.clone(),

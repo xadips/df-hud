@@ -834,10 +834,7 @@ mod tests {
         let mut level = 200;
         let mut exp = needed * 40;
         let mut want = 0;
-        loop {
-            let Some(need) = c.exp_needed(level) else {
-                break;
-            };
+        while let Some(need) = c.exp_needed(level) {
             if exp < need {
                 break;
             }

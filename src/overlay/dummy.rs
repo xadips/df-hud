@@ -57,7 +57,7 @@ fn fake_map() -> MapView {
             if x == origin + 2 && y % 4 == 0 {
                 continue;
             }
-            let band = ((x * 3 + y * 5) as i32).rem_euclid(4);
+            let band = (x * 3_i32 + y * 5_i32).rem_euclid(4);
             let (r, g, b) = match band {
                 0 => (0x2a, 0x4c, 0x2a),
                 1 => (0x3a, 0x5c, 0x34),

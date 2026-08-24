@@ -14,6 +14,7 @@ use crate::model::{GameState, Visibility};
 use crate::wake::Notify;
 
 const QUERY_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(30);
+type VisibilityHandler = Arc<dyn Fn(Visibility) + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rules {
@@ -83,7 +84,7 @@ pub struct Watcher {
     enabled: Mutex<bool>,
     state: Mutex<Visibility>,
     place: Mutex<Placement>,
-    on_change: Mutex<Option<Arc<dyn Fn(Visibility) + Send + Sync>>>,
+    on_change: Mutex<Option<VisibilityHandler>>,
     window_session: Mutex<GameState>,
     window_seen: Mutex<bool>,
     last_query_error: Mutex<Option<Instant>>,

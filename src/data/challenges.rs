@@ -302,10 +302,10 @@ mod tests {
                 .into_iter()
                 .map(|c| c.name)
                 .collect();
-            if first.is_none() {
-                first = Some(names);
+            if let Some(first) = &first {
+                assert_eq!(first, &names);
             } else {
-                assert_eq!(first.as_ref().unwrap(), &names);
+                first = Some(names);
             }
         }
         let mut seen_clan = false;
