@@ -231,18 +231,17 @@ impl Drop for GlSurface {
     }
 }
 
+type WglExtensions = (
+    ChoosePixelFormatArb,
+    CreateContextAttribsArb,
+    GetPixelFormatAttribivArb,
+    Option<SwapIntervalExt>,
+    Library,
+);
+
 fn load_wgl_extensions(
     instance: windows_sys::Win32::Foundation::HINSTANCE,
-) -> Result<
-    (
-        ChoosePixelFormatArb,
-        CreateContextAttribsArb,
-        GetPixelFormatAttribivArb,
-        Option<SwapIntervalExt>,
-        Library,
-    ),
-    Box<dyn Error>,
-> {
+) -> Result<WglExtensions, Box<dyn Error>> {
     let class = wide(DUMMY_CLASS);
     let title = wide("df-hud-wgl-dummy");
     let hwnd = unsafe {

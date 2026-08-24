@@ -155,6 +155,7 @@ impl Gpu {
         Ok(gpu)
     }
 
+    #[cfg(target_os = "linux")]
     pub fn resize(&self, buf_w: i32, buf_h: i32) {
         unsafe { self.gl.viewport(0, 0, buf_w, buf_h) };
     }
@@ -218,29 +219,29 @@ impl Gpu {
         for fill in &scene.fills {
             push_quad(
                 &mut verts,
-                fill.x * sx,
-                fill.y * sy,
-                fill.w * sx,
-                fill.h * sy,
+                Rect {
+                    x: fill.x * sx,
+                    y: fill.y * sy,
+                    w: fill.w * sx,
+                    h: fill.h * sy,
+                },
                 fill.color,
-                wu,
-                wv,
-                wu,
-                wv,
+                UvRect::point(wu, wv),
             );
         }
         let stroke_s = (sx + sy) * 0.5;
         for stroke in &scene.strokes {
             push_line(
                 &mut verts,
-                stroke.x0 * sx,
-                stroke.y0 * sy,
-                stroke.x1 * sx,
-                stroke.y1 * sy,
+                Segment {
+                    x0: stroke.x0 * sx,
+                    y0: stroke.y0 * sy,
+                    x1: stroke.x1 * sx,
+                    y1: stroke.y1 * sy,
+                },
                 stroke.width * stroke_s,
                 stroke.color,
-                wu,
-                wv,
+                [wu, wv],
             );
         }
         for text in &scene.labels {
@@ -317,15 +318,19 @@ impl Gpu {
                 let oc = text.outline_color.unwrap_or(OUTLINE_COLOR);
                 push_quad(
                     verts,
-                    gx - 1.0,
-                    gy - 1.0,
-                    glyph.outline_w as f32,
-                    glyph.outline_h as f32,
+                    Rect {
+                        x: gx - 1.0,
+                        y: gy - 1.0,
+                        w: glyph.outline_w as f32,
+                        h: glyph.outline_h as f32,
+                    },
                     [oc[0], oc[1], oc[2], oc[3] * text.color[3]],
-                    ou0,
-                    ov0,
-                    ou1,
-                    ov1,
+                    UvRect {
+                        u0: ou0,
+                        v0: ov0,
+                        u1: ou1,
+                        v1: ov1,
+                    },
                 );
             }
             let (u0, v0, u1, v1) =
@@ -333,15 +338,14 @@ impl Gpu {
                     .uv(glyph.atlas_x, glyph.atlas_y, glyph.width, glyph.height);
             push_quad(
                 verts,
-                gx,
-                gy,
-                glyph.width as f32,
-                glyph.height as f32,
+                Rect {
+                    x: gx,
+                    y: gy,
+                    w: glyph.width as f32,
+                    h: glyph.height as f32,
+                },
                 text.color,
-                u0,
-                v0,
-                u1,
-                v1,
+                UvRect { u0, v0, u1, v1 },
             );
         }
         Ok(())
@@ -383,18 +387,44 @@ fn verts_as_bytes(verts: &[f32]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(verts.as_ptr().cast(), std::mem::size_of_val(verts)) }
 }
 
-fn push_quad(
-    verts: &mut Vec<f32>,
+#[derive(Clone, Copy)]
+struct Rect {
     x: f32,
     y: f32,
     w: f32,
     h: f32,
-    color: [f32; 4],
+}
+
+#[derive(Clone, Copy)]
+struct UvRect {
     u0: f32,
     v0: f32,
     u1: f32,
     v1: f32,
-) {
+}
+
+impl UvRect {
+    fn point(u: f32, v: f32) -> Self {
+        Self {
+            u0: u,
+            v0: v,
+            u1: u,
+            v1: v,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Segment {
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+}
+
+fn push_quad(verts: &mut Vec<f32>, rect: Rect, color: [f32; 4], uv: UvRect) {
+    let Rect { x, y, w, h } = rect;
+    let UvRect { u0, v0, u1, v1 } = uv;
     let [r, g, b, a] = color;
     let x2 = x + w;
     let y2 = y + h;
@@ -411,17 +441,9 @@ fn push_quad(
     }
 }
 
-fn push_line(
-    verts: &mut Vec<f32>,
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
-    width: f32,
-    color: [f32; 4],
-    u: f32,
-    v: f32,
-) {
+fn push_line(verts: &mut Vec<f32>, segment: Segment, width: f32, color: [f32; 4], uv: [f32; 2]) {
+    let Segment { x0, y0, x1, y1 } = segment;
+    let [u, v] = uv;
     let dx = x1 - x0;
     let dy = y1 - y0;
     let len = (dx * dx + dy * dy).sqrt().max(1e-6);

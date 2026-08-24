@@ -18,6 +18,18 @@ use crate::wake::Notify;
 
 pub const MIN_REQUEST_GAP: Duration = Duration::from_secs(1);
 const PAUSE_RECHECK: Duration = Duration::from_secs(2);
+type TickHandler = Arc<dyn Fn(Tick) + Send + Sync>;
+
+#[derive(Clone)]
+pub struct PollerRuntime {
+    pub creds: Arc<Creds>,
+    pub store: Arc<Store>,
+    pub cfg: Arc<Mutex<Config>>,
+    pub gate: Arc<Gate>,
+    pub stop: Arc<AtomicBool>,
+    pub game_running: Arc<AtomicBool>,
+    pub session_stale: Arc<AtomicBool>,
+}
 
 fn jitter_unit() -> f64 {
     static N: AtomicU64 = AtomicU64::new(1);
@@ -53,31 +65,22 @@ pub struct PlayerPoller {
     session_stale: Arc<AtomicBool>,
     status: Mutex<PollerStatus>,
     last_poll: Mutex<Option<Instant>>,
-    on_tick: Mutex<Option<Arc<dyn Fn(Tick) + Send + Sync>>>,
+    on_tick: Mutex<Option<TickHandler>>,
 }
 
 impl PlayerPoller {
-    pub fn new(
-        client: Arc<Mutex<Client>>,
-        creds: Arc<Creds>,
-        store: Arc<Store>,
-        cfg: Arc<Mutex<Config>>,
-        gate: Arc<Gate>,
-        stop: Arc<AtomicBool>,
-        game_running: Arc<AtomicBool>,
-        session_stale: Arc<AtomicBool>,
-    ) -> Arc<Self> {
+    pub fn new(client: Arc<Mutex<Client>>, runtime: PollerRuntime) -> Arc<Self> {
         Arc::new(Self {
             client,
-            creds,
-            store,
-            cfg,
-            gate,
-            stop,
+            creds: runtime.creds,
+            store: runtime.store,
+            cfg: runtime.cfg,
+            gate: runtime.gate,
+            stop: runtime.stop,
             wake: Arc::new(Notify::new()),
             min_gap: Mutex::new(MIN_REQUEST_GAP),
-            game_running,
-            session_stale,
+            game_running: runtime.game_running,
+            session_stale: runtime.session_stale,
             status: Mutex::new(PollerStatus::default()),
             last_poll: Mutex::new(None),
             on_tick: Mutex::new(None),
@@ -358,26 +361,20 @@ pub struct ChallengePoller {
 impl ChallengePoller {
     pub fn new(
         client: Arc<Mutex<Client>>,
-        creds: Arc<Creds>,
-        store: Arc<Store>,
         persist: Arc<state::Store>,
-        cfg: Arc<Mutex<Config>>,
-        gate: Arc<Gate>,
-        stop: Arc<AtomicBool>,
-        game_running: Arc<AtomicBool>,
-        session_stale: Arc<AtomicBool>,
+        runtime: PollerRuntime,
     ) -> Arc<Self> {
         Arc::new(Self {
             client,
-            creds,
-            store,
+            creds: runtime.creds,
+            store: runtime.store,
             persist,
-            cfg,
-            gate,
-            stop,
+            cfg: runtime.cfg,
+            gate: runtime.gate,
+            stop: runtime.stop,
             wake: Arc::new(Notify::new()),
-            game_running,
-            session_stale,
+            game_running: runtime.game_running,
+            session_stale: runtime.session_stale,
             stale: AtomicBool::new(false),
             failures: Mutex::new(0),
         })
@@ -662,13 +659,15 @@ mod tests {
         let running = Arc::new(AtomicBool::new(true));
         let p = PlayerPoller::new(
             Arc::new(Mutex::new(client)),
-            creds,
-            Arc::new(Store::new(None)),
-            Arc::new(Mutex::new(cfg)),
-            Arc::new(Gate::new(Duration::from_millis(5))),
-            stop.clone(),
-            running,
-            Arc::new(AtomicBool::new(false)),
+            PollerRuntime {
+                creds,
+                store: Arc::new(Store::new(None)),
+                cfg: Arc::new(Mutex::new(cfg)),
+                gate: Arc::new(Gate::new(Duration::from_millis(5))),
+                stop: stop.clone(),
+                game_running: running,
+                session_stale: Arc::new(AtomicBool::new(false)),
+            },
         );
         p.set_min_gap(Duration::from_millis(20));
         (p, stop)
@@ -767,14 +766,16 @@ mod tests {
                 "http://127.0.0.1:1",
                 "df-hud-test",
             ))),
-            creds,
-            store.clone(),
             Arc::new(state::Store::new("")),
-            cfg.clone(),
-            Arc::new(Gate::new(Duration::from_millis(5))),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(true)),
-            session_stale,
+            PollerRuntime {
+                creds,
+                store: store.clone(),
+                cfg: cfg.clone(),
+                gate: Arc::new(Gate::new(Duration::from_millis(5))),
+                stop: Arc::new(AtomicBool::new(false)),
+                game_running: Arc::new(AtomicBool::new(true)),
+                session_stale,
+            },
         );
         (p, store, cfg)
     }

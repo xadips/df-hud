@@ -316,7 +316,7 @@ fn covers(x: f64, y: f64) -> bool {
     if r <= 0.11 {
         return true;
     }
-    if r >= 0.29 && r <= 0.39 {
+    if (0.29..=0.39).contains(&r) {
         return true;
     }
     if r > 0.39 && r <= 0.5 {
@@ -579,7 +579,7 @@ mod linux {
             IconKind::Error => raster(ERROR, ICON_SIZE),
         };
         let mut data = rgba;
-        for px in data.chunks_exact_mut(4) {
+        for px in data.as_chunks_mut::<4>().0 {
             px.rotate_right(1);
         }
         Icon {

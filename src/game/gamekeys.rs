@@ -28,6 +28,16 @@ struct Inner {
     launcher_sent: bool,
 }
 
+pub struct TickInput<'a> {
+    pub now: SystemTime,
+    pub cfg: &'a GameKeysCfg,
+    pub game: GameState,
+    pub place: &'a Placement,
+    pub send: &'a dyn Sender,
+    pub active: Option<&'a str>,
+    pub ready: bool,
+}
+
 impl Keys {
     pub fn new(cfg: &GameKeysCfg) -> Arc<Self> {
         let k = Self {
@@ -59,16 +69,16 @@ impl Keys {
         self.dismiss.store(cfg.dismiss_launcher, Ordering::SeqCst);
     }
 
-    pub fn tick(
-        &self,
-        now: SystemTime,
-        cfg: &GameKeysCfg,
-        game: GameState,
-        place: &Placement,
-        send: &dyn Sender,
-        active: Option<&str>,
-        ready: bool,
-    ) {
+    pub fn tick(&self, input: TickInput<'_>) {
+        let TickInput {
+            now,
+            cfg,
+            game,
+            place,
+            send,
+            active,
+            ready,
+        } = input;
         if !game.running {
             *self.inner.lock().unwrap() = Inner::default();
             return;
@@ -202,15 +212,15 @@ pub fn spawn(handle: Arc<crate::app::Handle>, stop: Arc<std::sync::atomic::Atomi
                 let place = handle.vis.placement();
                 let ready = handle.store.client_in_world(chrono::Utc::now());
                 let active = handle.active_address();
-                handle.gamekeys.tick(
-                    SystemTime::now(),
-                    &cfg,
+                handle.gamekeys.tick(TickInput {
+                    now: SystemTime::now(),
+                    cfg: &cfg,
                     game,
-                    &place,
-                    &send,
-                    active.as_deref(),
+                    place: &place,
+                    send: &send,
+                    active: active.as_deref(),
                     ready,
-                );
+                });
                 std::thread::sleep(Duration::from_millis(200));
             }
         })
@@ -315,7 +325,15 @@ mod tests {
         } else {
             None
         };
-        k.tick(now, cfg, game, place, send, dest, true);
+        k.tick(TickInput {
+            now,
+            cfg,
+            game,
+            place,
+            send,
+            active: dest,
+            ready: true,
+        });
     }
 
     #[test]

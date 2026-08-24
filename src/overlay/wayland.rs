@@ -373,19 +373,17 @@ impl App {
     fn pin_output(&mut self) {
         let want = self.wanted_output();
         let found = self.lookup_output(&want);
-        if !want.is_empty() && found.is_none() {
-            if self.warned_outputs.insert(want.clone()) {
-                let names: Vec<&str> = self
-                    .outputs
-                    .iter()
-                    .map(|o| o.name.as_str())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                eprintln!(
-                    "hud: no output named {want:?} (have {}); using compositor default",
-                    names.join(", ")
-                );
-            }
+        if !want.is_empty() && found.is_none() && self.warned_outputs.insert(want.clone()) {
+            let names: Vec<&str> = self
+                .outputs
+                .iter()
+                .map(|o| o.name.as_str())
+                .filter(|s| !s.is_empty())
+                .collect();
+            eprintln!(
+                "hud: no output named {want:?} (have {}); using compositor default",
+                names.join(", ")
+            );
         }
         let pin_name = if found.is_some() { want } else { String::new() };
         if pin_name == self.pinned_output && self.layer_surface.is_some() {

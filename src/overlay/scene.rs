@@ -187,11 +187,15 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
         push_lines(
             &mut scene,
             xf,
-            cfg.hud.margin_left + cfg.widget.challenges.x,
-            cfg.hud.margin_top + cfg.widget.challenges.y,
-            font_px(cfg, cfg.widget.challenges.font_size, xf),
-            widget_color(cfg, &cfg.widget.challenges.color, hud_a),
-            hud_a,
+            LineLayout {
+                at: [
+                    cfg.hud.margin_left + cfg.widget.challenges.x,
+                    cfg.hud.margin_top + cfg.widget.challenges.y,
+                ],
+                font_px: font_px(cfg, cfg.widget.challenges.font_size, xf),
+                default_color: widget_color(cfg, &cfg.widget.challenges.color, hud_a),
+                hud_a,
+            },
             &view.challenges,
         );
     }
@@ -201,11 +205,15 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
         push_lines(
             &mut scene,
             xf,
-            cfg.hud.margin_left + cfg.widget.bosses.x,
-            cfg.hud.margin_top + cfg.widget.bosses.y,
-            font_px(cfg, cfg.widget.bosses.font_size, xf),
-            color,
-            color[3],
+            LineLayout {
+                at: [
+                    cfg.hud.margin_left + cfg.widget.bosses.x,
+                    cfg.hud.margin_top + cfg.widget.bosses.y,
+                ],
+                font_px: font_px(cfg, cfg.widget.bosses.font_size, xf),
+                default_color: color,
+                hud_a: color[3],
+            },
             &view.bosses,
         );
     }
@@ -250,19 +258,34 @@ fn push_text_group(
             ..Line::default()
         })
         .collect();
-    push_lines(scene, xf, ax, ay, font_px, color, color[3], &lines);
+    push_lines(
+        scene,
+        xf,
+        LineLayout {
+            at: [ax, ay],
+            font_px,
+            default_color: color,
+            hud_a: color[3],
+        },
+        &lines,
+    );
 }
 
-fn push_lines(
-    scene: &mut Scene,
-    xf: Transform,
-    ax: i32,
-    ay: i32,
+#[derive(Clone, Copy)]
+struct LineLayout {
+    at: [i32; 2],
     font_px: f32,
     default_color: [f32; 4],
     hud_a: f32,
-    rows: &[Line],
-) {
+}
+
+fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line]) {
+    let LineLayout {
+        at: [ax, ay],
+        font_px,
+        default_color,
+        hud_a,
+    } = layout;
     let (x, mut y) = xf.point(ax as f32, ay as f32);
     for row in rows {
         y += xf.size(row.extra_ascent_px);

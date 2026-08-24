@@ -232,7 +232,7 @@ fn parse_font(
     }
     Ok(Font {
         data,
-        fallback: fallback.then(|| Cow::Borrowed(BUNDLED_TTF)),
+        fallback: fallback.then_some(Cow::Borrowed(BUNDLED_TTF)),
         ctx: RefCell::new(ScaleContext::new()),
         name,
     })
@@ -243,7 +243,9 @@ fn image_to_rgb(image: &swash::scale::image::Image) -> Vec<u8> {
     match image.content {
         Content::SubpixelMask | Content::Color if image.data.len() >= n * 4 => image
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .take(n)
             .flat_map(|p| [p[0], p[1], p[2]])
             .collect(),
@@ -459,9 +461,9 @@ fn px_key(px: f32) -> u16 {
 
 fn dilate_rgb(src: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
     let mut cov = vec![0u8; (w * h) as usize];
-    for i in 0..cov.len() {
+    for (i, value) in cov.iter_mut().enumerate() {
         let o = i * RGB;
-        cov[i] = src[o].max(src[o + 1]).max(src[o + 2]);
+        *value = src[o].max(src[o + 1]).max(src[o + 2]);
     }
     let (gray, ow, oh) = dilate(&cov, w, h);
     let mut rgb = vec![0u8; gray.len() * RGB];

@@ -603,7 +603,7 @@ fn create_pipe(path: &str, first: bool) -> io::Result<windows_sys::Win32::Founda
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    let mut sa = SECURITY_ATTRIBUTES {
+    let sa = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: sd,
         bInheritHandle: 0,
@@ -621,7 +621,7 @@ fn create_pipe(path: &str, first: bool) -> io::Result<windows_sys::Win32::Founda
             MAX_FRAME + 8,
             MAX_FRAME + 8,
             0,
-            &mut sa,
+            &sa,
         )
     };
     unsafe { LocalFree(sd as _) };

@@ -15,6 +15,7 @@ use crate::model::GameState;
 use crate::wake::Notify;
 
 pub const DEFAULT_PROCESS: &str = "DeadFrontier.exe";
+type GameChangeHandler = Arc<dyn Fn(GameState) + Send + Sync>;
 
 pub fn base_name(p: &str) -> &str {
     match p.rfind(['/', '\\']) {
@@ -36,7 +37,7 @@ pub struct Watcher {
     scanner: Mutex<Box<dyn Scanner>>,
     interval: Mutex<Duration>,
     state: Mutex<GameState>,
-    on_change: Mutex<Option<Arc<dyn Fn(GameState) + Send + Sync>>>,
+    on_change: Mutex<Option<GameChangeHandler>>,
     poke: Notify,
 }
 

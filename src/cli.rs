@@ -580,9 +580,9 @@ pub fn dump_record_fields(vars: &std::collections::HashMap<String, String>) -> S
     out
 }
 
-fn oneshot_setup(
-    config: Option<&Path>,
-) -> Result<(Config, std::sync::Arc<Creds>, Client, Store), Box<dyn Error>> {
+type OneshotContext = (Config, std::sync::Arc<Creds>, Client, Store);
+
+fn oneshot_setup(config: Option<&Path>) -> Result<OneshotContext, Box<dyn Error>> {
     let path = config
         .map(Path::to_path_buf)
         .unwrap_or_else(config::default_path);
@@ -881,7 +881,7 @@ mod tests {
             (1058, 1019, 0)
         );
         assert!(!view.outpost_attack);
-        assert!(view.challenges.as_ref().map_or(true, Vec::is_empty));
+        assert!(view.challenges.as_ref().is_none_or(Vec::is_empty));
         assert!(view.status.is_empty());
         assert_eq!(
             crate::overlay::present::hud_lines(

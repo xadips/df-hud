@@ -332,17 +332,9 @@ fn lone_hypr_socket(dirs: &[PathBuf], name: &str) -> Result<Option<PathBuf>, Str
     Ok(None)
 }
 
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(target_os = "linux")]
 pub fn hypr_command(cmd: &str) -> Result<Vec<u8>, String> {
-    #[cfg(unix)]
-    {
-        hypr_command_at(&hypr_socket_path(".socket.sock")?, cmd)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = cmd;
-        Err("hyprland socket is only available on Unix".into())
-    }
+    hypr_command_at(&hypr_socket_path(".socket.sock")?, cmd)
 }
 
 #[cfg(unix)]
@@ -1094,7 +1086,6 @@ mod tests {
                 id: -98,
                 name: "special:magic".into(),
             },
-            ..HyprMonitor::default()
         }];
         assert!(find_game_window(&windows, &monitors, 5, &Match::default()).on_active_workspace);
         monitors[0].special_workspace.id = 0;

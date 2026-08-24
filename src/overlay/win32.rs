@@ -153,15 +153,17 @@ fn show_fatal_task_dialog(err: &str, log: &Path) -> bool {
             pszButtonText: close_label.as_ptr(),
         },
     ];
-    let mut cfg = TASKDIALOGCONFIG::default();
-    cfg.cbSize = size_of::<TASKDIALOGCONFIG>() as u32;
-    cfg.pszWindowTitle = title.as_ptr();
-    cfg.pszMainInstruction = instruction.as_ptr();
-    cfg.pszContent = content.as_ptr();
-    cfg.cButtons = buttons.len() as u32;
-    cfg.pButtons = buttons.as_ptr();
-    cfg.nDefaultButton = ID_CLOSE;
-    cfg.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+    let mut cfg = TASKDIALOGCONFIG {
+        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
+        pszWindowTitle: title.as_ptr(),
+        pszMainInstruction: instruction.as_ptr(),
+        pszContent: content.as_ptr(),
+        cButtons: buttons.len() as u32,
+        pButtons: buttons.as_ptr(),
+        nDefaultButton: ID_CLOSE,
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT,
+        ..TASKDIALOGCONFIG::default()
+    };
     cfg.Anonymous1.pszMainIcon = TD_ERROR_ICON;
     let mut button = 0i32;
     let hr = unsafe { TaskDialogIndirect(&cfg, &mut button, ptr::null_mut(), ptr::null_mut()) };
