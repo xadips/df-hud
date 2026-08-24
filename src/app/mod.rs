@@ -1,5 +1,6 @@
 //! Composition root: catalog, creds, pollers, bridge, presence, overlay handle.
 
+pub mod autostart;
 pub mod groups;
 pub mod hotkeys;
 pub mod poller;
@@ -159,20 +160,45 @@ impl Handle {
         self.presence.as_ref().is_some_and(|p| p.retry())
     }
 
-    pub fn reload_config(&self) {
-        let path = self
-            .cfg
+    pub fn config_file_path(&self) -> std::path::PathBuf {
+        self.cfg
             .lock()
             .unwrap()
             .source_path()
             .map(|p| p.to_path_buf())
-            .unwrap_or_else(crate::config::default_path);
+            .unwrap_or_else(crate::config::default_path)
+    }
+
+    pub fn reload_config(&self) {
+        let path = self.config_file_path();
         match Config::load(&path) {
             Ok(cfg) => {
                 eprintln!("reloaded {}", path.display());
                 self.replace_config(cfg);
             }
             Err(err) => eprintln!("config reload failed: {err}"),
+        }
+    }
+
+    pub fn open_config(&self) {
+        let path = self.config_file_path();
+        if let Err(err) = autostart::open_file(&path) {
+            eprintln!("tray: could not open config file: {err}");
+        }
+    }
+
+    pub fn start_on_login(&self) -> bool {
+        autostart::enabled().unwrap_or(false)
+    }
+
+    pub fn set_start_on_login(&self, on: bool) {
+        match autostart::set_enabled(on) {
+            Ok(()) => {
+                if cfg!(windows) {
+                    eprintln!("tray: Windows startup enabled: {on}");
+                }
+            }
+            Err(err) => eprintln!("tray: could not update Windows startup: {err}"),
         }
     }
 }
@@ -237,6 +263,9 @@ pub fn start_with(
     cfg: Config,
     print: PrintOpts,
 ) -> Result<Arc<Handle>, Box<dyn std::error::Error>> {
+    if let Err(err) = autostart::reconcile() {
+        eprintln!("startup: could not refresh login launch entry: {err}");
+    }
     let (creds, catalog) = load_creds_and_catalog(&cfg)?;
     if let Some(c) = &catalog {
         eprintln!("catalog: {}", c.summary());
