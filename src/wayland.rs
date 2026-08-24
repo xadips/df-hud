@@ -339,7 +339,7 @@ impl App {
         }
         let view = match &self.handle {
             Some(h) => present::from_view(&h.store.derive(Utc::now()), &self.cfg, &h.groups),
-            None => present::blank(),
+            None => scene::View::default(),
         };
         let built = scene::build(
             &view,

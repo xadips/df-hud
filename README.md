@@ -579,9 +579,6 @@ Linux and writes `dist/df-hud-<version>-windows-amd64.zip`. On Windows,
 `build-windows.ps1 -Version ...` creates the same package from a native
 `cargo build --release`.
 
-`make smoke-windows` can check a packaged executable's version and configuration
-paths through Wine.
-
 Manual and tagged GitHub Actions runs build both archives. A `v*` tag publishes
 both as release assets.
 

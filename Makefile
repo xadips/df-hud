@@ -13,7 +13,6 @@ BIN     := df-hud
 PREFIX  ?= $(HOME)/.local
 BINDIR  := $(PREFIX)/bin
 UNITDIR ?= $(HOME)/.config/systemd/user
-WINE    ?= wine
 CARGO   ?= cargo
 RELEASE := target/release/$(BIN)
 
@@ -23,7 +22,7 @@ RELEASE := target/release/$(BIN)
 REV     := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 VERSION ?= 0.1.0-dev+$(REV)
 
-.PHONY: all build test check package-linux package-windows smoke-windows install uninstall enable disable restart logs status clean
+.PHONY: all build test check package-linux package-windows install uninstall enable disable restart logs status clean
 
 all: build
 
@@ -44,11 +43,6 @@ package-linux:
 package-windows:
 	sh ./build-windows.sh "$(VERSION)"
 	@test -f "dist/df-hud-$(VERSION)-windows-amd64.zip"
-
-smoke-windows:
-	cd "dist/df-hud-$(VERSION)-windows-amd64" && \
-		WINEDEBUG=-all $(WINE) ./df-hud.exe -version && \
-		WINEDEBUG=-all $(WINE) ./df-hud.exe -check-config
 
 install: build
 	install -Dm755 $(RELEASE) $(BINDIR)/$(BIN)

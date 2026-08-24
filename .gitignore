@@ -20,6 +20,7 @@ positions.ndjson
 /windows-vm/.env
 /windows-vm/.ssh/
 
-# Editor / agent scratch. Rules under .cursor/rules/ stay tracked.
+# Editor / agent scratch.
 .cursor/plans/
+.cursor/rules/
 .vscode/

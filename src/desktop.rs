@@ -1,8 +1,13 @@
 //! Compositor / Win32 placement.
 //! Hyprland talks to the Unix socket, not the `hyprctl` binary.
 
+#[cfg(any(test, target_os = "linux"))]
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+#[cfg(any(test, target_os = "linux"))]
+use std::path::PathBuf;
+#[cfg(any(test, target_os = "linux"))]
 use std::sync::Mutex;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -99,6 +104,7 @@ impl Client for NullClient {
     }
 }
 
+#[cfg(any(test, target_os = "linux"))]
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct HyprWindow {
     #[serde(default)]
@@ -117,6 +123,7 @@ pub struct HyprWindow {
     pub workspace: HyprWorkspace,
 }
 
+#[cfg(any(test, target_os = "linux"))]
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct HyprWorkspace {
     #[serde(default)]
@@ -125,6 +132,7 @@ pub struct HyprWorkspace {
     pub name: String,
 }
 
+#[cfg(any(test, target_os = "linux"))]
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct HyprMonitor {
     #[serde(default)]
@@ -137,6 +145,7 @@ pub struct HyprMonitor {
     pub special_workspace: HyprWorkspace,
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub fn find_game_window(
     windows: &[HyprWindow],
     monitors: &[HyprMonitor],
@@ -209,6 +218,7 @@ pub fn find_game_window(
     }
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub fn send_key_validate(key: &str, address: &str) -> Result<(), String> {
     if !hypr_key_ok(key) {
         return Err(format!("hyprland: {key:?} is not a plain key name"));
@@ -219,10 +229,12 @@ pub fn send_key_validate(key: &str, address: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn hypr_key_ok(key: &str) -> bool {
     !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn hypr_address_ok(address: &str) -> bool {
     let rest = match address.strip_prefix("0x") {
         Some(r) => r,
@@ -231,6 +243,7 @@ fn hypr_address_ok(address: &str) -> bool {
     !rest.is_empty() && rest.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+#[cfg(any(test, target_os = "linux"))]
 static HYPR_DIRS_OVERRIDE: Mutex<Option<Vec<PathBuf>>> = Mutex::new(None);
 
 #[cfg(test)]
@@ -238,6 +251,7 @@ pub fn set_hypr_dirs_for_testing(dirs: Option<Vec<PathBuf>>) {
     *HYPR_DIRS_OVERRIDE.lock().unwrap() = dirs;
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn hypr_dirs() -> Vec<PathBuf> {
     if let Some(dirs) = HYPR_DIRS_OVERRIDE.lock().unwrap().clone() {
         return dirs;
@@ -252,6 +266,7 @@ fn hypr_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub fn hypr_socket_path(name: &str) -> Result<PathBuf, String> {
     let dirs = hypr_dirs();
     let mut candidates = Vec::new();
@@ -288,6 +303,7 @@ pub fn hypr_socket_path(name: &str) -> Result<PathBuf, String> {
     ))
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn lone_hypr_socket(dirs: &[PathBuf], name: &str) -> Result<Option<PathBuf>, String> {
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -316,6 +332,7 @@ fn lone_hypr_socket(dirs: &[PathBuf], name: &str) -> Result<Option<PathBuf>, Str
     Ok(None)
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub fn hypr_command(cmd: &str) -> Result<Vec<u8>, String> {
     #[cfg(unix)]
     {

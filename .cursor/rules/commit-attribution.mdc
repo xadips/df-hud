@@ -1,9 +1,0 @@
----
-description: Keep commits free of AI co-author attribution
-alwaysApply: true
----
-
-# Commit Attribution
-
-- Never add `Co-authored-by`, `Signed-off-by`, or similar trailers identifying Cursor, an AI agent, or an AI model.
-- Use only the repository's existing user-configured Git identity.
