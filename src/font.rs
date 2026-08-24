@@ -38,6 +38,7 @@ const RGB: usize = 3;
 
 pub struct Font {
     data: Cow<'static, [u8]>,
+    fallback: Option<Cow<'static, [u8]>>,
     ctx: RefCell<ScaleContext>,
     pub name: String,
 }
@@ -78,16 +79,23 @@ pub struct Atlas {
 }
 
 impl Font {
-    pub fn load() -> Result<Self, Box<dyn Error>> {
-        if let Some((bytes, name)) = load_system_mono_bold() {
-            return parse_font(Cow::Owned(bytes), name);
+    pub fn load(want: Option<&str>) -> Result<Self, Box<dyn Error>> {
+        match try_load(want) {
+            Ok(font) => Ok(font),
+            Err(err) => {
+                eprintln!("font: {err}; using auto");
+                Ok(load_auto())
+            }
         }
-        parse_font(Cow::Borrowed(BUNDLED_TTF), BUNDLED_NAME.to_string())
     }
 
     fn font_ref(&self) -> Result<FontRef<'_>, Box<dyn Error>> {
         FontRef::from_index(self.data.as_ref(), 0)
             .ok_or_else(|| format!("{}: not a TTF/OTF", self.name).into())
+    }
+
+    fn fallback_ref(&self) -> Option<FontRef<'_>> {
+        FontRef::from_index(self.fallback.as_deref()?, 0)
     }
 
     pub fn ascent(&self, px: f32) -> f32 {
@@ -98,40 +106,110 @@ impl Font {
     }
 
     fn rasterize(&self, ch: char, px: f32, lcd: bool) -> Raster {
-        let Ok(font) = self.font_ref() else {
+        let Ok(primary) = self.font_ref() else {
             return Raster::empty();
         };
-        let id = font.charmap().map(ch);
-        let advance = font.glyph_metrics(&[]).scale(px).advance_width(id);
-        let mut ctx = self.ctx.borrow_mut();
-        let mut scaler = ctx.builder(font).size(px).hint(true).build();
-        let format = if lcd {
-            Format::Subpixel
-        } else {
-            Format::Alpha
-        };
-        let Some(image) = Render::new(&[Source::Outline])
-            .format(format)
-            .render(&mut scaler, id)
-        else {
-            return Raster {
-                width: 0,
-                height: 0,
-                xmin: 0,
-                top: 0,
-                advance,
-                rgb: Vec::new(),
-            };
-        };
-        let rgb = image_to_rgb(&image);
-        Raster {
-            width: image.placement.width,
-            height: image.placement.height,
-            xmin: image.placement.left,
-            top: image.placement.top,
-            advance,
-            rgb,
+        let id = primary.charmap().map(ch);
+        if id != 0 || ch == '\0' {
+            return rasterize_ref(&self.ctx, primary, id, px, lcd);
         }
+        if let Some(fb) = self.fallback_ref() {
+            let fid = fb.charmap().map(ch);
+            if fid != 0 {
+                return rasterize_ref(&self.ctx, fb, fid, px, lcd);
+            }
+        }
+        rasterize_ref(&self.ctx, primary, id, px, lcd)
+    }
+}
+
+pub(crate) fn try_load(want: Option<&str>) -> Result<Font, Box<dyn Error>> {
+    let want = want.map(str::trim).filter(|s| !s.is_empty());
+    match want {
+        None => Ok(load_auto()),
+        Some(want) => load_named(want),
+    }
+}
+
+fn load_auto() -> Font {
+    if let Some((bytes, name)) = load_system_mono_bold() {
+        return parse_font(Cow::Owned(bytes), name, true).expect("system TTF");
+    }
+    parse_font(Cow::Borrowed(BUNDLED_TTF), BUNDLED_NAME.to_string(), false).expect("bundled TTF")
+}
+
+fn load_named(want: &str) -> Result<Font, Box<dyn Error>> {
+    let path = resolve_font_path(want)?;
+    let Some((bytes, name)) = read_ttf(&path) else {
+        return Err(format!("{}: not a TTF/OTF", path.display()).into());
+    };
+    parse_font(Cow::Owned(bytes), name, true)
+}
+
+fn resolve_font_path(want: &str) -> Result<PathBuf, Box<dyn Error>> {
+    if looks_like_path(want) {
+        let path = PathBuf::from(crate::config::expand_home(want));
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(format!("{}: not found", path.display()).into());
+    }
+    let base = Path::new(want)
+        .file_name()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(want));
+    for dir in font_dirs() {
+        let path = dir.join(&base);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Err(format!("{want}: not found in font dirs").into())
+}
+
+fn looks_like_path(want: &str) -> bool {
+    want.starts_with('~')
+        || want.contains('/')
+        || want.contains('\\')
+        || Path::new(want).is_absolute()
+}
+
+fn rasterize_ref(
+    ctx: &RefCell<ScaleContext>,
+    font: FontRef<'_>,
+    id: u16,
+    px: f32,
+    lcd: bool,
+) -> Raster {
+    let advance = font.glyph_metrics(&[]).scale(px).advance_width(id);
+    let mut ctx = ctx.borrow_mut();
+    let mut scaler = ctx.builder(font).size(px).hint(true).build();
+    let format = if lcd {
+        Format::Subpixel
+    } else {
+        Format::Alpha
+    };
+    let Some(image) = Render::new(&[Source::Outline])
+        .format(format)
+        .render(&mut scaler, id)
+    else {
+        return Raster {
+            width: 0,
+            height: 0,
+            xmin: 0,
+            top: 0,
+            advance,
+            rgb: Vec::new(),
+        };
+    };
+    let rgb = image_to_rgb(&image);
+    Raster {
+        width: image.placement.width,
+        height: image.placement.height,
+        xmin: image.placement.left,
+        top: image.placement.top,
+        advance,
+        rgb,
     }
 }
 
@@ -148,12 +226,17 @@ impl Raster {
     }
 }
 
-fn parse_font(data: Cow<'static, [u8]>, name: String) -> Result<Font, Box<dyn Error>> {
+fn parse_font(
+    data: Cow<'static, [u8]>,
+    name: String,
+    fallback: bool,
+) -> Result<Font, Box<dyn Error>> {
     if FontRef::from_index(data.as_ref(), 0).is_none() {
         return Err(format!("{name}: not a TTF/OTF").into());
     }
     Ok(Font {
         data,
+        fallback: fallback.then(|| Cow::Borrowed(BUNDLED_TTF)),
         ctx: RefCell::new(ScaleContext::new()),
         name,
     })
@@ -428,7 +511,7 @@ mod tests {
 
     #[test]
     fn load_rasterizes_map_glyphs() {
-        let font = Font::load().unwrap();
+        let font = Font::load(None).unwrap();
         for ch in ['I', 'B', 'Δ', '▼', 'M'] {
             let g = font.rasterize(ch, 18.0, true);
             assert!(g.width > 0 && g.height > 0, "{ch} empty in {}", font.name);
@@ -438,7 +521,7 @@ mod tests {
 
     #[test]
     fn linux_prefers_a_system_mono_when_present() {
-        let font = Font::load().unwrap();
+        let font = Font::load(None).unwrap();
         if Path::new("/usr/share/fonts/noto/NotoSansMono-Bold.ttf").is_file() {
             assert!(
                 font.name.to_ascii_lowercase().contains("noto"),
@@ -446,5 +529,26 @@ mod tests {
                 font.name
             );
         }
+    }
+
+    #[test]
+    fn missing_file_falls_back_to_auto() {
+        let font = Font::load(Some("/no/such/df-hud-font.ttf")).unwrap();
+        let g = font.rasterize('A', 18.0, true);
+        assert!(g.width > 0 && g.height > 0, "empty in {}", font.name);
+    }
+
+    #[test]
+    fn basename_finds_a_system_mono() {
+        let path = Path::new("/usr/share/fonts/noto/NotoSansMono-Bold.ttf");
+        if !path.is_file() {
+            return;
+        }
+        let font = try_load(Some("NotoSansMono-Bold.ttf")).unwrap();
+        assert!(
+            font.name.to_ascii_lowercase().contains("noto"),
+            "got {}",
+            font.name
+        );
     }
 }

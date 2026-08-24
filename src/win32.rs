@@ -503,7 +503,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let win = OverlayWindow::create(instance, monitor)?;
     let surface = GlSurface::create(instance, win.hwnd)?;
     let gl = unsafe { Glow::from_loader_function(|name| surface.load_proc(name)) };
-    let mut gpu = Gpu::new(gl, buf_w, buf_h)?;
+    let mut gpu = Gpu::new(gl, buf_w, buf_h, &watch.cfg.hud.font)?;
     win.extend_dwm_frame()?;
     win.reassert_exstyle();
     win.show()?;
@@ -547,6 +547,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
             needs_present = true;
             if watch.poll() {
                 handle.replace_config(watch.cfg.clone());
+                gpu.set_font(&watch.cfg.hud.font);
             }
         }
         let vis = handle.visible.load(Ordering::SeqCst);

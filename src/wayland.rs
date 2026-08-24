@@ -694,7 +694,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
     app.apply_viewport();
     let surface_id = app.surface.as_ref().expect("surface").id();
     let (gl_window, gl) = GlWindow::new(display_ptr, surface_id, buf_w, buf_h)?;
-    app.gpu = Some(Gpu::new(gl, buf_w, buf_h)?);
+    app.gpu = Some(Gpu::new(gl, buf_w, buf_h, &watch.cfg.hud.font)?);
     app.gl_window = Some(gl_window);
 
     eprintln!(
@@ -736,6 +736,9 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
                 app.cfg = watch.cfg.clone();
                 if let Some(h) = &app.handle {
                     h.replace_config(app.cfg.clone());
+                }
+                if let Some(gpu) = &mut app.gpu {
+                    gpu.set_font(&app.cfg.hud.font);
                 }
             }
         }

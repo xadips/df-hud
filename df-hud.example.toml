@@ -229,7 +229,11 @@ margin_right = 0
 margin_bottom = 0
 margin_left = 0
 
-font_family = "Courier New, monospace"
+# Empty picks a system monospace bold (Noto / Liberation / DejaVu), then bundled
+# Go Mono. A path or a filename searched in the usual font dirs:
+# font = "JetBrainsMono-Bold.ttf"
+# font = "~/fonts/JetBrainsMono-Bold.ttf"
+font = ""
 font_size = 12
 text_color = "#e6cc4d"
 opacity = 1.0
@@ -312,8 +316,9 @@ enabled = true
 # against the game's own interface, so on another resolution they are the first
 # thing to change.
 #
-# font_family, font_size and color are optional per group - zero, absent or empty
-# means "use the [hud] values".
+# font_size and color are optional per group - zero, absent or empty means
+# "use the [hud] values". The overlay is one face (`hud.font`); groups do not
+# pick their own.
 #
 # A group's color is its NORMAL colour. The colours that carry meaning still win:
 # the error banner's red, an outpost attack's red, the amber on a block with
@@ -373,7 +378,6 @@ show_nearest = true
 enabled = true
 x = 350
 y = 60
-font_family = ""
 font_size = 0
 color = "#ffffff"
 prefix = "IC Time: "
@@ -465,8 +469,7 @@ show_list = true
 # than clipped by the edge of the screen.
 max_listed = 10
 
-# Font and colour for that list. Empty inherits from [hud].
-font_family = ""
+# Font size and colour for that list. Zero / empty inherit from [hud].
 font_size = 0
 color = "#e8e8e8"
 
