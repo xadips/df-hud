@@ -29,7 +29,12 @@ pub enum IconKind {
     Error,
 }
 
-pub fn tooltip(view: Option<&View>, vis: Visibility) -> String {
+pub fn version_label() -> String {
+    format!("df-hud {}", env!("CARGO_PKG_VERSION"))
+}
+
+#[cfg(test)]
+fn tooltip(view: Option<&View>, vis: Visibility) -> String {
     tooltip_with_version(view, vis, "")
 }
 
@@ -70,7 +75,7 @@ pub fn tooltip_with_presence(
     bind_failed: bool,
     ipc_missing: bool,
 ) -> String {
-    let mut tip = tooltip(view, vis);
+    let mut tip = tooltip_with_version(view, vis, env!("CARGO_PKG_VERSION"));
     if bind_failed {
         tip.push_str("\nDiscord IPC unavailable - close Discord and retry the bind");
     } else if ipc_missing {
@@ -346,6 +351,30 @@ mod linux {
                     .into(),
                 );
             }
+            if crate::app::autostart::available() {
+                items.push(
+                    CheckmarkItem {
+                        label: "Start df-hud with Windows".into(),
+                        checked: self.handle.start_on_login(),
+                        activate: Box::new(|this: &mut HudTray| {
+                            this.handle
+                                .set_start_on_login(!this.handle.start_on_login());
+                        }),
+                        ..CheckmarkItem::default()
+                    }
+                    .into(),
+                );
+            }
+            if cfg!(windows) {
+                items.push(
+                    StandardItem {
+                        label: "Open config file".into(),
+                        activate: Box::new(|this: &mut HudTray| this.handle.open_config()),
+                        ..StandardItem::default()
+                    }
+                    .into(),
+                );
+            }
             items.push(
                 StandardItem {
                     label: "Reload config".into(),
@@ -355,6 +384,14 @@ mod linux {
                 .into(),
             );
             items.push(MenuItem::Separator);
+            items.push(
+                StandardItem {
+                    label: version_label(),
+                    enabled: false,
+                    ..StandardItem::default()
+                }
+                .into(),
+            );
             items.push(
                 StandardItem {
                     label: "Quit df-hud".into(),
@@ -474,7 +511,8 @@ mod windows {
         CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow,
         DispatchMessageW, GetCursorPos, InsertMenuW, LoadCursorW, PeekMessageW, PostQuitMessage,
         RegisterClassExW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
-        CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
+        CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_SEPARATOR,
+        MF_STRING, MF_UNCHECKED,
         TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSEXW,
         WS_OVERLAPPED,
     };
@@ -488,6 +526,8 @@ mod windows {
     const ID_RUN: u16 = 21;
     const ID_RETRY: u16 = 23;
     const ID_RELOAD: u16 = 24;
+    const ID_STARTUP: u16 = 25;
+    const ID_OPEN_CONFIG: u16 = 26;
     const ID_QUIT: u16 = 22;
 
     struct Ctx {
@@ -695,6 +735,23 @@ mod windows {
                 wide("Retry Discord IPC bind").as_ptr(),
             );
         }
+        if crate::app::autostart::available() {
+            let startup = ctx.handle.start_on_login();
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING | if startup { MF_CHECKED } else { MF_UNCHECKED },
+                ID_STARTUP as usize,
+                wide("Start df-hud with Windows").as_ptr(),
+            );
+        }
+        InsertMenuW(
+            menu,
+            u32::MAX,
+            MF_STRING,
+            ID_OPEN_CONFIG as usize,
+            wide("Open config file").as_ptr(),
+        );
         InsertMenuW(
             menu,
             u32::MAX,
@@ -703,6 +760,13 @@ mod windows {
             wide("Reload config").as_ptr(),
         );
         InsertMenuW(menu, u32::MAX, MF_SEPARATOR, 0, ptr::null());
+        InsertMenuW(
+            menu,
+            u32::MAX,
+            MF_STRING | MF_GRAYED | MF_DISABLED,
+            0,
+            wide(&version_label()).as_ptr(),
+        );
         InsertMenuW(
             menu,
             u32::MAX,
@@ -738,6 +802,8 @@ mod windows {
             ID_RETRY => {
                 let _ = h.retry_presence();
             }
+            ID_STARTUP => h.set_start_on_login(!h.start_on_login()),
+            ID_OPEN_CONFIG => h.open_config(),
             ID_RELOAD => h.reload_config(),
             ID_QUIT => h.request_stop(),
             _ => {}
@@ -806,6 +872,15 @@ mod tests {
         assert!(lines[0].starts_with("df-hud: in the city"), "{}", lines[0]);
         assert!(
             tooltip_with_version(Some(&playing), vis.clone(), "1.2.3").contains("version 1.2.3")
+        );
+        assert_eq!(
+            version_label(),
+            format!("df-hud {}", env!("CARGO_PKG_VERSION"))
+        );
+        let live = tooltip_with_presence(Some(&playing), vis.clone(), false, false);
+        assert!(
+            live.contains(&format!("version {}", env!("CARGO_PKG_VERSION"))),
+            "{live}"
         );
         let stale = View {
             game_running: true,
