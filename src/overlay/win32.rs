@@ -9,7 +9,10 @@
 
 use std::collections::HashSet;
 use std::error::Error;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::mem::size_of;
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,7 +21,8 @@ use std::time::{Duration, Instant};
 use glow::Context as Glow;
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{
-    GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+    GetLastError, GENERIC_WRITE, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT, RECT,
+    WPARAM,
 };
 use windows_sys::Win32::Graphics::Dwm::{
     DwmEnableBlurBehindWindow, DwmExtendFrameIntoClientArea, DWM_BB_BLURREGION, DWM_BB_ENABLE,
@@ -28,7 +32,13 @@ use windows_sys::Win32::Graphics::Gdi::{
     CreateRectRgn, DeleteObject, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR,
     MONITORINFOEXW,
 };
-use windows_sys::Win32::System::Console::GetConsoleProcessList;
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+};
+use windows_sys::Win32::System::Console::{
+    AttachConsole, GetConsoleProcessList, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+    STD_OUTPUT_HANDLE,
+};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
     TaskDialogIndirect, MARGINS, TASKDIALOGCONFIG, TASKDIALOG_BUTTON,
@@ -90,9 +100,63 @@ pub fn wide(s: &str) -> Vec<u16> {
 const ID_OPEN_LOG: i32 = 100;
 const ID_CLOSE: i32 = 2;
 
-/// Explorer and the Run key allocate a console that vanishes on exit. Keep a
-/// dialog up so a bad config is readable. `cmd` / `cargo run` already have
-/// stderr; skip the box there.
+/// GUI subsystem: Explorer does not get a console. Attach the parent `cmd`
+/// when there is one; otherwise send stderr to `%LOCALAPPDATA%\df-hud\df-hud.log`.
+pub fn init_stdio() {
+    if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) } != 0 && bind_conout() {
+        return;
+    }
+    bind_log_file();
+}
+
+fn bind_conout() -> bool {
+    let name = wide("CONOUT$");
+    let h = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            ptr::null(),
+            OPEN_EXISTING,
+            0,
+            ptr::null_mut(),
+        )
+    };
+    if h.is_null() || h == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    unsafe {
+        SetStdHandle(STD_OUTPUT_HANDLE, h);
+        SetStdHandle(STD_ERROR_HANDLE, h);
+    }
+    true
+}
+
+fn bind_log_file() {
+    let Some(path) = fatal_log_path() else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) else {
+        return;
+    };
+    let h = file.as_raw_handle();
+    unsafe {
+        SetStdHandle(STD_OUTPUT_HANDLE, h);
+        SetStdHandle(STD_ERROR_HANDLE, h);
+    }
+    std::mem::forget(file);
+    let _ = writeln!(
+        std::io::stderr(),
+        "\n--- df-hud {} ---",
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+/// No console window on Explorer / Run. Keep a dialog up so a bad config is
+/// readable. `cmd` after AttachConsole already has stderr; skip the box there.
 pub fn fatal_alert(err: &str) {
     let log = write_fatal_log(err);
     if shared_console() {
@@ -122,7 +186,12 @@ fn write_fatal_log(err: &str) -> Option<PathBuf> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).ok()?;
     }
-    std::fs::write(&path, format!("{err}\n")).ok()?;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()?;
+    writeln!(f, "fatal: {err}").ok()?;
     Some(path)
 }
 

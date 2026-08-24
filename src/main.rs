@@ -1,3 +1,4 @@
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 //! Product overlay: GLES 3.0 on `zwlr_layer_shell_v1` / WGL layered HWND.
 //! Overlay stays `keyboard_interactivity = none` / `WS_EX_TRANSPARENT`.
 //! Hidden HUD unmaps the layer surface / hides the HWND. HTTP overlay toggle
@@ -30,6 +31,8 @@ mod overlay;
 mod wake;
 
 fn main() {
+    #[cfg(windows)]
+    overlay::win32::init_stdio();
     if let Err(err) = run() {
         eprintln!("{err}");
         #[cfg(windows)]
