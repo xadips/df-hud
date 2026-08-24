@@ -44,6 +44,7 @@ pub struct Handle {
     pub creds: Arc<Creds>,
     pub game: Arc<game::Watcher>,
     pub vis: Arc<visibility::Watcher>,
+    active_address: Mutex<Option<String>>,
     persist: Arc<state::Store>,
     stop: Arc<AtomicBool>,
     player: Arc<PlayerPoller>,
@@ -206,6 +207,14 @@ impl Handle {
 
     pub fn retry_presence(&self) -> bool {
         self.presence.as_ref().is_some_and(|p| p.retry())
+    }
+
+    pub fn active_address(&self) -> Option<String> {
+        self.active_address.lock().unwrap().clone()
+    }
+
+    fn refresh_active_address(&self) {
+        *self.active_address.lock().unwrap() = desktop::new_client().active_address();
     }
 
     pub fn config_file_path(&self) -> std::path::PathBuf {
@@ -376,7 +385,9 @@ pub fn start_with(
         (process, c.game.scan_interval.0)
     };
     let game = game::Watcher::new(&process, scan);
-    let query = Some(Arc::new(desktop::new_client()) as Arc<dyn visibility::Querier>);
+    let desktop_client = desktop::new_client();
+    let active_address = desktop_client.active_address();
+    let query = Some(Arc::new(desktop_client) as Arc<dyn visibility::Querier>);
     let vis = visibility::Watcher::new(game.clone(), cfg.clone(), query);
 
     let player = PlayerPoller::new(
@@ -412,6 +423,7 @@ pub fn start_with(
         creds: creds.clone(),
         game: game.clone(),
         vis: vis.clone(),
+        active_address: Mutex::new(active_address),
         persist: persist.clone(),
         stop: stop.clone(),
         player: player.clone(),
@@ -471,7 +483,13 @@ pub fn start_with(
         move || {
             let game = handle.game.clone();
             let vis = handle.vis.clone();
-            desktop::watch_events(stop, move || game.poke(), move || vis.poke());
+            let focus = handle.clone();
+            desktop::watch_events(
+                stop,
+                move || game.poke(),
+                move || vis.poke(),
+                move || focus.refresh_active_address(),
+            );
         }
     });
     tray::spawn(handle.clone(), stop.clone());

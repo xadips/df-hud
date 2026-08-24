@@ -96,8 +96,17 @@ jobs:
             exit 1
           fi
 
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy linux-gnu
+        run: cargo clippy --locked --target x86_64-unknown-linux-gnu
+
+      - name: Clippy windows-gnu
+        run: cargo clippy --locked --target x86_64-pc-windows-gnu
+
       - name: Test linux-gnu
         run: cargo test --locked --target x86_64-unknown-linux-gnu
 
-      - name: Check windows-gnu
-        run: cargo check --locked --target x86_64-pc-windows-gnu
+      - name: Compile windows-gnu tests
+        run: cargo test --locked --no-run --target x86_64-pc-windows-gnu

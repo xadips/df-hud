@@ -166,8 +166,8 @@ launcher_delay = 1
 [hotkeys]
 # Registered only while the real game window is focused, then released when you
 # alt-tab. Windows uses RegisterHotKey. Linux installs the same chords on
-# Hyprland through its Lua eval socket. Do not also load contrib/df-hud.lua:
-# a second copy of these chords races the binary.
+# Hyprland through its Lua eval socket. Do not duplicate them with compositor
+# binds; contrib/df-hud.hypr.conf now contains optional layer rules only.
 enabled = true
 
 # A bare key consumes that key before the game receives it, exactly like the

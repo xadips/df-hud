@@ -200,6 +200,18 @@ pub struct Store {
     inner: Mutex<Inner>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TrayHint {
+    pub game_running: bool,
+    pub has_session: bool,
+    pub session_time: Ns,
+    pub client_uptime: Ns,
+    pub have_data: bool,
+    pub xp_available: bool,
+    pub xp_per_hour: f64,
+    pub status: String,
+}
+
 impl Store {
     pub fn new(catalog: Option<Catalog>) -> Self {
         Self {
@@ -571,20 +583,52 @@ impl Store {
             let rate = xp::compute_rate(&samples, s.xp_min_samples, stability_locked(&s));
             apply_rate(&mut v, rate);
         }
-        if s.poller.stale {
-            v.status = "session expired - open any Dead Frontier page to refresh".into();
-            v.status_is_fix = true;
-        } else if s.creds_at.is_none() {
-            v.status = "waiting for the bridge script".into();
-            v.status_is_fix = true;
-        } else if s.poller.paused && !s.poller.pause_reason.is_empty() {
-            v.status = s.poller.pause_reason.clone();
-        } else if s.poller.failures > 0 {
-            v.status = "server not responding (retrying)".into();
-        } else if !s.have_snap {
-            v.status = "waiting for the first poll".into();
-        }
+        (v.status, v.status_is_fix) = status_locked(&s);
         v
+    }
+
+    pub fn tray_hint(&self, now: DateTime<Utc>) -> TrayHint {
+        let s = self.inner.lock().unwrap();
+        let mut hint = TrayHint {
+            game_running: s.game.running,
+            client_uptime: Ns::from_std(s.game.elapsed(now)),
+            have_data: s.have_snap,
+            ..TrayHint::default()
+        };
+        if s.game.running {
+            if let Some(start) = s.run_start {
+                hint.has_session = true;
+                if now > start {
+                    hint.session_time = Ns::from_chrono(now - start);
+                }
+            }
+        }
+        if let Some(get) = &s.xp_samples {
+            let rate = xp::compute_rate(&get(), s.xp_min_samples, stability_locked(&s));
+            hint.xp_available = rate.available;
+            hint.xp_per_hour = rate.per_hour;
+        }
+        hint.status = status_locked(&s).0;
+        hint
+    }
+}
+
+fn status_locked(s: &Inner) -> (String, bool) {
+    if s.poller.stale {
+        (
+            "session expired - open any Dead Frontier page to refresh".into(),
+            true,
+        )
+    } else if s.creds_at.is_none() {
+        ("waiting for the bridge script".into(), true)
+    } else if s.poller.paused && !s.poller.pause_reason.is_empty() {
+        (s.poller.pause_reason.clone(), false)
+    } else if s.poller.failures > 0 {
+        ("server not responding (retrying)".into(), false)
+    } else if !s.have_snap {
+        ("waiting for the first poll".into(), false)
+    } else {
+        (String::new(), false)
     }
 }
 
@@ -998,6 +1042,61 @@ mod tests {
         let v = s.derive(now);
         assert!(v.status.contains("session expired"));
         assert!(v.status_is_fix);
+    }
+
+    fn assert_tray_hint_matches_view(s: &Store, now: DateTime<Utc>) {
+        let view = s.derive(now);
+        let hint = s.tray_hint(now);
+        assert_eq!(hint.game_running, view.game_running);
+        assert_eq!(hint.has_session, view.has_session);
+        assert_eq!(hint.session_time, view.session_time);
+        assert_eq!(hint.client_uptime, view.client_uptime);
+        assert_eq!(hint.have_data, view.have_data);
+        assert_eq!(hint.xp_available, view.xp_available);
+        assert_eq!(hint.xp_per_hour, view.xp_per_hour);
+        assert_eq!(hint.status, view.status);
+    }
+
+    #[test]
+    fn tray_hint_matches_full_view_for_status_and_rate_states() {
+        let now = Utc::now();
+        let s = Store::new(None);
+        assert_tray_hint_matches_view(&s, now);
+
+        s.set_game(GameState {
+            running: true,
+            pid: 42,
+            started_at: Some(now - chrono::Duration::minutes(2)),
+        });
+        s.set_credentials_at(now);
+        s.apply_tick(Tick {
+            at: now,
+            vars: sample_player_record(),
+            err: None,
+            scheduled: true,
+        });
+        let samples = xp_samples(
+            now - chrono::Duration::seconds(30),
+            4,
+            chrono::Duration::seconds(10),
+            1_000_000,
+            1000,
+        );
+        s.set_xp_window(move || samples.clone(), 3);
+        assert_tray_hint_matches_view(&s, now);
+
+        s.set_poller_status(PollerStatus {
+            paused: true,
+            pause_reason: "paused for test".into(),
+            ..PollerStatus::default()
+        });
+        assert_tray_hint_matches_view(&s, now);
+        s.set_poller_status(PollerStatus {
+            stale: true,
+            failures: 3,
+            ..PollerStatus::default()
+        });
+        assert_tray_hint_matches_view(&s, now);
     }
 
     fn running_store(at: DateTime<Utc>) -> Store {

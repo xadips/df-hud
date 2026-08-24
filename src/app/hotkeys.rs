@@ -157,17 +157,25 @@ fn fire(handle: &crate::app::Handle, action: &str) {
 }
 
 fn game_focused(handle: &crate::app::Handle) -> bool {
-    if !handle.game_running.load(Ordering::SeqCst) {
+    focus_matches(
+        handle.game_running.load(Ordering::SeqCst),
+        &handle.vis.placement(),
+        handle.active_address().as_deref(),
+    )
+}
+
+fn focus_matches(
+    game_running: bool,
+    place: &crate::game::desktop::Placement,
+    active: Option<&str>,
+) -> bool {
+    if !game_running {
         return false;
     }
-    let place = handle.vis.placement();
     if !place.known || place.address.is_empty() {
         return false;
     }
-    crate::game::desktop::new_client()
-        .active_address()
-        .as_deref()
-        == Some(place.address.as_str())
+    active == Some(place.address.as_str())
 }
 
 #[cfg(target_os = "linux")]
@@ -253,7 +261,7 @@ mod linux {
                     _ => {}
                 }
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(200));
         }
         unbind_all(&mut bound);
         let _ = fs::remove_file(&fifo);
@@ -528,5 +536,22 @@ mod tests {
         assert!(parse_binding("Nope").is_err());
         assert!(parse_binding("W").unwrap().is_wasd());
         assert!(!parse_binding("V").unwrap().is_wasd());
+    }
+
+    #[test]
+    fn focus_match_uses_shared_active_address() {
+        let place = crate::game::desktop::Placement {
+            known: true,
+            address: "0xabc".into(),
+            ..crate::game::desktop::Placement::default()
+        };
+        assert!(focus_matches(true, &place, Some("0xabc")));
+        assert!(!focus_matches(true, &place, Some("0xdef")));
+        assert!(!focus_matches(false, &place, Some("0xabc")));
+        assert!(!focus_matches(
+            true,
+            &crate::game::desktop::Placement::default(),
+            Some("0xabc")
+        ));
     }
 }

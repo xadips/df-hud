@@ -58,6 +58,30 @@ jobs:
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Build Linux archive
         run: make package-linux VERSION="$VERSION"
+      - name: Verify Linux package
+        run: |
+          archive="dist/df-hud-$VERSION-linux-amd64.tar.gz"
+          stage="dist/df-hud-$VERSION-linux-amd64"
+          base="$(basename "$stage")"
+
+          tar -tzf "$archive" | sort > package-files.txt
+          printf '%s\n' \
+            "$base/" \
+            "$base/LICENSE" \
+            "$base/df-hud" \
+            "$base/df-hud.example.toml" \
+            "$base/df-hud.service" \
+            | sort > expected-files.txt
+          diff -u expected-files.txt package-files.txt
+
+          ldd "$stage/df-hud" | awk '{ print tolower($0) }' > imports.txt
+          if awk '/gtk|gdk|glib|gobject|cairo|pango/ { found=1 } END { exit !found }' imports.txt; then
+            echo "unexpected GUI dependency:"
+            awk '/gtk|gdk|glib|gobject|cairo|pango/' imports.txt
+            exit 1
+          fi
+
+          "$stage/df-hud" --check-config --config "$stage/df-hud.example.toml"
       - uses: actions/upload-artifact@v7
         with:
           name: df-hud-${{ steps.version.outputs.version }}-linux-amd64
@@ -108,6 +132,12 @@ jobs:
           if awk '/gtk|glib|gobject|cairo|pango/ { found=1 } END { exit !found }' imports.txt; then
             echo "unexpected GTK dependency:"
             awk '/gtk|glib|gobject|cairo|pango/' imports.txt
+            exit 1
+          fi
+
+          if ! x86_64-w64-mingw32-objdump -h "$stage/df-hud.exe" \
+            | awk '$2 == ".rsrc" { found=1 } END { exit !found }'; then
+            echo "Windows manifest resource is missing"
             exit 1
           fi
       - uses: actions/upload-artifact@v7

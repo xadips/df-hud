@@ -63,10 +63,9 @@ you want it (the overlay is hidden by workspace, not by focus, so a window in
 front of the game on the same workspace still has the HUD over it). Keep off
 the function keys and the number row, which Dead Frontier uses itself.
 
-Do not also load [contrib/df-hud.lua](contrib/df-hud.lua): the binary already
-binds from `[hotkeys]`, and a second compositor copy of the same chords races
-it. Layer-shell rules in that file and in
-[contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf) are optional.
+The binary owns these chords; do not duplicate them with compositor binds.
+Optional no-animation/no-blur layer rules remain in
+[contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf).
 
 The tray menu offers the same corrections, and the two stay in step: toggle the
 overlay or the challenge board from a key and the tray's tick follows.
