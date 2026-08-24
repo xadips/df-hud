@@ -33,22 +33,21 @@ impl Duration {
     pub fn from_secs(n: u64) -> Self {
         Self(StdDuration::from_secs(n))
     }
-
-    fn parse(raw: &str) -> Result<Self, String> {
-        parse_go_duration(raw).map(Self)
-    }
 }
 
 impl Serialize for Duration {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&format_go_duration(self.0))
+        s.serialize_u64(self.0.as_secs())
     }
 }
 
 impl<'de> Deserialize<'de> for Duration {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let raw = String::deserialize(d)?;
-        Duration::parse(&raw).map_err(de::Error::custom)
+        let n = i64::deserialize(d)?;
+        if n < 0 {
+            return Err(de::Error::custom("seconds cannot be negative"));
+        }
+        Ok(Duration::from_secs(n as u64))
     }
 }
 
@@ -351,7 +350,7 @@ impl Default for Config {
                 process: DEFAULT_GAME_PROCESS.into(),
                 window_class: String::new(),
                 window_title_ignore: vec!["configuration".into()],
-                scan_interval: Duration(StdDuration::from_millis(500)),
+                scan_interval: Duration::from_secs(1),
             },
             game_keys: GameKeys {
                 fps_display: false,
@@ -360,7 +359,7 @@ impl Default for Config {
                 dismiss_launcher: false,
                 launcher_key: "Return".into(),
                 launcher_title: "Dead Frontier Configuration".into(),
-                launcher_delay: Duration(StdDuration::from_millis(500)),
+                launcher_delay: Duration::from_secs(1),
             },
             hotkeys: Hotkeys {
                 enabled: true,
@@ -763,8 +762,8 @@ impl Config {
         if self.poll.idle_interval.0 < self.poll.active_interval.0 {
             errs.push(format!(
                 "poll.idle_interval ({}) is shorter than poll.active_interval ({}): idle would poll harder than playing, which is backwards",
-                format_go_duration(self.poll.idle_interval.0),
-                format_go_duration(self.poll.active_interval.0)
+                secs_label(self.poll.idle_interval.0),
+                secs_label(self.poll.active_interval.0)
             ));
         }
         if self.poll.jitter < 0.0 || self.poll.jitter > CEIL_JITTER {
@@ -776,8 +775,8 @@ impl Config {
         if self.poll.backoff_max.0 < self.poll.active_interval.0 {
             errs.push(format!(
                 "poll.backoff_max ({}) must be at least poll.active_interval ({})",
-                format_go_duration(self.poll.backoff_max.0),
-                format_go_duration(self.poll.active_interval.0)
+                secs_label(self.poll.backoff_max.0),
+                secs_label(self.poll.active_interval.0)
             ));
         }
         self.game.process = self.game.process.trim().to_string();
@@ -794,7 +793,7 @@ impl Config {
             &mut errs,
             "game.scan_interval",
             self.game.scan_interval.0,
-            StdDuration::from_millis(250),
+            StdDuration::from_secs(1),
             StdDuration::from_secs(5 * 60),
         );
         self.game_keys.fps_key = self.game_keys.fps_key.trim().to_string();
@@ -852,8 +851,8 @@ impl Config {
             if self.bossmap.max_interval.0 < self.bossmap.interval.0 {
                 errs.push(format!(
                     "bossmap.max_interval ({}) is shorter than bossmap.interval ({})",
-                    format_go_duration(self.bossmap.max_interval.0),
-                    format_go_duration(self.bossmap.interval.0)
+                    secs_label(self.bossmap.max_interval.0),
+                    secs_label(self.bossmap.interval.0)
                 ));
             }
         }
@@ -988,8 +987,8 @@ fn push_floor(errs: &mut Vec<String>, key: &str, got: StdDuration, floor: StdDur
     if got < floor {
         errs.push(format!(
             "{key} is {}, below the {} minimum: this decides how often df-hud hits somebody's server, so it is rejected rather than quietly raised",
-            format_go_duration(got),
-            format_go_duration(floor)
+            secs_label(got),
+            secs_label(floor)
         ));
     }
 }
@@ -1004,9 +1003,9 @@ fn push_range(
     if got < lo || got > hi {
         errs.push(format!(
             "{key} is {}, outside the allowed {}..{}",
-            format_go_duration(got),
-            format_go_duration(lo),
-            format_go_duration(hi)
+            secs_label(got),
+            secs_label(lo),
+            secs_label(hi)
         ));
     }
 }
@@ -1127,88 +1126,18 @@ fn coerce(dest: &toml::Value, overlay: toml::Value) -> toml::Value {
     }
 }
 
-fn parse_go_duration(raw: &str) -> Result<StdDuration, String> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return Err("empty duration".into());
-    }
-    if s.starts_with('-') {
-        return Err(format!(
-            "{s:?} is not a duration; write it like \"10s\", \"2m\" or \"24h\""
-        ));
-    }
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    let mut total = StdDuration::ZERO;
-    let mut saw = false;
-    while i < bytes.len() {
-        let start = i;
-        while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
-            i += 1;
-        }
-        if i == start {
-            return Err(format!(
-                "{s:?} is not a duration; write it like \"10s\", \"2m\" or \"24h\""
-            ));
-        }
-        let n: f64 = std::str::from_utf8(&bytes[start..i])
-            .unwrap()
-            .parse()
-            .map_err(|_| {
-                format!("{s:?} is not a duration; write it like \"10s\", \"2m\" or \"24h\"")
-            })?;
-        let unit_start = i;
-        while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
-            i += 1;
-        }
-        if i == unit_start {
-            return Err(format!(
-                "{s:?} is not a duration; write it like \"10s\", \"2m\" or \"24h\""
-            ));
-        }
-        let unit = std::str::from_utf8(&bytes[unit_start..i]).unwrap();
-        let scale = match unit {
-            "ns" => 1.0,
-            "us" | "µs" | "μs" => 1_000.0,
-            "ms" => 1_000_000.0,
-            "s" => 1_000_000_000.0,
-            "m" => 60_000_000_000.0,
-            "h" => 3_600_000_000_000.0,
-            _ => {
-                return Err(format!(
-                    "{s:?} is not a duration; write it like \"10s\", \"2m\" or \"24h\""
-                ));
-            }
-        };
-        total += StdDuration::from_nanos((n * scale) as u64);
-        saw = true;
-    }
-    if !saw {
-        return Err(format!(
-            "{s:?} is not a duration; write it like \"10s\", \"2m\" or \"24h\""
-        ));
-    }
-    Ok(total)
+fn secs_label(d: StdDuration) -> String {
+    format!("{}s", d.as_secs())
 }
 
-fn format_go_duration(d: StdDuration) -> String {
-    let ns = d.as_nanos();
-    if ns == 0 {
-        return "0s".into();
+fn write_config_atomically(path: &Path, body: &str) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
     }
-    if ns % 3_600_000_000_000 == 0 {
-        return format!("{}h", ns / 3_600_000_000_000);
-    }
-    if ns % 60_000_000_000 == 0 {
-        return format!("{}m", ns / 60_000_000_000);
-    }
-    if ns % 1_000_000_000 == 0 {
-        return format!("{}s", ns / 1_000_000_000);
-    }
-    if ns % 1_000_000 == 0 {
-        return format!("{}ms", ns / 1_000_000);
-    }
-    format!("{ns}ns")
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, body.as_bytes()).map_err(|err| format!("{}: {err}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|err| format!("{}: {err}", path.display()))?;
+    Ok(())
 }
 
 /// Stat-and-reload a config path. No `notify`.
@@ -1288,13 +1217,7 @@ pub fn set_tray_option(path: &Path, option: TrayOption, enabled: bool) -> Result
         Err(err) => return Err(format!("{}: {err}", path.display())),
     };
     let next = set_toml_bool(&src, table, key, enabled);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
-    }
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, next.as_bytes()).map_err(|err| format!("{}: {err}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|err| format!("{}: {err}", path.display()))?;
-    Ok(())
+    write_config_atomically(path, &next)
 }
 
 fn set_toml_bool(src: &str, table: &str, key: &str, enabled: bool) -> String {
@@ -1465,7 +1388,7 @@ mod tests {
 
     #[test]
     fn interval_below_floor_is_an_error() {
-        let err = Config::parse("[poll]\nactive_interval = \"1s\"\n").unwrap_err();
+        let err = Config::parse("[poll]\nactive_interval = 1\n").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("active_interval"), "{msg}");
         assert!(msg.contains("minimum") || msg.contains("below"), "{msg}");
@@ -1473,7 +1396,7 @@ mod tests {
 
     #[test]
     fn idle_faster_than_active_is_backwards() {
-        let err = Config::parse("[poll]\nactive_interval = \"1m\"\nidle_interval = \"30s\"\n")
+        let err = Config::parse("[poll]\nactive_interval = 60\nidle_interval = 30\n")
             .unwrap_err();
         assert!(err.to_string().contains("backwards"), "{}", err);
     }
@@ -1528,16 +1451,17 @@ mod tests {
     #[test]
     fn bad_duration_is_an_error() {
         let err = Config::parse("[poll]\nactive_interval = \"10 seconds\"\n").unwrap_err();
+        let msg = err.to_string();
         assert!(
-            err.to_string().contains("duration") || err.to_string().contains("10s"),
-            "{err}"
+            msg.contains("invalid type") || msg.contains("integer") || msg.contains("i64"),
+            "{msg}"
         );
     }
 
     #[test]
     fn reports_every_problem_at_once() {
         let err = Config::parse(
-            "[poll]\nactive_interval = \"1s\"\n[hud]\ntext_color = \"#gg0011\"\nopacity = 3\n",
+            "[poll]\nactive_interval = 1\n[hud]\ntext_color = \"#gg0011\"\nopacity = 3\n",
         )
         .unwrap_err();
         let msg = err.to_string();
@@ -1553,8 +1477,8 @@ mod tests {
         let cfg = Config::parse(
             r#"
 [poll]
-active_interval = "15s"
-idle_interval = "5m"
+active_interval = 15
+idle_interval = 300
 jitter = 0.25
 
 [hud]
@@ -1568,7 +1492,7 @@ font_size = 18
 
 [widget.xp]
 min_samples = 5
-window = "2m"
+window = 120
 "#,
         )
         .unwrap();
@@ -1617,9 +1541,9 @@ window = "2m"
     #[test]
     fn remaining_interval_floors() {
         for body in [
-            "[poll]\nidle_interval = \"5s\"\n",
-            "[poll]\nchallenge_interval = \"10s\"\n",
-            "[poll]\ncatalog_interval = \"1m\"\n",
+            "[poll]\nidle_interval = 5\n",
+            "[poll]\nchallenge_interval = 10\n",
+            "[poll]\ncatalog_interval = 60\n",
         ] {
             let err = Config::parse(body).unwrap_err();
             assert!(err.to_string().contains("minimum"), "{err}");
@@ -1630,7 +1554,7 @@ window = "2m"
     fn remaining_cross_field_rules() {
         let cases = [
             (
-                "[poll]\nactive_interval = \"1m\"\nidle_interval = \"2m\"\nbackoff_max = \"10s\"\n",
+                "[poll]\nactive_interval = 60\nidle_interval = 120\nbackoff_max = 10\n",
                 "backoff_max",
             ),
             ("[poll]\njitter = 0.9\n", "jitter"),
@@ -1774,7 +1698,7 @@ window = "2m"
     #[test]
     fn xp_effective_window_widens() {
         let cfg = Config::parse(
-            "[poll]\nactive_interval = \"30s\"\nidle_interval = \"2m\"\n[widget.xp]\nwindow = \"30s\"\n",
+            "[poll]\nactive_interval = 30\nidle_interval = 120\n[widget.xp]\nwindow = 30\n",
         )
         .unwrap();
         assert_eq!(
@@ -1802,12 +1726,6 @@ window = "2m"
             cfg.poll.effective_challenge_interval(false),
             StdDuration::from_secs(600)
         );
-    }
-
-    #[test]
-    fn http_error_mentions_10s_format() {
-        let err = Config::parse("[poll]\nactive_interval = \"10 seconds\"\n").unwrap_err();
-        assert!(err.to_string().contains("\"10s\""), "{err}");
     }
 
     #[test]
