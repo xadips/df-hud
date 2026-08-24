@@ -395,9 +395,17 @@ fn write_frame(w: &mut impl Write, op: u32, payload: &impl serde::Serialize) -> 
 }
 
 fn write_frame_raw(w: &mut impl Write, op: u32, body: &[u8]) -> io::Result<()> {
+    let len = u32::try_from(body.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "presence frame is too large"))?;
+    if len > MAX_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("presence: frame of {len} bytes is over the {MAX_FRAME} limit"),
+        ));
+    }
     let mut head = [0u8; 8];
     head[0..4].copy_from_slice(&op.to_le_bytes());
-    head[4..8].copy_from_slice(&(body.len() as u32).to_le_bytes());
+    head[4..8].copy_from_slice(&len.to_le_bytes());
     w.write_all(&head)?;
     w.write_all(body)?;
     w.flush()?;
@@ -879,6 +887,14 @@ mod tests {
         head[0..4].copy_from_slice(&OP_FRAME.to_le_bytes());
         head[4..8].copy_from_slice(&(1u32 << 30).to_le_bytes());
         let err = read_frame(&mut Cursor::new(head)).unwrap_err();
+        assert!(err.to_string().contains("over the"));
+    }
+
+    #[test]
+    fn presence_writer_refuses_oversized_frame() {
+        let body = vec![0; MAX_FRAME as usize + 1];
+        let err = write_frame_raw(&mut Vec::new(), OP_FRAME, &body).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("over the"));
     }
 

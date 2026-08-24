@@ -477,7 +477,7 @@ fn parse_virtual_key(part: &str) -> Option<(String, u32)> {
     if upper.len() == 1 {
         let key = upper.as_bytes()[0];
         if key.is_ascii_alphanumeric() {
-            return Some((upper, key as u32));
+            return Some((upper, u32::from(key)));
         }
     }
     if let Some(rest) = upper.strip_prefix('F') {

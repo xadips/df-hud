@@ -103,9 +103,8 @@ impl Watcher {
 
     fn scan_once(&self) {
         let known = self.state();
-        let next = match self.scanner.lock().unwrap().scan_known(known) {
-            Ok(s) => s,
-            Err(_) => return,
+        let Ok(next) = self.scanner.lock().unwrap().scan_known(known) else {
+            return;
         };
         let (changed, prev) = {
             let mut g = self.state.lock().unwrap();

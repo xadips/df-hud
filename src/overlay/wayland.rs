@@ -514,7 +514,7 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for App {
         state: &mut Self,
         _: &ZwlrLayerSurfaceV1,
         event: zwlr_layer_surface_v1::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -559,7 +559,7 @@ impl Dispatch<WpFractionalScaleV1, ()> for App {
         state: &mut Self,
         _: &WpFractionalScaleV1,
         event: wp_fractional_scale_v1::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -810,45 +810,42 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
 
         event_queue.flush()?;
         let timeout_ms = overlay::wait_ms(now, started, args.duration, next_tick) as i32;
-        match event_queue.prepare_read() {
-            None => continue,
-            Some(guard) => {
-                let fd = event_queue.as_fd().as_raw_fd();
-                let wake_fd = app.handle.as_ref().map(|h| h.wake.read_fd()).unwrap_or(-1);
-                let mut pfds = [
-                    libc::pollfd {
-                        fd,
-                        events: libc::POLLIN,
-                        revents: 0,
-                    },
-                    libc::pollfd {
-                        fd: wake_fd,
-                        events: libc::POLLIN,
-                        revents: 0,
-                    },
-                ];
-                let nfds = if wake_fd >= 0 { 2 } else { 1 };
-                let n = unsafe { libc::poll(pfds.as_mut_ptr(), nfds, timeout_ms) };
-                if n < 0 {
-                    let err = std::io::Error::last_os_error();
-                    if err.kind() == std::io::ErrorKind::Interrupted {
-                        drop(guard);
-                        continue;
-                    }
-                    return Err(err.into());
-                }
-                if n > 0 && pfds[0].revents != 0 {
-                    guard.read()?;
-                } else {
+        if let Some(guard) = event_queue.prepare_read() {
+            let fd = event_queue.as_fd().as_raw_fd();
+            let wake_fd = app.handle.as_ref().map(|h| h.wake.read_fd()).unwrap_or(-1);
+            let mut pfds = [
+                libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: wake_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            let nfds = if wake_fd >= 0 { 2 } else { 1 };
+            let n = unsafe { libc::poll(pfds.as_mut_ptr(), nfds, timeout_ms) };
+            if n < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::Interrupted {
                     drop(guard);
+                    continue;
                 }
-                if n > 0 && nfds > 1 && pfds[1].revents != 0 {
-                    if let Some(h) = &app.handle {
-                        h.wake.take();
-                    }
-                    app.sync_config();
-                    app.needs_present = true;
+                return Err(err.into());
+            }
+            if n > 0 && pfds[0].revents != 0 {
+                guard.read()?;
+            } else {
+                drop(guard);
+            }
+            if n > 0 && nfds > 1 && pfds[1].revents != 0 {
+                if let Some(h) = &app.handle {
+                    h.wake.take();
                 }
+                app.sync_config();
+                app.needs_present = true;
             }
         }
     }

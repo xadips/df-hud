@@ -1,4 +1,4 @@
-//! Product overlay: GLES 3.0 on zwlr_layer_shell_v1 / WGL layered HWND.
+//! Product overlay: GLES 3.0 on `zwlr_layer_shell_v1` / WGL layered HWND.
 //! Overlay stays `keyboard_interactivity = none` / `WS_EX_TRANSPARENT`.
 //! Hidden HUD unmaps the layer surface / hides the HWND. HTTP overlay toggle
 //! and the tray share `overlay_on` (Decide's Enabled).

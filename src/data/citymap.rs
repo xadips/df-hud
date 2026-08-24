@@ -256,10 +256,10 @@ impl Map {
         }
         dist[start] = 0;
         let mut queue = Vec::with_capacity(self.cells.len());
-        queue.push(start as i32);
+        queue.push(start);
         let mut head = 0;
         while head < queue.len() {
-            let i = queue[head] as usize;
+            let i = queue[head];
             head += 1;
             let (x, y) = self.coord_at(i);
             for (nx, ny) in [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)] {
@@ -270,7 +270,7 @@ impl Map {
                     continue;
                 }
                 dist[j] = dist[i] + 1;
-                queue.push(j as i32);
+                queue.push(j);
             }
         }
         dist

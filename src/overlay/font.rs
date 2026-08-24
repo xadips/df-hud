@@ -1,6 +1,6 @@
-//! Bundled TTF → hinted LCD atlas. No Fontconfig, no Pango, no FreeType.
+//! Bundled TTF → hinted LCD atlas. No Fontconfig, no Pango, no `FreeType`.
 //!
-//! Linux prefers a system monospace bold (Noto / Liberation / DejaVu), then
+//! Linux prefers a system monospace bold (Noto / Liberation / `DejaVu`), then
 //! falls back to the Go font Windows already embeds.
 //!
 //! The atlas is RGB coverage so ClearType-style edges survive; a transparent

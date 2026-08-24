@@ -39,8 +39,8 @@ fn jitter_unit() -> f64 {
         .unwrap_or(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
     let mix = t
-        .wrapping_mul(0x9E3779B97F4A7C15)
-        .wrapping_add(n.wrapping_mul(0xBF58476D1CE4E5B9));
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(n.wrapping_mul(0xBF58_476D_1CE4_E5B9));
     (mix >> 11) as f64 / ((1u64 << 53) as f64)
 }
 
@@ -181,7 +181,7 @@ impl PlayerPoller {
                 {
                     let mut st = self.status.lock().unwrap();
                     st.paused = true;
-                    st.pause_reason = reason.clone();
+                    st.pause_reason.clone_from(&reason);
                     st.next_attempt = None;
                 }
                 self.store.set_poller_status(self.status());
@@ -305,7 +305,7 @@ impl PlayerPoller {
                 {
                     st.stale = true;
                     self.session_stale.store(true, Ordering::SeqCst);
-                    st.last_error = err.clone();
+                    st.last_error.clone_from(err);
                     st.total_failure += 1;
                     eprintln!(
                         "poller: the server rejected our credentials - polling STOPPED. \
@@ -314,7 +314,7 @@ impl PlayerPoller {
                 }
                 Some(err) => {
                     st.failures += 1;
-                    st.last_error = err.clone();
+                    st.last_error.clone_from(err);
                     st.total_failure += 1;
                     if st.failures == 1 || st.failures % 10 == 0 {
                         eprintln!("poller: {err} (backing off; will keep trying)");
@@ -516,7 +516,7 @@ impl ChallengePoller {
         self.gate.wait(&self.stop).map_err(|e| e.to_string())?;
         let vars = {
             let mut client = self.client.lock().unwrap();
-            client.cookie = cr.cookie.clone();
+            client.cookie.clone_from(&cr.cookie);
             client
                 .load_challenge(&cr.to_df(), &salt)
                 .map_err(|e| e.to_string())

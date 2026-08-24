@@ -230,16 +230,9 @@ pub fn parse(data: &[u8], fetched_at: DateTime<Utc>) -> Result<BossMap, String> 
                 if pair.len() != 2 {
                     continue;
                 }
-                let x: i32 = pair[0]
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-                    .or_else(|| pair[0].as_i64().map(|n| n as i32))
-                    .unwrap_or(0);
-                let y: i32 = pair[1]
-                    .as_str()
-                    .and_then(|s| s.parse().ok())
-                    .or_else(|| pair[1].as_i64().map(|n| n as i32))
-                    .unwrap_or(0);
+                let (Some(x), Some(y)) = (i32_field(&pair[0]), i32_field(&pair[1])) else {
+                    continue;
+                };
                 if x == ONSLAUGHT_COORD && y == ONSLAUGHT_COORD {
                     event.onslaught = true;
                 }
@@ -267,6 +260,13 @@ fn unix_field(v: Option<&Value>) -> Option<i64> {
         return s.parse().ok();
     }
     v.as_i64()
+}
+
+fn i32_field(v: &Value) -> Option<i32> {
+    if let Some(s) = v.as_str() {
+        return s.parse().ok();
+    }
+    v.as_i64().and_then(|n| i32::try_from(n).ok())
 }
 
 /// Missions also carry `special_enemy_type`, so that test must not run first.
@@ -455,6 +455,14 @@ fn event_markers(events: &[&CityEvent]) -> Vec<String> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn coordinate_conversion_rejects_out_of_range_values() {
+        assert_eq!(i32_field(&serde_json::json!("3000")), Some(3000));
+        assert_eq!(i32_field(&serde_json::json!(3000)), Some(3000));
+        assert_eq!(i32_field(&serde_json::json!(i64::MAX)), None);
+        assert_eq!(i32_field(&serde_json::json!("not-a-coordinate")), None);
+    }
 
     fn fixture() -> (BossMap, DateTime<Utc>) {
         let raw =

@@ -108,9 +108,8 @@ impl Inner {
         loop {
             let mut line = String::new();
             match reader.read_line(&mut line) {
-                Ok(0) => return,
+                Ok(0) | Err(_) => return,
                 Ok(_) => {}
-                Err(_) => return,
             }
             if line == "\r\n" || line == "\n" {
                 break;
