@@ -424,7 +424,7 @@ fn challenge_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
         .cloned()
         .collect();
     if shown.is_empty() {
-        if board.is_empty() && !v.challenge_status.is_empty() {
+        if !v.challenge_status.is_empty() && board.is_empty() {
             return vec![Line {
                 text: format!("challenges: {}", v.challenge_status),
                 ..Line::default()
@@ -478,7 +478,8 @@ fn challenge_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
             r.rule = board_w;
         }
     }
-    rows.iter()
+    let mut lines: Vec<Line> = rows
+        .iter()
         .map(|r| Line {
             text: r.overlay_text(),
             color: if r.heading {
@@ -496,7 +497,17 @@ fn challenge_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
             strike: r.done,
             timer: String::new(),
         })
-        .collect()
+        .collect();
+    if !v.challenge_status.is_empty() {
+        lines.insert(
+            0,
+            Line {
+                text: format!("challenges: {}", v.challenge_status),
+                ..Line::default()
+            },
+        );
+    }
+    lines
 }
 
 #[derive(Clone)]
@@ -1398,6 +1409,24 @@ mod tests {
         let lines = challenge_lines(&empty, &all_on());
         assert_eq!(lines.len(), 1);
         assert!(lines[0].text.contains("no signing salt"));
+    }
+
+    #[test]
+    fn challenge_status_shows_on_a_stale_board() {
+        let now = Utc::now();
+        let v = ModelView {
+            now,
+            challenges: Some(board(now)),
+            challenge_status: "could not load the board (retrying)".into(),
+            ..ModelView::default()
+        };
+        let lines = texts(&challenge_lines(&v, &all_on()));
+        assert!(
+            lines[0].contains("could not load the board"),
+            "{}",
+            lines[0]
+        );
+        assert!(lines.iter().any(|l| l.contains("Summer Death")), "{lines:?}");
     }
 
     #[test]

@@ -281,12 +281,14 @@ impl Store {
                 s.have_prev = false;
                 s.snapshot = Snapshot::default();
                 s.have_snap = false;
+                clear_session_derived(&mut s);
             } else if prev.running && !g.same_session(prev) {
                 run_changed = end_run_locked(&mut s, Utc::now(), "the game relaunched");
                 s.prev_snap = Snapshot::default();
                 s.have_prev = false;
                 s.snapshot = Snapshot::default();
                 s.have_snap = false;
+                clear_session_derived(&mut s);
             } else if let Some(seed) = s.run_seed.take() {
                 if seed.matches(g) {
                     s.run_start = Some(seed.started_at);
@@ -364,12 +366,22 @@ impl Store {
         s.have_board = true;
     }
 
+    pub fn clear_challenges(&self) {
+        let mut s = self.inner.lock().unwrap();
+        s.board.clear();
+        s.have_board = false;
+    }
+
     pub fn set_challenge_status(&self, reason: String) {
         self.inner.lock().unwrap().board_status = reason;
     }
 
     pub fn set_boss_map(&self, m: BossMap) {
         self.inner.lock().unwrap().boss_map = Some(m);
+    }
+
+    pub fn clear_boss_map(&self) {
+        self.inner.lock().unwrap().boss_map = None;
     }
 
     pub fn set_poller_status(&self, st: PollerStatus) {
@@ -599,6 +611,13 @@ fn fire_run_change(on_change: Option<Arc<dyn Fn() + Send + Sync>>, changed: bool
             f();
         }
     }
+}
+
+fn clear_session_derived(s: &mut Inner) {
+    s.boss_map = None;
+    s.board.clear();
+    s.have_board = false;
+    s.board_status.clear();
 }
 
 fn end_run_locked(s: &mut Inner, at: DateTime<Utc>, why: &str) -> bool {
@@ -1284,6 +1303,55 @@ mod tests {
             scheduled: true,
         });
         assert!(!bare.derive(start).xp_available);
+    }
+
+    #[test]
+    fn session_end_clears_boss_map_and_challenges() {
+        let now = DateTime::from_timestamp(1000, 0).unwrap();
+        let s = running_store(now);
+        let raw = br#"{
+	  "0":{"event_id":"1","isoa":"1","locations":[],"started":"1","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"0","special_enemy_amount":"0","boss_num":"0",
+	       "event_type":"","dfp_objectives":[],"start_time":"900","end_time":"5000"},
+	  "bosshash":"abc","servertime":1000,"version":"1"}"#;
+        s.set_boss_map(bossmap::parse(raw, now).unwrap());
+        s.set_challenges(vec![Challenge {
+            name: "Travel".into(),
+            ..Challenge::default()
+        }]);
+        s.set_challenge_status("waiting".into());
+        assert!(s.derive(now).outpost_attack);
+        assert!(s.derive(now).challenges.is_some());
+        s.set_game(GameState::default());
+        let view = s.derive(now);
+        assert!(!view.outpost_attack);
+        assert!(view.challenges.is_none());
+        assert!(view.challenge_status.is_empty());
+    }
+
+    #[test]
+    fn clear_boss_map_and_challenges_are_independent() {
+        let now = DateTime::from_timestamp(1000, 0).unwrap();
+        let s = Store::new(None);
+        s.set_challenges(vec![Challenge {
+            name: "Travel".into(),
+            ..Challenge::default()
+        }]);
+        s.set_challenge_status("retrying".into());
+        s.clear_challenges();
+        let view = s.derive(now);
+        assert!(view.challenges.is_none());
+        assert_eq!(view.challenge_status, "retrying");
+        s.set_boss_map(
+            bossmap::parse(
+                br#"{"bosshash":"x","servertime":1000,"version":"1"}"#,
+                now,
+            )
+            .unwrap(),
+        );
+        s.clear_boss_map();
+        assert!(!s.derive(now).outpost_attack);
     }
 
     #[test]
