@@ -329,7 +329,11 @@ impl Store {
     }
 
     pub fn set_presence_connected(&self, connected: bool) {
-        self.inner.lock().unwrap().presence_connected = connected;
+        let mut s = self.inner.lock().unwrap();
+        s.presence_connected = connected;
+        if !connected {
+            s.have_presence = false;
+        }
     }
 
     pub fn presence_connected(&self) -> bool {
@@ -611,7 +615,7 @@ fn end_run_locked(s: &mut Inner, at: DateTime<Utc>, why: &str) -> bool {
 }
 
 fn presence_position_locked(s: &Inner, now: DateTime<Utc>) -> Option<PresenceState> {
-    if !s.have_presence || !s.game.running {
+    if !s.presence_connected || !s.have_presence || !s.game.running {
         return None;
     }
     if now
@@ -658,7 +662,7 @@ fn update_run_locked(s: &mut Inner, snap: &Snapshot) -> bool {
     if s.run_terminal {
         return false;
     }
-    if s.presence_connected && s.have_presence && s.presence.loading {
+    if presence_position_locked(s, snap.at).is_some_and(|p| p.loading) {
         return false;
     }
     if s.run_start.is_none() && (left_outpost || moved) {
@@ -1052,6 +1056,48 @@ mod tests {
         let view = s.derive(now);
         assert_eq!((view.position_x, view.position_y), (1054, 987));
         assert!(view.client_loading);
+    }
+
+    #[test]
+    fn disconnect_falls_back_to_polled_position() {
+        let now = DateTime::from_timestamp(1000, 0).unwrap();
+        let s = running_store(now);
+        polled_position(&s, now);
+        s.set_presence(presence::parse_details("Inner City 1055 x 985", now));
+        assert_eq!(
+            (s.derive(now).position_x, s.derive(now).position_y),
+            (1055, 985)
+        );
+        assert_eq!(s.effective_position(now), Some((1055, 985)));
+        s.set_presence_connected(false);
+        assert!(!s.presence_connected());
+        let view = s.derive(now);
+        assert_eq!((view.position_x, view.position_y), (1054, 987));
+        assert_eq!(s.effective_position(now), Some((1054, 987)));
+    }
+
+    #[test]
+    fn stale_loading_presence_does_not_block_run_start() {
+        let now = DateTime::from_timestamp(1000, 0).unwrap();
+        let s = running_store(now);
+        polled_position(&s, now);
+        s.set_presence(presence::parse_details("Loading...", now));
+        let later = now
+            + chrono::Duration::from_std(PRESENCE_MAX_AGE).unwrap()
+            + chrono::Duration::seconds(1);
+        s.apply_tick(Tick {
+            at: later,
+            vars: HashMap::from([
+                ("df_positionx".into(), "1055".into()),
+                ("df_positiony".into(), "987".into()),
+                ("df_level".into(), "415".into()),
+            ]),
+            err: None,
+            scheduled: false,
+        });
+        let view = s.derive(later);
+        assert!(view.has_session);
+        assert_eq!((view.position_x, view.position_y), (1055, 987));
     }
 
     #[test]

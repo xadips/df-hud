@@ -115,40 +115,6 @@ impl Handle {
         self.wake.ping();
     }
 
-    fn record_xp_sample(&self) {
-        let Some(snap) = self.store.snapshot() else {
-            return;
-        };
-        if snap.xp_source == XpSource::None || snap.cumulative_xp <= 0 {
-            return;
-        }
-        let cfg = self.cfg.lock().unwrap().clone();
-        let window = cfg.widget.xp.effective_window(cfg.poll.active_interval.0);
-
-        let (run_start, _) = self.store.run();
-        {
-            let mut last = self.last_run_start.lock().unwrap();
-            if xp::run_reset(*last, run_start) {
-                *last = run_start;
-                drop(last);
-                self.persist.reset_xp_window("a new run started");
-            }
-        }
-        if let Some(prev) = self.store.previous_snapshot() {
-            if let Some(reason) = xp::window_reset(&prev, &snap, window) {
-                self.persist.reset_xp_window(reason);
-            }
-        }
-        self.persist.append_xp_sample(
-            XpSample {
-                at: snap.at,
-                cumulative: snap.cumulative_xp,
-                source: snap.xp_source.as_str().to_string(),
-            },
-            window,
-        );
-    }
-
     pub fn replace_config(&self, cfg: Config) {
         self.gamekeys.apply_config(&cfg.game_keys);
         *self.cfg.lock().unwrap() = cfg;
@@ -367,8 +333,14 @@ pub fn start_with(
     {
         let handle = handle.clone();
         player.set_on_tick(move |tick: Tick| {
-            let _applied = handle.store.apply_tick(tick);
-            handle.record_xp_sample();
+            let cfg = handle.cfg.lock().unwrap().clone();
+            ingest_player_tick(
+                &handle.store,
+                &handle.persist,
+                &cfg,
+                &handle.last_run_start,
+                tick,
+            );
             handle.wake.ping();
         });
     }
@@ -560,6 +532,58 @@ fn catch_sighup(handle: Arc<Handle>, stop: Arc<AtomicBool>) {
     });
 }
 
+fn ingest_player_tick(
+    store: &Store,
+    persist: &state::Store,
+    cfg: &Config,
+    last_run_start: &Mutex<Option<DateTime<Utc>>>,
+    tick: Tick,
+) -> bool {
+    let applied = store.apply_tick(tick);
+    if applied {
+        write_xp_sample(store, persist, cfg, last_run_start);
+    }
+    applied
+}
+
+fn write_xp_sample(
+    store: &Store,
+    persist: &state::Store,
+    cfg: &Config,
+    last_run_start: &Mutex<Option<DateTime<Utc>>>,
+) {
+    let Some(snap) = store.snapshot() else {
+        return;
+    };
+    if snap.xp_source == XpSource::None || snap.cumulative_xp <= 0 {
+        return;
+    }
+    let window = cfg.widget.xp.effective_window(cfg.poll.active_interval.0);
+
+    let (run_start, _) = store.run();
+    {
+        let mut last = last_run_start.lock().unwrap();
+        if xp::run_reset(*last, run_start) {
+            *last = run_start;
+            drop(last);
+            persist.reset_xp_window("a new run started");
+        }
+    }
+    if let Some(prev) = store.previous_snapshot() {
+        if let Some(reason) = xp::window_reset(&prev, &snap, window) {
+            persist.reset_xp_window(reason);
+        }
+    }
+    persist.append_xp_sample(
+        XpSample {
+            at: snap.at,
+            cumulative: snap.cumulative_xp,
+            source: snap.xp_source.as_str().to_string(),
+        },
+        window,
+    );
+}
+
 fn persist_run(store: &Store, persist: &state::Store) {
     let (started, game) = store.run();
     persist.update(|st| {
@@ -653,5 +677,76 @@ fn bossmap_loop(
             c.bossmap.interval.0
         };
         thread::sleep(wait.max(Duration::from_secs(5)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::xp;
+    use crate::model::XpStability;
+    use std::collections::HashMap;
+
+    fn xp_tick(at: DateTime<Utc>, total: i64, err: Option<String>) -> Tick {
+        Tick {
+            at,
+            vars: HashMap::from([
+                ("df_level".into(), "415".into()),
+                ("df_exp".into(), "1000".into()),
+                ("df_exptotal".into(), total.to_string()),
+            ]),
+            err,
+            scheduled: true,
+        }
+    }
+
+    #[test]
+    fn failed_ticks_do_not_append_xp_samples() {
+        let store = Store::new(None);
+        let persist = state::Store::new("");
+        let cfg = Config::default();
+        let last_run = Mutex::new(None);
+        let start = Utc::now();
+
+        assert!(ingest_player_tick(
+            &store,
+            &persist,
+            &cfg,
+            &last_run,
+            xp_tick(start, 1_000_000, None),
+        ));
+        assert!(ingest_player_tick(
+            &store,
+            &persist,
+            &cfg,
+            &last_run,
+            xp_tick(start + chrono::Duration::seconds(10), 1_001_000, None),
+        ));
+        let after_good = persist.get().xp_samples;
+        assert_eq!(after_good.len(), 2);
+        let rate_before = xp::compute_rate(&after_good, 3, XpStability::Steady);
+
+        for i in 1..=3 {
+            assert!(!ingest_player_tick(
+                &store,
+                &persist,
+                &cfg,
+                &last_run,
+                xp_tick(
+                    start + chrono::Duration::seconds(10 + i),
+                    1_001_000,
+                    Some("boom".into()),
+                ),
+            ));
+        }
+
+        let after_fail = persist.get().xp_samples;
+        assert_eq!(after_fail.len(), after_good.len());
+        assert_eq!(after_fail, after_good);
+        let rate_after = xp::compute_rate(&after_fail, 3, XpStability::Steady);
+        assert_eq!(rate_after.available, rate_before.available);
+        assert_eq!(rate_after.per_hour, rate_before.per_hour);
+        assert_eq!(rate_after.provisional, rate_before.provisional);
+        assert_eq!(store.missed_ticks(), 3);
     }
 }

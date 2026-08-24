@@ -169,7 +169,7 @@ pub fn from_view(v: &ModelView, cfg: &Config, groups: &Groups) -> View {
     if !groups.hidden("bosses") {
         out.bosses = boss_lines(v, cfg);
     }
-    if !groups.hidden("map") && cfg.widget.map.enabled {
+    if !groups.hidden("map") && cfg.widget.map.enabled && v.has_position {
         out.map = map_view(v, cfg);
     }
     out
@@ -1084,6 +1084,21 @@ mod tests {
         assert!(s.xp.is_empty() || s.xp == XP_PENDING);
         assert!(s.challenges.is_empty());
         assert!(s.bosses.is_empty());
+        assert!(s.map.list.is_empty());
+    }
+
+    #[test]
+    fn map_is_empty_without_a_player_tile() {
+        let v = ModelView {
+            have_data: true,
+            ..ModelView::default()
+        };
+        let cfg = Config::default();
+        let g = Groups::new();
+        assert!(!g.toggle("map").unwrap());
+        let s = from_view(&v, &cfg, &g);
+        assert!(s.map.cells.is_empty());
+        assert!(s.map.markers.is_empty());
         assert!(s.map.list.is_empty());
     }
 
