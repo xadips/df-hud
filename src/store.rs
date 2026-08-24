@@ -530,10 +530,6 @@ impl Store {
                     if !upcoming.is_empty() {
                         v.block_events_upcoming = Some(upcoming);
                     }
-                    if let Some(boundary) = boss.block_boundary(v.position_x, v.position_y, now) {
-                        v.has_onslaught_countdown = true;
-                        v.onslaught_countdown = Ns::from_chrono(boundary - now);
-                    }
                 }
             }
             let mut from = [0; 2];

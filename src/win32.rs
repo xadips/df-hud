@@ -48,11 +48,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::app;
+use crate::cli::OverlayArgs;
 use crate::config;
 use crate::gpu::Gpu;
-use crate::layout::Viewport;
 use crate::present;
-use crate::scene;
 use crate::wgl::GlSurface;
 
 pub const OVERLAY_CLASS: &str = "df-hud";
@@ -72,86 +71,18 @@ pub struct Args {
     print_hud: bool,
 }
 
-impl Args {
-    pub fn parse() -> Result<Self, Box<dyn Error>> {
-        let mut monitor = None;
-        let mut duration = Duration::ZERO;
-        let mut list_monitors = false;
-        let mut requested = false;
-        let mut config = None;
-        let mut print_view = false;
-        let mut print_hud = false;
-
-        let mut args = std::env::args().skip(1);
-        while let Some(arg) = args.next() {
-            let mut next = |name: &str| -> Result<String, Box<dyn Error>> {
-                args.next()
-                    .ok_or_else(|| format!("{name} needs a value").into())
-            };
-            match arg.as_str() {
-                "-h" | "--help" => {
-                    print_help();
-                    std::process::exit(0);
-                }
-                "--list-monitors" => {
-                    requested = true;
-                    list_monitors = true;
-                }
-                "--monitor" => {
-                    requested = true;
-                    monitor = Some(next("--monitor")?);
-                }
-                "--duration" => {
-                    requested = true;
-                    let secs: f32 = next("--duration")?.parse()?;
-                    duration = if secs <= 0.0 {
-                        Duration::ZERO
-                    } else {
-                        Duration::from_secs_f32(secs)
-                    };
-                }
-                "-config" | "--config" => {
-                    requested = true;
-                    config = Some(PathBuf::from(next("-config")?));
-                }
-                "-print-view" | "--print-view" => print_view = true,
-                "-print-hud" | "--print-hud" => print_hud = true,
-                other => return Err(format!("unknown flag {other} (see --help)").into()),
-            }
+impl From<OverlayArgs> for Args {
+    fn from(args: OverlayArgs) -> Self {
+        Self {
+            monitor: args.monitor,
+            duration: args.duration,
+            list_monitors: args.list_monitors,
+            requested: args.requested,
+            config: args.config,
+            print_view: args.print_view,
+            print_hud: args.print_hud,
         }
-        Ok(Self {
-            monitor,
-            duration,
-            list_monitors,
-            requested,
-            config,
-            print_view,
-            print_hud,
-        })
     }
-}
-
-fn print_help() {
-    eprintln!(
-        "\
-df-hud — overlay (live derive)
-
-  -once                 poll once, print the view, and exit
-  -print-view [PATH]    fixture JSON (PATH) or live JSON each update
-  -print-hud            print HUD text lines each update
-  -dump-fields          with -once / -dump-challenges, print the player record (secrets withheld)
-  -dump-challenges      fetch the challenge board once and print it
-  -check-config         validate TOML and print the request budget
-  -check-game           report whether the game client is detected
-  -headless             run pollers without the overlay window
-  -version              print the version and exit
-  -config PATH          config file (also --config)
-  --monitor NAME        Win32 device (\\\\.\\DISPLAY1). overrides hud.monitor
-  --list-monitors       print monitors and exit
-  --config PATH         TOML. default: %APPDATA%\\df-hud\\config.toml (missing = built-in defaults)
-  --duration SECS       exit after SECS; 0 runs until Ctrl-C (default 0)
-"
-    );
 }
 
 pub fn wide(s: &str) -> Vec<u16> {
@@ -662,17 +593,12 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         if mapped && needs_present {
             win.reassert_exstyle();
             surface.make_current()?;
-            let view =
-                present::from_view(&handle.store.derive(Utc::now()), &watch.cfg, &handle.groups);
-            let built = scene::build(
-                &view,
+            let built = present::overlay_scene(
+                &handle.store.derive(Utc::now()),
                 &watch.cfg,
-                Viewport {
-                    width: buf_w as f32,
-                    height: buf_h as f32,
-                    game_width: 0.0,
-                    game_height: 0.0,
-                },
+                &handle.groups,
+                buf_w as f32,
+                buf_h as f32,
             );
             gpu.draw(buf_w, buf_h, buf_w, buf_h, &built)?;
             surface.swap()?;

@@ -1,8 +1,10 @@
-//! Headless flags. Overlay draws `store.derive` through `present`; GPU skipped here.
+//! One argv walk. Overlay draws `store.derive` through `present`; GPU skipped here.
 
 use std::collections::HashMap;
 use std::error::Error;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -22,7 +24,54 @@ use crate::store::Store;
 
 const WITHHELD_FIELD: &[&str] = &["pass", "token", "cookie", "auth", "secretkey", "session"];
 
-pub enum Command {
+/// Single-dash longs from the Go CLI (`-once`). lexopt would split them as shorts.
+const LONG_ALIASES: &[&str] = &[
+    "check-config",
+    "check-game",
+    "config",
+    "dump-challenges",
+    "dump-fields",
+    "headless",
+    "once",
+    "print-hud",
+    "print-view",
+    "version",
+];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OverlayArgs {
+    pub config: Option<PathBuf>,
+    pub print_view: bool,
+    pub print_hud: bool,
+    pub duration: Duration,
+    pub requested: bool,
+    pub output: Option<String>,
+    pub namespace: String,
+    pub list_outputs: bool,
+    pub monitor: Option<String>,
+    pub list_monitors: bool,
+}
+
+impl Default for OverlayArgs {
+    fn default() -> Self {
+        Self {
+            config: None,
+            print_view: false,
+            print_hud: false,
+            duration: Duration::ZERO,
+            requested: false,
+            output: None,
+            namespace: "df-hud".into(),
+            list_outputs: false,
+            monitor: None,
+            list_monitors: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Launch {
+    Help,
     Version,
     PrintView {
         fixture: PathBuf,
@@ -47,10 +96,26 @@ pub enum Command {
         print_view: bool,
         print_hud: bool,
     },
+    Overlay(OverlayArgs),
 }
 
-pub fn take() -> Result<Option<Command>, Box<dyn Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+pub fn parse() -> Result<Launch, Box<dyn Error>> {
+    parse_from(std::env::args_os().skip(1))
+}
+
+#[allow(unused_mut)] // platform overlay flags are cfg-gated in the match
+pub fn parse_from<I, S>(args: I) -> Result<Launch, Box<dyn Error>>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+{
+    use lexopt::prelude::*;
+
+    let args: Vec<OsString> = args.into_iter().map(|s| normalize_arg(s.into())).collect();
+    let mut parser = lexopt::Parser::from_args(args);
+
+    let mut help = false;
+    let mut version = false;
     let mut print_view = false;
     let mut print_hud = false;
     let mut check_config = false;
@@ -59,39 +124,74 @@ pub fn take() -> Result<Option<Command>, Box<dyn Error>> {
     let mut dump_fields = false;
     let mut dump_challenges = false;
     let mut headless = false;
-    let mut version = false;
     let mut config = None;
     let mut fixture = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "-h" | "--help" => {}
-            "-version" | "--version" => version = true,
-            "-print-view" | "--print-view" => {
+    let mut duration = Duration::ZERO;
+    let mut duration_set = false;
+    let mut output = None;
+    let mut output_set = false;
+    let mut namespace = "df-hud".to_string();
+    let mut namespace_set = false;
+    let mut list_outputs = false;
+    let mut monitor = None;
+    let mut monitor_set = false;
+    let mut list_monitors = false;
+
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Short('h') | Long("help") => help = true,
+            Long("version") => version = true,
+            Long("print-view") => {
                 print_view = true;
-                if let Some(path) = args.get(i + 1).filter(|a| !a.starts_with('-')) {
-                    fixture = Some(PathBuf::from(path));
-                    i += 1;
-                }
+                take_print_view_path(&mut parser, &mut fixture)?;
             }
-            "-print-hud" | "--print-hud" => print_hud = true,
-            "-check-config" | "--check-config" => check_config = true,
-            "-check-game" | "--check-game" => check_game = true,
-            "-once" | "--once" => once = true,
-            "-dump-fields" | "--dump-fields" => dump_fields = true,
-            "-dump-challenges" | "--dump-challenges" => dump_challenges = true,
-            "-headless" | "--headless" => headless = true,
-            "-config" | "--config" => {
-                i += 1;
-                let path = args.get(i).ok_or("-config needs a path")?;
-                config = Some(PathBuf::from(path));
+            Long("print-hud") => print_hud = true,
+            Long("check-config") => check_config = true,
+            Long("check-game") => check_game = true,
+            Long("once") => once = true,
+            Long("dump-fields") => dump_fields = true,
+            Long("dump-challenges") => dump_challenges = true,
+            Long("headless") => headless = true,
+            Long("config") => {
+                config = Some(PathBuf::from(parser.value()?.string()?));
             }
-            _ => {}
+            Long("duration") => {
+                duration_set = true;
+                let secs: f32 = parser.value()?.parse()?;
+                duration = if secs <= 0.0 {
+                    Duration::ZERO
+                } else {
+                    Duration::from_secs_f32(secs)
+                };
+            }
+            #[cfg(target_os = "linux")]
+            Long("output") => {
+                output_set = true;
+                output = Some(parser.value()?.string()?);
+            }
+            #[cfg(target_os = "linux")]
+            Long("namespace") => {
+                namespace_set = true;
+                namespace = parser.value()?.string()?;
+            }
+            #[cfg(target_os = "linux")]
+            Long("list-outputs") => list_outputs = true,
+            #[cfg(windows)]
+            Long("monitor") => {
+                monitor_set = true;
+                monitor = Some(parser.value()?.string()?);
+            }
+            #[cfg(windows)]
+            Long("list-monitors") => list_monitors = true,
+            _ => return Err(arg.unexpected().into()),
         }
-        i += 1;
+    }
+
+    if help {
+        return Ok(Launch::Help);
     }
     if dump_fields && !once && !dump_challenges {
-        return Err("-dump-fields is for -once or -dump-challenges".into());
+        return Err("--dump-fields is for --once or --dump-challenges".into());
     }
     let exclusive = [
         version,
@@ -106,54 +206,200 @@ pub fn take() -> Result<Option<Command>, Box<dyn Error>> {
     .count();
     if exclusive > 1 {
         return Err(
-            "use only one of -version, -check-config, -check-game, -once, -dump-challenges, -print-view PATH"
+            "use only one of --version, --check-config, --check-game, --once, --dump-challenges, --print-view PATH"
                 .into(),
         );
     }
+
+    let overlay_only = duration_set
+        || output_set
+        || namespace_set
+        || list_outputs
+        || monitor_set
+        || list_monitors;
+    let mode = if version {
+        Some("--version")
+    } else if check_config {
+        Some("--check-config")
+    } else if check_game {
+        Some("--check-game")
+    } else if once {
+        Some("--once")
+    } else if dump_challenges {
+        Some("--dump-challenges")
+    } else if fixture.is_some() {
+        Some("--print-view PATH")
+    } else if headless {
+        Some("--headless")
+    } else {
+        None
+    };
+    if overlay_only {
+        if let Some(mode) = mode {
+            let mut flags = Vec::new();
+            if duration_set {
+                flags.push("--duration");
+            }
+            if output_set {
+                flags.push("--output");
+            }
+            if namespace_set {
+                flags.push("--namespace");
+            }
+            if list_outputs {
+                flags.push("--list-outputs");
+            }
+            if monitor_set {
+                flags.push("--monitor");
+            }
+            if list_monitors {
+                flags.push("--list-monitors");
+            }
+            return Err(format!("{} cannot be used with {mode}", flags.join(", ")).into());
+        }
+    }
+
     if version {
-        return Ok(Some(Command::Version));
+        return Ok(Launch::Version);
     }
     if check_config {
-        return Ok(Some(Command::CheckConfig { config }));
+        return Ok(Launch::CheckConfig { config });
     }
     if check_game {
-        return Ok(Some(Command::CheckGame { config }));
+        return Ok(Launch::CheckGame { config });
     }
     if dump_challenges {
-        return Ok(Some(Command::DumpChallenges {
+        return Ok(Launch::DumpChallenges {
             config,
             raw: dump_fields,
-        }));
+        });
     }
     if once {
-        return Ok(Some(Command::Once {
+        return Ok(Launch::Once {
             config,
             dump_fields,
-        }));
+        });
     }
     if let Some(fixture) = fixture {
-        return Ok(Some(Command::PrintView {
+        return Ok(Launch::PrintView {
             fixture,
             print_hud,
-        }));
+        });
     }
     if headless {
-        return Ok(Some(Command::Headless {
+        return Ok(Launch::Headless {
             config,
             print_view,
             print_hud,
-        }));
+        });
     }
-    Ok(None)
+    Ok(Launch::Overlay(OverlayArgs {
+        requested: config.is_some() || overlay_only,
+        config,
+        print_view,
+        print_hud,
+        duration,
+        output,
+        namespace,
+        list_outputs,
+        monitor,
+        list_monitors,
+    }))
 }
 
-pub fn run(cmd: Command) -> Result<(), Box<dyn Error>> {
-    match cmd {
-        Command::Version => {
+fn normalize_arg(arg: OsString) -> OsString {
+    let Some(text) = arg.to_str() else {
+        return arg;
+    };
+    let Some(name) = text.strip_prefix('-') else {
+        return arg;
+    };
+    if name.starts_with('-') || !LONG_ALIASES.contains(&name) {
+        return arg;
+    }
+    format!("--{name}").into()
+}
+
+fn take_print_view_path(
+    parser: &mut lexopt::Parser,
+    fixture: &mut Option<PathBuf>,
+) -> Result<(), lexopt::Error> {
+    if let Some(val) = parser.optional_value() {
+        *fixture = Some(PathBuf::from(val));
+        return Ok(());
+    }
+    let Some(mut raw) = parser.try_raw_args() else {
+        return Ok(());
+    };
+    let Some(next) = raw.peek() else {
+        return Ok(());
+    };
+    let Some(text) = next.to_str() else {
+        return Ok(());
+    };
+    if text.starts_with('-') {
+        return Ok(());
+    }
+    *fixture = Some(PathBuf::from(raw.next().unwrap()));
+    Ok(())
+}
+
+pub fn print_help() {
+    eprint!("{}", help_text());
+}
+
+fn help_text() -> String {
+    let config = if cfg!(windows) {
+        "TOML. default: %APPDATA%\\df-hud\\config.toml (missing = built-in defaults)"
+    } else {
+        "TOML. default ~/.config/df-hud/config.toml (missing = built-in defaults)"
+    };
+    let overlay = if cfg!(target_os = "linux") {
+        "\
+  --output NAME         pin to this connector (DP-1). overrides hud.monitor
+  --namespace NAME      layer-shell namespace (default df-hud)
+  --duration SECS       exit after SECS; 0 runs until Ctrl-C (default 0)
+  --list-outputs        print connector names and exit
+"
+    } else if cfg!(windows) {
+        "\
+  --monitor NAME        Win32 device (\\\\.\\DISPLAY1). overrides hud.monitor
+  --list-monitors       print monitors and exit
+  --duration SECS       exit after SECS; 0 runs until Ctrl-C (default 0)
+"
+    } else {
+        ""
+    };
+    format!(
+        "\
+df-hud — overlay (live derive)
+
+  --once                 poll once, print the view, and exit
+  --print-view [PATH]    fixture JSON (PATH) or live JSON each update
+  --print-hud            print HUD text lines each update
+  --dump-fields          with --once / --dump-challenges, print the player record (secrets withheld)
+  --dump-challenges      fetch the challenge board once and print it
+  --check-config         validate TOML and print the request budget
+  --check-game           report whether the game client is detected
+  --headless             run pollers without the overlay window
+  --version              print the version and exit
+  --config PATH          {config}
+{overlay}  -h, --help            print this help
+"
+    )
+}
+
+pub fn run(launch: Launch) -> Result<(), Box<dyn Error>> {
+    match launch {
+        Launch::Help => {
+            print_help();
+            Ok(())
+        }
+        Launch::Version => {
             println!("df-hud {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        Command::PrintView {
+        Launch::PrintView {
             fixture,
             print_hud,
         } => {
@@ -168,24 +414,25 @@ pub fn run(cmd: Command) -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
-        Command::CheckConfig { config } => {
+        Launch::CheckConfig { config } => {
             print!("{}", check_config_text(config.as_deref())?);
             Ok(())
         }
-        Command::CheckGame { config } => {
+        Launch::CheckGame { config } => {
             print!("{}", check_game_text(config.as_deref())?);
             Ok(())
         }
-        Command::Once {
+        Launch::Once {
             config,
             dump_fields,
         } => run_once(config.as_deref(), dump_fields),
-        Command::DumpChallenges { config, raw } => dump_challenges(config.as_deref(), raw),
-        Command::Headless {
+        Launch::DumpChallenges { config, raw } => dump_challenges(config.as_deref(), raw),
+        Launch::Headless {
             config,
             print_view,
             print_hud,
         } => run_headless(config, print_view, print_hud),
+        Launch::Overlay(_) => Err("internal: overlay is started from main".into()),
     }
 }
 
@@ -607,6 +854,143 @@ fn json_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse(args: &[&str]) -> Result<Launch, String> {
+        parse_from(args.iter().copied()).map_err(|err| err.to_string())
+    }
+
+    fn overlay(args: &[&str]) -> OverlayArgs {
+        match parse(args).unwrap() {
+            Launch::Overlay(args) => args,
+            other => panic!("expected overlay, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_argv_is_overlay() {
+        let args = overlay(&[]);
+        assert_eq!(args, OverlayArgs::default());
+    }
+
+    #[test]
+    fn once_and_go_alias() {
+        assert_eq!(
+            parse(&["--once"]).unwrap(),
+            Launch::Once {
+                config: None,
+                dump_fields: false
+            }
+        );
+        assert_eq!(
+            parse(&["-once", "-dump-fields"]).unwrap(),
+            Launch::Once {
+                config: None,
+                dump_fields: true
+            }
+        );
+    }
+
+    #[test]
+    fn unknown_flag_is_an_error() {
+        let err = parse(&["--bogus"]).unwrap_err();
+        assert!(err.contains("bogus"), "{err}");
+        let err = parse(&["--once", "--bogus"]).unwrap_err();
+        assert!(err.contains("bogus"), "{err}");
+    }
+
+    #[test]
+    fn print_view_path_is_fixture() {
+        assert_eq!(
+            parse(&["--print-view", "fx.json"]).unwrap(),
+            Launch::PrintView {
+                fixture: PathBuf::from("fx.json"),
+                print_hud: false
+            }
+        );
+        assert_eq!(
+            parse(&["--print-view=fx.json", "--print-hud"]).unwrap(),
+            Launch::PrintView {
+                fixture: PathBuf::from("fx.json"),
+                print_hud: true
+            }
+        );
+    }
+
+    #[test]
+    fn print_view_without_path_is_live_overlay() {
+        let args = overlay(&["--print-view", "--print-hud"]);
+        assert!(args.print_view);
+        assert!(args.print_hud);
+        assert!(!args.requested);
+    }
+
+    #[test]
+    fn help_wins() {
+        assert_eq!(parse(&["--help", "--once"]).unwrap(), Launch::Help);
+        assert_eq!(parse(&["-h"]).unwrap(), Launch::Help);
+    }
+
+    #[test]
+    fn dump_fields_needs_a_oneshot() {
+        let err = parse(&["--dump-fields"]).unwrap_err();
+        assert!(err.contains("--dump-fields"), "{err}");
+    }
+
+    #[test]
+    fn exclusive_oneshots_conflict() {
+        let err = parse(&["--once", "--check-config"]).unwrap_err();
+        assert!(err.contains("use only one"), "{err}");
+    }
+
+    #[test]
+    fn headless_live_print_view() {
+        assert_eq!(
+            parse(&["--headless", "--print-view"]).unwrap(),
+            Launch::Headless {
+                config: None,
+                print_view: true,
+                print_hud: false
+            }
+        );
+    }
+
+    #[test]
+    fn config_marks_overlay_requested() {
+        let args = overlay(&["--config", "/tmp/df-hud.toml"]);
+        assert!(args.requested);
+        assert_eq!(args.config.as_deref(), Some(Path::new("/tmp/df-hud.toml")));
+    }
+
+    #[test]
+    fn leftover_positional_is_an_error() {
+        let err = parse(&["--once", "nope"]).unwrap_err();
+        assert!(err.contains("nope"), "{err}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_output_is_overlay() {
+        let args = overlay(&["--output", "DP-1", "--duration", "2"]);
+        assert_eq!(args.output.as_deref(), Some("DP-1"));
+        assert_eq!(args.duration, Duration::from_secs_f32(2.0));
+        assert!(args.requested);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_overlay_flag_rejected_on_once() {
+        let err = parse(&["--once", "--output", "DP-1"]).unwrap_err();
+        assert!(err.contains("--output"), "{err}");
+        assert!(err.contains("--once"), "{err}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_overlay_flag_rejected_on_once() {
+        let err = parse(&["--once", "--monitor", r"\\.\DISPLAY1"]).unwrap_err();
+        assert!(err.contains("--monitor"), "{err}");
+        assert!(err.contains("--once"), "{err}");
+    }
 
     fn fixture_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/print-view.json")

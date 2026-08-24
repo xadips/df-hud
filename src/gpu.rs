@@ -153,7 +153,6 @@ impl Gpu {
         Ok(gpu)
     }
 
-    #[allow(dead_code)]
     pub fn resize(&self, buf_w: i32, buf_h: i32) {
         unsafe { self.gl.viewport(0, 0, buf_w, buf_h) };
     }

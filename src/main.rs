@@ -68,24 +68,23 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(cmd) = cli::take()? {
-        return cli::run(cmd);
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let args = wayland::Args::parse()?;
-        println!("df-hud {}", env!("CARGO_PKG_VERSION"));
-        wayland::run(args)
-    }
-    #[cfg(windows)]
-    {
-        let args = win32::Args::parse()?;
-        println!("df-hud {}", env!("CARGO_PKG_VERSION"));
-        win32::run(args)
-    }
-    #[cfg(not(any(target_os = "linux", windows)))]
-    {
-        println!("df-hud {}", env!("CARGO_PKG_VERSION"));
-        Ok(())
+    match cli::parse()? {
+        cli::Launch::Overlay(args) => {
+            println!("df-hud {}", env!("CARGO_PKG_VERSION"));
+            #[cfg(target_os = "linux")]
+            {
+                wayland::run(args.into())
+            }
+            #[cfg(windows)]
+            {
+                win32::run(args.into())
+            }
+            #[cfg(not(any(target_os = "linux", windows)))]
+            {
+                let _ = args;
+                Ok(())
+            }
+        }
+        other => cli::run(other),
     }
 }

@@ -461,6 +461,7 @@ mod linux {
 #[cfg(windows)]
 mod windows {
     use super::*;
+    use crate::win32::wide;
     use std::mem::{size_of, zeroed};
     use std::ptr;
     use std::time::Duration;
@@ -741,10 +742,6 @@ mod windows {
             ID_QUIT => h.request_stop(),
             _ => {}
         }
-    }
-
-    fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
     fn write_tip(nid: &mut NOTIFYICONDATAW, tip: &str) {

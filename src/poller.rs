@@ -53,7 +53,7 @@ impl Default for Notify {
     }
 }
 
-pub fn jitter_unit() -> f64 {
+fn jitter_unit() -> f64 {
     static N: AtomicU64 = AtomicU64::new(1);
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)

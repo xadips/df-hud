@@ -6,8 +6,6 @@
 //! The atlas is RGB coverage so ClearType-style edges survive; a transparent
 //! overlay can still fringe on bright game pixels. Gpu on EGL and WGL share this.
 
-#![allow(dead_code)]
-
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
