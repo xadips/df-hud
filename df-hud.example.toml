@@ -9,7 +9,7 @@
 # minimum are errors too, rather than being quietly raised, because they decide
 # how often df-hud talks to somebody else's server.
 #
-# Editing this file while df-hud is running reloads it. Three keys need a restart
+# Editing this file while df-hud is running reloads it. Seven keys need a restart
 # and are noted where they appear.
 
 [df]
@@ -187,6 +187,8 @@ overlay = "K"
 # data_dir = "~/.local/share/df-hud"
 
 [hud]
+# Persistent master switch. Tray, hotkey and HTTP toggles share a separate
+# session-only preference and cannot override this when it is false.
 enabled = true
 
 # Hide the HUD while the game is not running. Named to match
@@ -209,8 +211,8 @@ follow_game_workspace = true
 # Connector name ("DP-1"), or "auto".
 #
 # "auto" follows the GAME: pinned to whichever monitor the game's window is on,
-# re-checked every time the HUD is shown. If the window cannot be identified the
-# compositor chooses, which means the focused monitor.
+# re-checked when its placement or this setting changes. If the window cannot be
+# identified the compositor chooses, which means the focused monitor.
 #
 # An unknown name is a warning, not a failure: losing the HUD entirely because a
 # connector got renamed after a cable swap would be a poor trade.
@@ -218,7 +220,7 @@ monitor = "auto"
 
 # MUST be "overlay" to be visible over a fullscreen game: the "top" layer sits
 # BELOW fullscreen surfaces, so a "top" HUD simply disappears when you play. The
-# others exist for debugging.
+# others exist for debugging. Needs a RESTART to change.
 layer = "overlay"
 
 # The surface covers the whole monitor and each group carries its own x/y under
@@ -273,6 +275,8 @@ onslaught_interval = 30
 onslaught_max_interval = 60
 
 [presence]
+# Both enabled and socket need a RESTART to change.
+#
 # Where you are, from the game CLIENT instead of the game server.
 #
 # The client publishes its own position as Discord rich presence, and df-hud
@@ -301,6 +305,8 @@ enabled = true
 socket = ""
 
 [tray]
+# enabled needs a RESTART to change.
+#
 # The icon in the system tray (waybar's "tray" module, or any other
 # StatusNotifierItem host), with a menu for hiding the overlay, reloading this
 # file and quitting.

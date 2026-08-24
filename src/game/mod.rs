@@ -29,7 +29,7 @@ pub trait Scanner: Send {
 
 pub struct Watcher {
     scanner: Mutex<Box<dyn Scanner>>,
-    interval: Duration,
+    interval: Mutex<Duration>,
     state: Mutex<GameState>,
     on_change: Mutex<Option<Arc<dyn Fn(GameState) + Send + Sync>>>,
     poke: Notify,
@@ -37,21 +37,16 @@ pub struct Watcher {
 
 impl Watcher {
     pub fn new(exe_name: &str, interval: Duration) -> Arc<Self> {
-        let interval = if interval.is_zero() {
-            Duration::from_secs(2)
-        } else {
-            interval
-        };
         Arc::new(Self {
             scanner: Mutex::new(platform_scanner(exe_name)),
-            interval,
+            interval: Mutex::new(normalize_interval(interval)),
             state: Mutex::new(GameState::default()),
             on_change: Mutex::new(None),
             poke: Notify::new(),
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub fn with_scanner(scanner: Box<dyn Scanner>, interval: Duration) -> Arc<Self> {
         let w = Self::new(DEFAULT_PROCESS, interval);
         *w.scanner.lock().unwrap() = scanner;
@@ -75,10 +70,24 @@ impl Watcher {
         self.poke.ping();
     }
 
+    pub fn reconfigure(&self, exe_name: &str, interval: Duration) {
+        *self.scanner.lock().unwrap() = platform_scanner(exe_name);
+        *self.interval.lock().unwrap() = normalize_interval(interval);
+        self.poke();
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    fn reconfigure_with_scanner(&self, scanner: Box<dyn Scanner>, interval: Duration) {
+        *self.scanner.lock().unwrap() = scanner;
+        *self.interval.lock().unwrap() = normalize_interval(interval);
+        self.poke();
+    }
+
     pub fn run(&self, stop: Arc<AtomicBool>) {
         self.scan_once();
         while !stop.load(Ordering::SeqCst) {
-            self.poke.wait_timeout(self.interval);
+            let interval = *self.interval.lock().unwrap();
+            self.poke.wait_timeout(interval);
             if stop.load(Ordering::SeqCst) {
                 break;
             }
@@ -122,6 +131,14 @@ impl Watcher {
         if let Some(f) = self.on_change.lock().unwrap().clone() {
             f(next);
         }
+    }
+}
+
+fn normalize_interval(interval: Duration) -> Duration {
+    if interval.is_zero() {
+        Duration::from_secs(2)
+    } else {
+        interval
     }
 }
 
@@ -875,6 +892,38 @@ mod linux_tests {
         let got = rx.recv_timeout(Duration::from_secs(2)).expect("relaunch");
         assert!(got.running && got.pid == 911);
         assert_ne!(got.started_at, first.started_at);
+        stop.store(true, Ordering::SeqCst);
+        w.poke();
+    }
+
+    #[test]
+    fn watcher_reconfigure_replaces_scanner_and_wakes_loop() {
+        let p = FakeProc::new();
+        p.add_process(920, "Alternate.exe", "/games/Alternate.exe", 100_000);
+        let w = Watcher::with_scanner(
+            Box::new(p.scanner("DeadFrontier.exe")),
+            Duration::from_secs(3600),
+        );
+        let (tx, rx) = mpsc::channel();
+        w.set_on_change(move |s| {
+            let _ = tx.send(s);
+        });
+        let stop = Arc::new(AtomicBool::new(false));
+        let w2 = w.clone();
+        let stop2 = stop.clone();
+        thread::spawn(move || w2.run(stop2));
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+
+        w.reconfigure_with_scanner(
+            Box::new(p.scanner("Alternate.exe")),
+            Duration::from_millis(10),
+        );
+        let got = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("reconfigured");
+        assert!(got.running);
+        assert_eq!(got.pid, 920);
+        assert_eq!(*w.interval.lock().unwrap(), Duration::from_millis(10));
         stop.store(true, Ordering::SeqCst);
         w.poke();
     }

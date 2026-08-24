@@ -360,6 +360,10 @@ impl Store {
         s.xp_min_samples = min_samples;
     }
 
+    pub fn set_xp_min_samples(&self, min_samples: i32) {
+        self.inner.lock().unwrap().xp_min_samples = min_samples;
+    }
+
     pub fn set_challenges(&self, board: Vec<Challenge>) {
         let mut s = self.inner.lock().unwrap();
         s.board = board;
@@ -1306,6 +1310,14 @@ mod tests {
     }
 
     #[test]
+    fn xp_min_samples_can_be_reloaded() {
+        let s = Store::new(None);
+        assert_eq!(s.inner.lock().unwrap().xp_min_samples, 3);
+        s.set_xp_min_samples(7);
+        assert_eq!(s.inner.lock().unwrap().xp_min_samples, 7);
+    }
+
+    #[test]
     fn session_end_clears_boss_map_and_challenges() {
         let now = DateTime::from_timestamp(1000, 0).unwrap();
         let s = running_store(now);
@@ -1344,11 +1356,7 @@ mod tests {
         assert!(view.challenges.is_none());
         assert_eq!(view.challenge_status, "retrying");
         s.set_boss_map(
-            bossmap::parse(
-                br#"{"bosshash":"x","servertime":1000,"version":"1"}"#,
-                now,
-            )
-            .unwrap(),
+            bossmap::parse(br#"{"bosshash":"x","servertime":1000,"version":"1"}"#, now).unwrap(),
         );
         s.clear_boss_map();
         assert!(!s.derive(now).outpost_attack);

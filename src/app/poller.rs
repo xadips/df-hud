@@ -97,6 +97,11 @@ impl PlayerPoller {
         self.wake.ping();
     }
 
+    pub fn replace_client(&self, client: Client) {
+        *self.client.lock().unwrap() = client;
+        self.wake();
+    }
+
     pub fn resume(&self) {
         {
             let mut st = self.status.lock().unwrap();
@@ -380,6 +385,11 @@ impl ChallengePoller {
 
     pub fn wake(&self) {
         self.wake.ping();
+    }
+
+    pub fn replace_client(&self, client: Client) {
+        *self.client.lock().unwrap() = client;
+        self.wake();
     }
 
     pub fn resume(&self) {
@@ -710,6 +720,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn player_client_can_be_replaced_after_reload() {
+        let (base, hits) = spawn_df(|_| (200, player_record().into()));
+        let (p, _stop) = test_poller("http://127.0.0.1:1");
+        let client = Client::new(&base, "df-hud-reloaded");
+        client.disable_public_get_values();
+        p.replace_client(client);
+        let tick = p.poll_once(false);
+        assert!(tick.err.is_none(), "{:?}", tick.err);
+        assert_eq!(*hits.lock().unwrap(), 1);
+    }
+
     fn test_challenge_poller(
         session_stale: Arc<AtomicBool>,
     ) -> (Arc<ChallengePoller>, Arc<Store>, Arc<Mutex<Config>>) {
@@ -776,5 +798,14 @@ mod tests {
         let reason = p.pause_reason_for_test().expect("paused");
         assert!(reason.contains("disabled"), "{reason}");
         assert!(store.derive(Utc::now()).challenges.is_none());
+    }
+
+    #[test]
+    fn challenge_client_can_be_replaced_after_reload() {
+        let (base, hits) = spawn_df(|_| (200, "&df_challengename_1=Travel".into()));
+        let (p, _, _) = test_challenge_poller(Arc::new(AtomicBool::new(false)));
+        p.replace_client(Client::new(&base, "df-hud-reloaded"));
+        assert!(p.poll_once().is_ok());
+        assert_eq!(*hits.lock().unwrap(), 1);
     }
 }

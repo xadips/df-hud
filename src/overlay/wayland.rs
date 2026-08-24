@@ -195,6 +195,25 @@ struct App {
 }
 
 impl App {
+    fn current_cfg(&self) -> Config {
+        self.handle
+            .as_ref()
+            .map(|h| h.cfg.lock().unwrap().clone())
+            .unwrap_or_else(|| self.cfg.clone())
+    }
+
+    fn sync_config(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let cfg = handle.cfg.lock().unwrap().clone();
+        let monitor_changed = cfg.hud.monitor != self.cfg.hud.monitor;
+        self.cfg = cfg;
+        if monitor_changed && self.mapped {
+            self.unmap();
+        }
+    }
+
     fn buffer_size(&self) -> (i32, i32) {
         let w = ((self.logical_w as u64 * self.frac_scale as u64 + 60) / 120).max(1) as i32;
         let h = ((self.logical_h as u64 * self.frac_scale as u64 + 60) / 120).max(1) as i32;
@@ -260,23 +279,18 @@ impl App {
                 layer.ack_configure(serial);
             }
         }
+        let cfg = self.current_cfg();
         let built = match &self.handle {
-            Some(h) => overlay::scene(h, &self.cfg, self.logical_w as f32, self.logical_h as f32),
-            None => present::empty_overlay_scene(
-                &self.cfg,
-                self.logical_w as f32,
-                self.logical_h as f32,
-            ),
+            Some(h) => overlay::scene(h, self.logical_w as f32, self.logical_h as f32),
+            None => {
+                present::empty_overlay_scene(&cfg, self.logical_w as f32, self.logical_h as f32)
+            }
         };
         let (buf_w, buf_h) = self.buffer_size();
         self.gl_window.as_ref().expect("gl_window").make_current()?;
-        self.gpu.as_mut().expect("gpu").draw(
-            buf_w,
-            buf_h,
-            self.logical_w,
-            self.logical_h,
-            &built,
-        )?;
+        let gpu = self.gpu.as_mut().expect("gpu");
+        gpu.set_font(&cfg.hud.font);
+        gpu.draw(buf_w, buf_h, self.logical_w, self.logical_h, &built)?;
         self.gl_window.as_ref().expect("gl_window").swap()?;
         self.swaps += 1;
         self.needs_present = false;
@@ -295,7 +309,8 @@ impl App {
             .id();
         let started = Instant::now();
         let (gl_window, gl) = GlWindow::new(self.display_ptr, surface_id, buf_w, buf_h)?;
-        let gpu = Gpu::new(gl, buf_w, buf_h, &self.cfg.hud.font)?;
+        let cfg = self.current_cfg();
+        let gpu = Gpu::new(gl, buf_w, buf_h, &cfg.hud.font)?;
         eprintln!(
             "EGL context ready in {:.0}ms",
             started.elapsed().as_secs_f64() * 1000.0
@@ -754,18 +769,23 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
                 return Ok(());
             }
         }
-
         let now = Instant::now();
         if overlay::due(now, &mut next_tick) {
             app.needs_present = true;
             if let Some(cfg) = overlay::take_reload(&mut watch) {
-                app.cfg = cfg.clone();
                 if let Some(h) = app.handle.as_ref() {
                     h.note_config_watch(&watch, true);
-                    match app.gpu.as_mut() {
+                    let applied = match app.gpu.as_mut() {
                         Some(gpu) => overlay::push_config(h, gpu, &cfg),
                         None => h.replace_config(cfg),
+                    };
+                    let monitor_changed = applied.hud.monitor != app.cfg.hud.monitor;
+                    app.cfg = applied;
+                    if monitor_changed && app.mapped {
+                        app.unmap();
                     }
+                } else {
+                    app.cfg = cfg;
                 }
             } else if let Some(h) = app.handle.as_ref() {
                 h.note_config_watch(&watch, false);
@@ -828,6 +848,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
                     if let Some(h) = &app.handle {
                         h.wake.take();
                     }
+                    app.sync_config();
                     app.needs_present = true;
                 }
             }

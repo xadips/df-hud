@@ -31,8 +31,8 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::Console::GetConsoleProcessList;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
-    TaskDialogIndirect, MARGINS, TASKDIALOGCONFIG, TASKDIALOG_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION,
-    TDF_SIZE_TO_CONTENT, TD_ERROR_ICON,
+    TaskDialogIndirect, MARGINS, TASKDIALOGCONFIG, TASKDIALOG_BUTTON,
+    TDF_ALLOW_DIALOG_CANCELLATION, TDF_SIZE_TO_CONTENT, TD_ERROR_ICON,
 };
 use windows_sys::Win32::UI::HiDpi::{
     GetDpiForMonitor, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -42,12 +42,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW,
     LoadCursorW, MessageBoxW, MsgWaitForMultipleObjects, PeekMessageW, RegisterClassExW,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
-    CS_HREDRAW, CS_OWNDC, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MB_ICONERROR,
-    MB_OK,
-    MONITORINFOF_PRIMARY, MSG, PM_REMOVE, QS_ALLINPUT, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA, WM_CLOSE, WM_DESTROY,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    CS_HREDRAW, CS_OWNDC, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA,
+    MB_ICONERROR, MB_OK, MONITORINFOF_PRIMARY, MSG, PM_REMOVE, QS_ALLINPUT, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA,
+    WM_CLOSE, WM_DESTROY, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use crate::app;
@@ -165,9 +164,7 @@ fn show_fatal_task_dialog(err: &str, log: &Path) -> bool {
     cfg.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
     cfg.Anonymous1.pszMainIcon = TD_ERROR_ICON;
     let mut button = 0i32;
-    let hr = unsafe {
-        TaskDialogIndirect(&cfg, &mut button, ptr::null_mut(), ptr::null_mut())
-    };
+    let hr = unsafe { TaskDialogIndirect(&cfg, &mut button, ptr::null_mut(), ptr::null_mut()) };
     if hr < 0 {
         return false;
     }
@@ -520,15 +517,11 @@ impl OverlayWindow {
         }
     }
 
-    fn wait(timeout_ms: u32, extra: Option<HANDLE>) {
+    fn wait(timeout_ms: u32, extra: Option<HANDLE>) -> u32 {
         unsafe {
             match extra {
-                Some(h) => {
-                    MsgWaitForMultipleObjects(1, &h, 0, timeout_ms, QS_ALLINPUT);
-                }
-                None => {
-                    MsgWaitForMultipleObjects(0, ptr::null(), 0, timeout_ms, QS_ALLINPUT);
-                }
+                Some(h) => MsgWaitForMultipleObjects(1, &h, 0, timeout_ms, QS_ALLINPUT),
+                None => MsgWaitForMultipleObjects(0, ptr::null(), 0, timeout_ms, QS_ALLINPUT),
             }
         }
     }
@@ -639,6 +632,9 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut swaps = 0u32;
     let mut mapped = true;
     let mut needs_present = true;
+    let mut monitor_request = want_name;
+    let mut wait_failed = false;
+    let mut runtime_cfg = handle.cfg.lock().unwrap().clone();
 
     let started = Instant::now();
     let mut next_tick = overlay::start_tick(started);
@@ -663,14 +659,28 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
             needs_present = true;
             if let Some(cfg) = overlay::take_reload(&mut watch) {
                 handle.note_config_watch(&watch, true);
-                match gpu.as_mut() {
+                runtime_cfg = match gpu.as_mut() {
                     Some(gpu) => overlay::push_config(&handle, gpu, &cfg),
                     None => handle.replace_config(cfg),
-                }
+                };
             } else {
                 handle.note_config_watch(&watch, false);
             }
         }
+        let vis_mon = handle.vis.state().monitor;
+        let next_monitor_request =
+            config::overlay_monitor(args.monitor.as_deref(), &runtime_cfg.hud.monitor, &vis_mon);
+        if mapped && next_monitor_request != monitor_request {
+            if let Some(surface) = &surface {
+                let _ = surface.make_current();
+            }
+            gpu.take();
+            surface.take();
+            win.hide();
+            mapped = false;
+            needs_present = false;
+        }
+        monitor_request = next_monitor_request;
         let vis = handle.visible.load(Ordering::SeqCst);
         if mapped && !vis {
             if let Some(surface) = &surface {
@@ -682,18 +692,15 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
             mapped = false;
             needs_present = false;
         } else if !mapped && vis {
-            let vis_mon = handle.vis.state().monitor;
-            let want_name =
-                config::overlay_monitor(args.monitor.as_deref(), &watch.cfg.hud.monitor, &vis_mon);
             if let Ok(list) = list_monitors() {
                 monitors = list;
             }
             if let Ok(m) = pick_monitor(
                 &monitors,
-                if want_name.is_empty() {
+                if monitor_request.is_empty() {
                     None
                 } else {
-                    Some(want_name.as_str())
+                    Some(monitor_request.as_str())
                 },
                 &mut warned_monitors,
             ) {
@@ -705,7 +712,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     eprintln!("hud: pinned to {}", current_monitor);
                 }
             }
-            match create_gpu(instance, win.hwnd, buf_w, buf_h, &watch.cfg.hud.font) {
+            match create_gpu(instance, win.hwnd, buf_w, buf_h, &runtime_cfg.hud.font) {
                 Ok((s, g)) => {
                     surface = Some(s);
                     gpu = Some(g);
@@ -720,16 +727,35 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
             if let (Some(surface), Some(gpu)) = (surface.as_ref(), gpu.as_mut()) {
                 win.reassert_exstyle();
                 surface.make_current()?;
-                let built = overlay::scene(&handle, &watch.cfg, buf_w as f32, buf_h as f32);
+                gpu.set_font(&runtime_cfg.hud.font);
+                let built = overlay::scene(&handle, buf_w as f32, buf_h as f32);
                 gpu.draw(buf_w, buf_h, buf_w, buf_h, &built)?;
                 surface.swap()?;
                 swaps += 1;
+                needs_present = false;
             }
         }
 
         let timeout_ms = overlay::wait_ms(now, started, args.duration, next_tick);
-        OverlayWindow::wait(timeout_ms, Some(handle.wake.event_handle()));
-        handle.wake.take();
-        needs_present = true;
+        let result = OverlayWindow::wait(timeout_ms, Some(handle.wake.event_handle()));
+        match overlay::classify_win32_wait(result, 1) {
+            overlay::Win32Wait::Wake => {
+                handle.wake.take();
+                runtime_cfg = handle.cfg.lock().unwrap().clone();
+                needs_present = true;
+                wait_failed = false;
+            }
+            overlay::Win32Wait::Messages | overlay::Win32Wait::Timeout => {
+                wait_failed = false;
+            }
+            overlay::Win32Wait::Failed(code) if !wait_failed => {
+                eprintln!(
+                    "overlay wait failed: result {code:#x}, {}",
+                    last_err("wait")
+                );
+                wait_failed = true;
+            }
+            overlay::Win32Wait::Failed(_) => {}
+        }
     }
 }

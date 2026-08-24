@@ -27,6 +27,30 @@ use gpu::Gpu;
 use scene::Scene;
 
 pub const TICK: Duration = Duration::from_secs(1);
+#[cfg(any(test, windows))]
+const WIN32_WAIT_TIMEOUT: u32 = 0x102;
+
+#[cfg(any(test, windows))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Win32Wait {
+    Wake,
+    Messages,
+    Timeout,
+    Failed(u32),
+}
+
+#[cfg(any(test, windows))]
+pub fn classify_win32_wait(result: u32, handle_count: u32) -> Win32Wait {
+    if result < handle_count {
+        Win32Wait::Wake
+    } else if result == handle_count {
+        Win32Wait::Messages
+    } else if result == WIN32_WAIT_TIMEOUT {
+        Win32Wait::Timeout
+    } else {
+        Win32Wait::Failed(result)
+    }
+}
 
 pub fn start_tick(started: Instant) -> Instant {
     started + TICK
@@ -48,15 +72,17 @@ pub fn take_reload(watch: &mut Watch) -> Option<Config> {
     watch.poll().then(|| watch.cfg.clone())
 }
 
-pub fn push_config(handle: &Handle, gpu: &mut Gpu, cfg: &Config) {
-    handle.replace_config(cfg.clone());
-    gpu.set_font(&cfg.hud.font);
+pub fn push_config(handle: &Handle, gpu: &mut Gpu, cfg: &Config) -> Config {
+    let applied = handle.replace_config(cfg.clone());
+    gpu.set_font(&applied.hud.font);
+    applied
 }
 
-pub fn scene(handle: &Handle, cfg: &Config, width: f32, height: f32) -> Scene {
+pub fn scene(handle: &Handle, width: f32, height: f32) -> Scene {
+    let cfg = handle.cfg.lock().unwrap().clone();
     present::overlay_scene(
         &handle.store.derive(Utc::now()),
-        cfg,
+        &cfg,
         &handle.groups,
         width,
         height,
@@ -106,5 +132,19 @@ mod tests {
         let started = Instant::now();
         assert!(!expired(started, Duration::ZERO));
         assert!(!expired(started, Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn classifies_win32_wait_results() {
+        assert_eq!(classify_win32_wait(0, 1), Win32Wait::Wake);
+        assert_eq!(classify_win32_wait(1, 1), Win32Wait::Messages);
+        assert_eq!(
+            classify_win32_wait(WIN32_WAIT_TIMEOUT, 1),
+            Win32Wait::Timeout
+        );
+        assert_eq!(
+            classify_win32_wait(u32::MAX, 1),
+            Win32Wait::Failed(u32::MAX)
+        );
     }
 }

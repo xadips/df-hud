@@ -1426,7 +1426,10 @@ mod tests {
             "{}",
             lines[0]
         );
-        assert!(lines.iter().any(|l| l.contains("Summer Death")), "{lines:?}");
+        assert!(
+            lines.iter().any(|l| l.contains("Summer Death")),
+            "{lines:?}"
+        );
     }
 
     #[test]

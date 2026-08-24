@@ -627,11 +627,13 @@ Unknown keys are a **startup error** — a typo would otherwise look like a bug 
 df-hud rather than a bug in your config.
 
 **Editing the file while running reloads it, including the HUD's own appearance:**
-font, colour, size, margins, which groups exist and where each one sits all change
-without a restart, as do every interval and both visibility rules. Only
-three keys need a restart (`bridge.listen`, `bridge.enabled`, `paths.data_dir`),
-and they say so. An edit that fails validation keeps the running config rather
-than taking the HUD down mid-game.
+font, colour, size, margins, monitor, which groups exist and where each one sits
+all change without a restart, as do every interval, game-process detection and
+both visibility rules. Seven keys need a restart: `bridge.listen`,
+`bridge.enabled`, `paths.data_dir`, `presence.enabled`, `presence.socket`,
+`tray.enabled` and `hud.layer`. Reload reports edits to those keys and keeps
+their running values. An edit that fails validation keeps the running config
+rather than taking the HUD down mid-game.
 
 `hud.layer` must stay `"overlay"`. The `top` layer sits *below* fullscreen
 windows, so a `top` HUD vanishes exactly when you play.
