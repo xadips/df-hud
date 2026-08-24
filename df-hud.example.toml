@@ -164,9 +164,10 @@ launcher_title = "Dead Frontier Configuration"
 launcher_delay = 1
 
 [hotkeys]
-# Native Windows hotkeys. They are registered only while the real game window is
-# focused, then released immediately when you alt-tab. Linux ignores this table:
-# the compositor bindings described in contrib/ own global input there.
+# Registered only while the real game window is focused, then released when you
+# alt-tab. Windows uses RegisterHotKey. Linux installs the same chords on
+# Hyprland through its Lua eval socket. Do not also load contrib/df-hud.lua:
+# a second copy of these chords races the binary.
 enabled = true
 
 # A bare key consumes that key before the game receives it, exactly like the

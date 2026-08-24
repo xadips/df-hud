@@ -229,6 +229,9 @@ mod linux {
                         }
                     } else {
                         bind_failed = false;
+                        if !bound.is_empty() {
+                            eprintln!("hotkeys: Hyprland armed {}", bound.join(" "));
+                        }
                     }
                 }
                 last_key = key;
@@ -271,26 +274,37 @@ mod linux {
         }
     }
 
-    fn hypr_lhs(b: &Binding) -> String {
-        let mut mods = Vec::new();
+    /// Chord as `hl.bind` expects it. Lua-config Hyprland rejects `keyword bind`.
+    fn hypr_lua_keys(b: &Binding) -> String {
+        let mut parts = Vec::new();
         if b.modifiers & MOD_CONTROL != 0 {
-            mods.push("CONTROL");
+            parts.push("CTRL".to_string());
         }
         if b.modifiers & MOD_ALT != 0 {
-            mods.push("ALT");
+            parts.push("ALT".to_string());
         }
         if b.modifiers & MOD_SHIFT != 0 {
-            mods.push("SHIFT");
+            parts.push("SHIFT".to_string());
         }
         if b.modifiers & MOD_WIN != 0 {
-            mods.push("SUPER");
+            parts.push("SUPER".to_string());
         }
-        let key = hypr_key(b);
-        if mods.is_empty() {
-            format!(",{key}")
-        } else {
-            format!("{},{key}", mods.join("_"))
+        parts.push(hypr_key(b));
+        parts.join("+")
+    }
+
+    fn lua_quote(s: &str) -> String {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+
+    fn hypr_eval(lua: &str) -> Result<(), String> {
+        let reply = crate::game::desktop::hypr_command(&format!("eval {lua}"))?;
+        let text = String::from_utf8_lossy(&reply);
+        let line = text.split('\n').next().unwrap_or("").trim();
+        if line == "ok" || line.is_empty() {
+            return Ok(());
         }
+        Err(line.to_string())
     }
 
     fn bind_all(
@@ -300,17 +314,39 @@ mod linux {
     ) -> Result<(), String> {
         let script = script.display().to_string();
         for slot in slots {
-            let lhs = hypr_lhs(&slot.binding);
-            let cmd = format!("keyword bind {lhs},exec,{script} {}", slot.action);
-            crate::game::desktop::hypr_command(&cmd)?;
-            bound.push(lhs);
+            let keys = hypr_lua_keys(&slot.binding);
+            let fire = format!("{} {}", script, slot.action);
+            let lua = format!(
+                "hl.bind({}, hl.dsp.exec_cmd({}), {{ description = {} }})",
+                lua_quote(&keys),
+                lua_quote(&fire),
+                lua_quote(&format!("df-hud: {}", slot.action)),
+            );
+            hypr_eval(&lua).map_err(|e| format!("{} ({e})", slot.binding.canonical()))?;
+            bound.push(keys);
         }
         Ok(())
     }
 
     fn unbind_all(bound: &mut Vec<String>) {
-        for lhs in bound.drain(..) {
-            let _ = crate::game::desktop::hypr_command(&format!("keyword unbind {lhs}"));
+        for keys in bound.drain(..) {
+            let _ = hypr_eval(&format!("hl.unbind({})", lua_quote(&keys)));
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn lua_keys_match_hl_bind() {
+            assert_eq!(hypr_lua_keys(&parse_binding("V").unwrap()), "v");
+            assert_eq!(hypr_lua_keys(&parse_binding("Grave").unwrap()), "grave");
+            assert_eq!(
+                hypr_lua_keys(&parse_binding("Ctrl+Shift+M").unwrap()),
+                "CTRL+SHIFT+m"
+            );
+            assert_eq!(hypr_lua_keys(&parse_binding("Win+K").unwrap()), "SUPER+k");
         }
     }
 }
