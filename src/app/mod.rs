@@ -42,6 +42,7 @@ pub struct Handle {
     pub visible: Arc<AtomicBool>,
     pub wake: Arc<Wake>,
     pub ui: Arc<Notify>,
+    shutdown: Arc<Notify>,
     pub creds: Arc<Creds>,
     pub game: Arc<game::Watcher>,
     pub vis: Arc<visibility::Watcher>,
@@ -92,7 +93,12 @@ impl Handle {
         if let Err(err) = self.persist.save() {
             eprintln!("state: could not save: {err}");
         }
+        self.signal_stop();
+    }
+
+    fn signal_stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        self.shutdown.ping();
         self.game.poke();
         self.vis.poke();
         self.player.wake();
@@ -275,12 +281,7 @@ impl Drop for Handle {
         if let Err(err) = self.persist.save() {
             eprintln!("state: could not save: {err}");
         }
-        self.stop.store(true, Ordering::SeqCst);
-        self.game.poke();
-        self.vis.poke();
-        self.player.wake();
-        self.challenges.wake();
-        self.wake_ui();
+        self.signal_stop();
     }
 }
 
@@ -374,6 +375,7 @@ pub fn start_with(
     let overlay_on = Arc::new(AtomicBool::new(true));
     let wake = Arc::new(Wake::new()?);
     let ui = Arc::new(Notify::new());
+    let shutdown = Arc::new(Notify::new());
     let presence = if cfg.lock().unwrap().presence.enabled {
         Some(presence::Control::new())
     } else {
@@ -402,6 +404,7 @@ pub fn start_with(
         cfg: cfg.clone(),
         gate: gate.clone(),
         stop: stop.clone(),
+        shutdown: shutdown.clone(),
         game_running: game_running.clone(),
         session_stale,
     };
@@ -417,6 +420,7 @@ pub fn start_with(
         visible: visible.clone(),
         wake: wake.clone(),
         ui: ui.clone(),
+        shutdown: shutdown.clone(),
         creds: creds.clone(),
         game: game.clone(),
         vis: vis.clone(),
@@ -517,16 +521,18 @@ pub fn start_with(
         let store = store.clone();
         let cfg = cfg.clone();
         let stop = stop.clone();
+        let shutdown = shutdown.clone();
         let gate = gate.clone();
-        move || catalog_loop(store, cfg, stop, gate)
+        move || catalog_loop(store, cfg, stop, shutdown, gate)
     });
     poller::spawn("df-hud-bossmap", stop.clone(), {
         let store = store.clone();
         let cfg = cfg.clone();
         let stop = stop.clone();
+        let shutdown = shutdown.clone();
         let wake = wake.clone();
         let gate = gate.clone();
-        move || bossmap_loop(store, cfg, stop, wake, gate)
+        move || bossmap_loop(store, cfg, stop, shutdown, wake, gate)
     });
 
     {
@@ -726,6 +732,7 @@ fn catalog_loop(
     store: Arc<Store>,
     cfg: Arc<Mutex<Config>>,
     stop: Arc<AtomicBool>,
+    shutdown: Arc<Notify>,
     gate: Arc<Gate>,
 ) {
     loop {
@@ -733,7 +740,7 @@ fn catalog_loop(
             return;
         }
         let c = cfg.lock().unwrap().clone();
-        if gate.wait(&stop).is_err() {
+        if gate.wait(&stop, &shutdown).is_err() {
             return;
         }
         match catalog::ensure(
@@ -748,7 +755,7 @@ fn catalog_loop(
             Err(err) => eprintln!("catalog: {err}"),
         }
         let wait = c.poll.catalog_interval.0.max(Duration::from_secs(60));
-        if sleep_cancellable(wait, &stop).is_err() {
+        if sleep_cancellable(wait, &stop, &shutdown).is_err() {
             return;
         }
     }
@@ -758,6 +765,7 @@ fn bossmap_loop(
     store: Arc<Store>,
     cfg: Arc<Mutex<Config>>,
     stop: Arc<AtomicBool>,
+    shutdown: Arc<Notify>,
     wake: Arc<Wake>,
     gate: Arc<Gate>,
 ) {
@@ -769,12 +777,12 @@ fn bossmap_loop(
         if !c.bossmap.enabled {
             store.clear_boss_map();
             wake.ping();
-            if sleep_cancellable(Duration::from_secs(2), &stop).is_err() {
+            if sleep_cancellable(Duration::from_secs(2), &stop, &shutdown).is_err() {
                 return;
             }
             continue;
         }
-        if gate.wait(&stop).is_err() {
+        if gate.wait(&stop, &shutdown).is_err() {
             return;
         }
         match bossmap::fetch(&c.bossmap.url, &c.df.user_agent, c.df.timeout.0, Utc::now()) {
@@ -792,7 +800,7 @@ fn bossmap_loop(
         } else {
             c.bossmap.interval.0
         };
-        if sleep_cancellable(wait.max(Duration::from_secs(5)), &stop).is_err() {
+        if sleep_cancellable(wait.max(Duration::from_secs(5)), &stop, &shutdown).is_err() {
             return;
         }
     }

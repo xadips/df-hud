@@ -27,6 +27,7 @@ pub struct PollerRuntime {
     pub cfg: Arc<Mutex<Config>>,
     pub gate: Arc<Gate>,
     pub stop: Arc<AtomicBool>,
+    pub shutdown: Arc<Notify>,
     pub game_running: Arc<AtomicBool>,
     pub session_stale: Arc<AtomicBool>,
 }
@@ -51,6 +52,81 @@ pub fn jittered(base: Duration, jitter: f64) -> Duration {
     Duration::from_secs_f64((base.as_secs_f64() * factor).max(0.0))
 }
 
+fn exponential_backoff(base: Duration, failures: i32, cap: Duration, jitter: f64) -> Duration {
+    let mut d = base;
+    let mut i = 1;
+    while i < failures && d < cap {
+        d *= 2;
+        i += 1;
+    }
+    if d > cap {
+        d = cap;
+    }
+    jittered(d, jitter)
+}
+
+enum Outcome {
+    Stop,
+    Stale,
+    Err,
+    Ok,
+}
+
+trait Schedule {
+    fn stop(&self) -> &AtomicBool;
+    fn wake(&self) -> &Notify;
+    fn current_pause(&self) -> Option<String>;
+    fn on_pause(&self, reason: &str, entered: bool);
+    fn on_resume(&self);
+    fn apply_floor(&self, next: &mut Instant);
+    fn before_wait(&self, next: Instant);
+    fn after_wake(&self, next: &mut Instant);
+    fn poll(&self) -> Outcome;
+    fn success_delay(&self) -> Duration;
+    fn fail_delay(&self) -> Duration;
+}
+
+fn run_loop(s: &impl Schedule) {
+    let mut next = Instant::now();
+    let mut logged_pause = String::new();
+    loop {
+        if s.stop().load(Ordering::SeqCst) {
+            return;
+        }
+        if let Some(reason) = s.current_pause() {
+            let entered = logged_pause != reason;
+            if entered {
+                logged_pause.clone_from(&reason);
+            }
+            s.on_pause(&reason, entered);
+            s.wake().wait_timeout(PAUSE_RECHECK);
+            next = Instant::now();
+            continue;
+        }
+        if !logged_pause.is_empty() {
+            logged_pause.clear();
+            s.on_resume();
+        }
+        s.apply_floor(&mut next);
+        s.before_wait(next);
+        let wait = next.saturating_duration_since(Instant::now());
+        if wait > Duration::ZERO {
+            s.wake().wait_timeout(wait);
+            if s.stop().load(Ordering::SeqCst) {
+                return;
+            }
+            s.after_wake(&mut next);
+            continue;
+        }
+        match s.poll() {
+            Outcome::Stop => return,
+            Outcome::Stale => continue,
+            Outcome::Err => next = Instant::now() + s.fail_delay(),
+            Outcome::Ok => next = Instant::now() + s.success_delay(),
+        }
+    }
+}
+
 pub struct PlayerPoller {
     client: Arc<Mutex<Client>>,
     creds: Arc<Creds>,
@@ -58,6 +134,7 @@ pub struct PlayerPoller {
     cfg: Arc<Mutex<Config>>,
     gate: Arc<Gate>,
     stop: Arc<AtomicBool>,
+    shutdown: Arc<Notify>,
     wake: Arc<Notify>,
     min_gap: Mutex<Duration>,
     game_running: Arc<AtomicBool>,
@@ -76,6 +153,7 @@ impl PlayerPoller {
             cfg: runtime.cfg,
             gate: runtime.gate,
             stop: runtime.stop,
+            shutdown: runtime.shutdown,
             wake: Arc::new(Notify::new()),
             min_gap: Mutex::new(MIN_REQUEST_GAP),
             game_running: runtime.game_running,
@@ -157,99 +235,11 @@ impl PlayerPoller {
             let cfg = self.cfg.lock().unwrap();
             (cfg.poll.backoff_max.0, cfg.poll.jitter)
         };
-        let mut d = self.interval();
-        let mut i = 1;
-        while i < n && d < cap {
-            d *= 2;
-            i += 1;
-        }
-        if d > cap {
-            d = cap;
-        }
-        jittered(d, jitter)
+        exponential_backoff(self.interval(), n, cap, jitter)
     }
 
     pub fn run(self: Arc<Self>) {
-        let mut next = Instant::now();
-        let mut logged_pause = String::new();
-        loop {
-            if self.stop.load(Ordering::SeqCst) {
-                return;
-            }
-            if let Some(reason) = self.pause_reason() {
-                {
-                    let mut st = self.status.lock().unwrap();
-                    st.paused = true;
-                    st.pause_reason.clone_from(&reason);
-                    st.next_attempt = None;
-                }
-                self.store.set_poller_status(self.status());
-                if logged_pause != reason {
-                    eprintln!("poller: paused - {reason}");
-                    logged_pause = reason;
-                }
-                self.wake.wait_timeout(PAUSE_RECHECK);
-                next = Instant::now();
-                continue;
-            }
-            if !logged_pause.is_empty() {
-                eprintln!("poller: resumed");
-                logged_pause.clear();
-                let mut st = self.status.lock().unwrap();
-                st.paused = false;
-                st.pause_reason.clear();
-            }
-
-            if let Some(last) = *self.last_poll.lock().unwrap() {
-                let floor = last + *self.min_gap.lock().unwrap();
-                if next < floor {
-                    next = floor;
-                }
-            }
-            {
-                let mut st = self.status.lock().unwrap();
-                st.next_attempt = Some(
-                    Utc::now()
-                        + chrono::Duration::from_std(
-                            next.saturating_duration_since(Instant::now()),
-                        )
-                        .unwrap_or_default(),
-                );
-            }
-            self.store.set_poller_status(self.status());
-
-            let wait = next.saturating_duration_since(Instant::now());
-            if wait > Duration::ZERO {
-                self.wake.wait_timeout(wait);
-                if self.stop.load(Ordering::SeqCst) {
-                    return;
-                }
-                if let Some(last) = *self.last_poll.lock().unwrap() {
-                    next = last + *self.min_gap.lock().unwrap();
-                } else {
-                    next = Instant::now();
-                }
-                continue;
-            }
-
-            let tick = self.poll_once(true);
-            if self.stop.load(Ordering::SeqCst) {
-                return;
-            }
-            if tick
-                .err
-                .as_deref()
-                .is_some_and(|e| e.contains("credentials rejected"))
-            {
-                continue;
-            }
-            if tick.err.is_some() {
-                next = Instant::now() + self.backoff(self.status().failures);
-                continue;
-            }
-            let jitter = self.cfg.lock().unwrap().poll.jitter;
-            next = Instant::now() + jittered(self.interval(), jitter);
-        }
+        run_loop(&*self);
     }
 
     pub fn poll_once(&self, scheduled: bool) -> Tick {
@@ -267,7 +257,7 @@ impl PlayerPoller {
             st.total_polls += 1;
         }
         *self.last_poll.lock().unwrap() = Some(Instant::now());
-        if self.gate.wait(&self.stop).is_err() {
+        if self.gate.wait(&self.stop, &self.shutdown).is_err() {
             return Tick {
                 at: Utc::now(),
                 vars: Default::default(),
@@ -329,6 +319,95 @@ impl PlayerPoller {
     }
 }
 
+impl Schedule for PlayerPoller {
+    fn stop(&self) -> &AtomicBool {
+        &self.stop
+    }
+
+    fn wake(&self) -> &Notify {
+        &self.wake
+    }
+
+    fn current_pause(&self) -> Option<String> {
+        self.pause_reason()
+    }
+
+    fn on_pause(&self, reason: &str, entered: bool) {
+        {
+            let mut st = self.status.lock().unwrap();
+            st.paused = true;
+            st.pause_reason = reason.to_string();
+            st.next_attempt = None;
+        }
+        self.store.set_poller_status(self.status());
+        if entered {
+            eprintln!("poller: paused - {reason}");
+        }
+    }
+
+    fn on_resume(&self) {
+        eprintln!("poller: resumed");
+        let mut st = self.status.lock().unwrap();
+        st.paused = false;
+        st.pause_reason.clear();
+    }
+
+    fn apply_floor(&self, next: &mut Instant) {
+        if let Some(last) = *self.last_poll.lock().unwrap() {
+            let floor = last + *self.min_gap.lock().unwrap();
+            if *next < floor {
+                *next = floor;
+            }
+        }
+    }
+
+    fn before_wait(&self, next: Instant) {
+        {
+            let mut st = self.status.lock().unwrap();
+            st.next_attempt = Some(
+                Utc::now()
+                    + chrono::Duration::from_std(next.saturating_duration_since(Instant::now()))
+                        .unwrap_or_default(),
+            );
+        }
+        self.store.set_poller_status(self.status());
+    }
+
+    fn after_wake(&self, next: &mut Instant) {
+        *next = match *self.last_poll.lock().unwrap() {
+            Some(last) => last + *self.min_gap.lock().unwrap(),
+            None => Instant::now(),
+        };
+    }
+
+    fn poll(&self) -> Outcome {
+        let tick = self.poll_once(true);
+        if self.stop.load(Ordering::SeqCst) {
+            return Outcome::Stop;
+        }
+        if tick
+            .err
+            .as_deref()
+            .is_some_and(|e| e.contains("credentials rejected"))
+        {
+            Outcome::Stale
+        } else if tick.err.is_some() {
+            Outcome::Err
+        } else {
+            Outcome::Ok
+        }
+    }
+
+    fn success_delay(&self) -> Duration {
+        let jitter = self.cfg.lock().unwrap().poll.jitter;
+        jittered(self.interval(), jitter)
+    }
+
+    fn fail_delay(&self) -> Duration {
+        self.backoff(self.status().failures)
+    }
+}
+
 struct DummyErr(String);
 impl std::fmt::Display for DummyErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -350,6 +429,7 @@ pub struct ChallengePoller {
     cfg: Arc<Mutex<Config>>,
     gate: Arc<Gate>,
     stop: Arc<AtomicBool>,
+    shutdown: Arc<Notify>,
     wake: Arc<Notify>,
     game_running: Arc<AtomicBool>,
     session_stale: Arc<AtomicBool>,
@@ -371,6 +451,7 @@ impl ChallengePoller {
             cfg: runtime.cfg,
             gate: runtime.gate,
             stop: runtime.stop,
+            shutdown: runtime.shutdown,
             wake: Arc::new(Notify::new()),
             game_running: runtime.game_running,
             session_stale: runtime.session_stale,
@@ -400,10 +481,16 @@ impl ChallengePoller {
         self.pause_reason()
     }
 
+    #[cfg(test)]
+    pub fn enter_pause_for_test(&self) -> Option<String> {
+        let reason = self.pause_reason()?;
+        self.on_pause(&reason, true);
+        Some(reason)
+    }
+
     fn pause_reason(&self) -> Option<String> {
         let cfg = self.cfg.lock().unwrap().clone();
         if !cfg.widget.challenges.enabled {
-            self.store.clear_challenges();
             return Some("the challenge widget is disabled".into());
         }
         let Some((cr, salt)) = self.creds.get() else {
@@ -441,69 +528,7 @@ impl ChallengePoller {
     }
 
     pub fn run(self: Arc<Self>) {
-        let mut next = Instant::now();
-        let mut logged_pause = String::new();
-        loop {
-            if self.stop.load(Ordering::SeqCst) {
-                return;
-            }
-            if let Some(reason) = self.pause_reason() {
-                if logged_pause != reason {
-                    eprintln!("challenges: paused - {reason}");
-                    logged_pause = reason;
-                    self.store.set_challenge_status(logged_pause.clone());
-                }
-                self.wake.wait_timeout(PAUSE_RECHECK);
-                next = Instant::now();
-                continue;
-            }
-            if !logged_pause.is_empty() {
-                eprintln!("challenges: resumed");
-                logged_pause.clear();
-                self.store.set_challenge_status(String::new());
-            }
-            if let Some(floor) = self.gate.reserved() {
-                if next < floor {
-                    next = floor;
-                }
-            }
-            let wait = next.saturating_duration_since(Instant::now());
-            if wait > Duration::ZERO {
-                self.wake.wait_timeout(wait);
-                if self.stop.load(Ordering::SeqCst) {
-                    return;
-                }
-                if let Some(floor) = self.gate.reserved() {
-                    next = floor;
-                }
-                continue;
-            }
-            if let Err(err) = self.poll_once() {
-                if err.contains("credentials rejected") {
-                    continue;
-                }
-                let n = *self.failures.lock().unwrap();
-                let cfg = self.cfg.lock().unwrap();
-                let mut d = cfg.poll.effective_challenge_interval(true);
-                let mut i = 1;
-                while i < n && d < cfg.poll.backoff_max.0 {
-                    d *= 2;
-                    i += 1;
-                }
-                if d > cfg.poll.backoff_max.0 {
-                    d = cfg.poll.backoff_max.0;
-                }
-                next = Instant::now() + jittered(d, cfg.poll.jitter);
-                continue;
-            }
-            let cfg = self.cfg.lock().unwrap();
-            let running = self.game_running.load(Ordering::SeqCst);
-            next = Instant::now()
-                + jittered(
-                    cfg.poll.effective_challenge_interval(running),
-                    cfg.poll.jitter,
-                );
-        }
+        run_loop(&*self);
     }
 
     fn poll_once(&self) -> Result<(), String> {
@@ -512,7 +537,9 @@ impl ChallengePoller {
         };
         let cfg = self.cfg.lock().unwrap().clone();
         let salt = cfg.signing_salt(|| salt_stored.clone());
-        self.gate.wait(&self.stop).map_err(|e| e.to_string())?;
+        self.gate
+            .wait(&self.stop, &self.shutdown)
+            .map_err(|e| e.to_string())?;
         let vars = {
             let mut client = self.client.lock().unwrap();
             client.cookie.clone_from(&cr.cookie);
@@ -549,6 +576,80 @@ impl ChallengePoller {
                 Err(err)
             }
         }
+    }
+}
+
+impl Schedule for ChallengePoller {
+    fn stop(&self) -> &AtomicBool {
+        &self.stop
+    }
+
+    fn wake(&self) -> &Notify {
+        &self.wake
+    }
+
+    fn current_pause(&self) -> Option<String> {
+        self.pause_reason()
+    }
+
+    fn on_pause(&self, reason: &str, entered: bool) {
+        if !entered {
+            return;
+        }
+        eprintln!("challenges: paused - {reason}");
+        self.store.set_challenge_status(reason.to_string());
+        if !self.cfg.lock().unwrap().widget.challenges.enabled {
+            self.store.clear_challenges();
+        }
+    }
+
+    fn on_resume(&self) {
+        eprintln!("challenges: resumed");
+        self.store.set_challenge_status(String::new());
+    }
+
+    fn apply_floor(&self, next: &mut Instant) {
+        if let Some(floor) = self.gate.reserved() {
+            if *next < floor {
+                *next = floor;
+            }
+        }
+    }
+
+    fn before_wait(&self, _next: Instant) {}
+
+    fn after_wake(&self, next: &mut Instant) {
+        if let Some(floor) = self.gate.reserved() {
+            *next = floor;
+        }
+    }
+
+    fn poll(&self) -> Outcome {
+        match self.poll_once() {
+            Err(err) if err.contains("credentials rejected") => Outcome::Stale,
+            Err(_) => Outcome::Err,
+            Ok(()) => Outcome::Ok,
+        }
+    }
+
+    fn success_delay(&self) -> Duration {
+        let cfg = self.cfg.lock().unwrap();
+        let running = self.game_running.load(Ordering::SeqCst);
+        jittered(
+            cfg.poll.effective_challenge_interval(running),
+            cfg.poll.jitter,
+        )
+    }
+
+    fn fail_delay(&self) -> Duration {
+        let n = *self.failures.lock().unwrap();
+        let cfg = self.cfg.lock().unwrap();
+        exponential_backoff(
+            cfg.poll.effective_challenge_interval(true),
+            n,
+            cfg.poll.backoff_max.0,
+            cfg.poll.jitter,
+        )
     }
 }
 
@@ -630,7 +731,7 @@ mod tests {
         (format!("http://{addr}"), hits)
     }
 
-    fn test_poller(base: &str) -> (Arc<PlayerPoller>, Arc<AtomicBool>) {
+    fn test_poller(base: &str) -> (Arc<PlayerPoller>, Arc<AtomicBool>, Arc<Notify>) {
         let mut cfg = Config::default();
         cfg.poll.active_interval = crate::config::Duration(Duration::from_millis(20));
         cfg.poll.idle_interval = crate::config::Duration(Duration::from_millis(20));
@@ -654,6 +755,7 @@ mod tests {
         let client = Client::with_agent(agent, base, "df-hud-test");
         client.disable_public_get_values();
         let stop = Arc::new(AtomicBool::new(false));
+        let shutdown = Arc::new(Notify::new());
         let running = Arc::new(AtomicBool::new(true));
         let p = PlayerPoller::new(
             Arc::new(Mutex::new(client)),
@@ -663,18 +765,19 @@ mod tests {
                 cfg: Arc::new(Mutex::new(cfg)),
                 gate: Arc::new(Gate::new(Duration::from_millis(5))),
                 stop: stop.clone(),
+                shutdown: shutdown.clone(),
                 game_running: running,
                 session_stale: Arc::new(AtomicBool::new(false)),
             },
         );
         p.set_min_gap(Duration::from_millis(20));
-        (p, stop)
+        (p, stop, shutdown)
     }
 
     #[test]
     fn polls_and_reports_ticks() {
         let (base, hits) = spawn_df(|_| (200, player_record().into()));
-        let (p, stop) = test_poller(&base);
+        let (p, stop, shutdown) = test_poller(&base);
         let ticks = Arc::new(StdMutex::new(Vec::new()));
         let slot = ticks.clone();
         p.set_on_tick(move |t| slot.lock().unwrap().push(t));
@@ -685,6 +788,7 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         stop.store(true, Ordering::SeqCst);
+        shutdown.ping();
         p.wake();
         let _ = h.join();
         let got = ticks.lock().unwrap();
@@ -703,7 +807,7 @@ mod tests {
                 "<!DOCTYPE html><html><title>Just a moment...</title></html>".into(),
             )
         });
-        let (p, _stop) = test_poller(&base);
+        let (p, _stop, _) = test_poller(&base);
         let tick = p.poll_once(false);
         assert!(
             tick.err.is_some(),
@@ -720,7 +824,7 @@ mod tests {
     #[test]
     fn player_client_can_be_replaced_after_reload() {
         let (base, hits) = spawn_df(|_| (200, player_record().into()));
-        let (p, _stop) = test_poller("http://127.0.0.1:1");
+        let (p, _stop, _) = test_poller("http://127.0.0.1:1");
         let client = Client::new(&base, "df-hud-reloaded");
         client.disable_public_get_values();
         p.replace_client(client);
@@ -771,6 +875,7 @@ mod tests {
                 cfg: cfg.clone(),
                 gate: Arc::new(Gate::new(Duration::from_millis(5))),
                 stop: Arc::new(AtomicBool::new(false)),
+                shutdown: Arc::new(Notify::new()),
                 game_running: Arc::new(AtomicBool::new(true)),
                 session_stale,
             },
@@ -794,7 +899,7 @@ mod tests {
             ..crate::model::Challenge::default()
         }]);
         cfg.lock().unwrap().widget.challenges.enabled = false;
-        let reason = p.pause_reason_for_test().expect("paused");
+        let reason = p.enter_pause_for_test().expect("paused");
         assert!(reason.contains("disabled"), "{reason}");
         assert!(store.derive(Utc::now()).challenges.is_none());
     }

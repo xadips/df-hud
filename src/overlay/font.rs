@@ -79,12 +79,12 @@ pub struct Atlas {
 }
 
 impl Font {
-    pub fn load(want: Option<&str>) -> Result<Self, Box<dyn Error>> {
+    pub fn load(want: Option<&str>) -> Self {
         match try_load(want) {
-            Ok(font) => Ok(font),
+            Ok(font) => font,
             Err(err) => {
                 eprintln!("font: {err}; using auto");
-                Ok(load_auto())
+                load_auto()
             }
         }
     }
@@ -505,7 +505,7 @@ mod tests {
 
     #[test]
     fn load_rasterizes_map_glyphs() {
-        let font = Font::load(None).unwrap();
+        let font = Font::load(None);
         for ch in ['I', 'B', 'Δ', '▼', 'M'] {
             let g = font.rasterize(ch, 18.0, true);
             assert!(g.width > 0 && g.height > 0, "{ch} empty in {}", font.name);
@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn linux_prefers_a_system_mono_when_present() {
-        let font = Font::load(None).unwrap();
+        let font = Font::load(None);
         if Path::new("/usr/share/fonts/noto/NotoSansMono-Bold.ttf").is_file() {
             assert!(
                 font.name.to_ascii_lowercase().contains("noto"),
@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn missing_file_falls_back_to_auto() {
-        let font = Font::load(Some("/no/such/df-hud-font.ttf")).unwrap();
+        let font = Font::load(Some("/no/such/df-hud-font.ttf"));
         let g = font.rasterize('A', 18.0, true);
         assert!(g.width > 0 && g.height > 0, "empty in {}", font.name);
     }
