@@ -1,4 +1,4 @@
-//! GLES 3.0 / GL 3.3 renderer: one shader, one VAO, fontdue atlas, draw list.
+//! GLES 3.0 / GL 3.3 renderer: one shader, one VAO, hinted LCD atlas, draw list.
 //!
 //! Does not own the EGL/WGL window and does not see `WlSurface` or HWND.
 //! Surfaces make the context current, call [`Gpu::draw`], then swap.
@@ -10,22 +10,12 @@ use std::error::Error;
 use glow::{Context as Glow, HasContext, PixelUnpackData};
 
 use crate::font::{Atlas, Font};
+use crate::scene::{Scene, Text};
 
-pub const REF_W: f32 = 2560.0;
-pub const REF_H: f32 = 1440.0;
-/// `hud.font_size` is CSS points (GTK `12pt`). Windows already converts with
-/// `size * 4/3` to pixels; 12pt → 16px at the 2560×1440 authoring size.
+/// `hud.font_size` is CSS points. Convert with `size * 4/3` to pixels;
+/// 12pt → 16px at the 2560×1440 authoring size.
 pub const FONT_PT: f32 = 12.0;
 const PT_TO_PX: f32 = 4.0 / 3.0;
-
-/// One outlined string in 2560×1440 screenshot space. Dummy groups for now;
-/// Phase 4 replaces this with scene layout.
-pub struct TextLine {
-    pub x: f32,
-    pub y: f32,
-    pub color: [f32; 4],
-    pub text: String,
-}
 
 #[cfg(target_os = "windows")]
 const GLSL_VERSION: &str = "#version 330 core";
@@ -55,11 +45,11 @@ in vec2 v_uv;
 uniform sampler2D u_atlas;
 out vec4 frag;
 void main() {
-    float coverage = texture(u_atlas, v_uv).r;
-    float a = v_color.a * coverage;
+    // RGB atlas: LCD coverage per channel, or (1,1,1) for untextured fills.
+    vec3 lcd = texture(u_atlas, v_uv).rgb;
+    float a = v_color.a * max(max(lcd.r, lcd.g), lcd.b);
     // Wayland compositors and DWM layered windows blend premultiplied.
-    // Straight RGB outlines fringe black.
-    frag = vec4(v_color.rgb * a, a);
+    frag = vec4(v_color.rgb * lcd * v_color.a, a);
 }
 "#;
 
@@ -118,15 +108,16 @@ impl Gpu {
             gl.disable(glow::CULL_FACE);
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(atlas_tex));
+            // NEAREST keeps LCD subpixels; LINEAR smears R/G/B into colour fringes.
             gl.tex_parameter_i32(
                 glow::TEXTURE_2D,
                 glow::TEXTURE_MIN_FILTER,
-                glow::LINEAR as i32,
+                glow::NEAREST as i32,
             );
             gl.tex_parameter_i32(
                 glow::TEXTURE_2D,
                 glow::TEXTURE_MAG_FILTER,
-                glow::LINEAR as i32,
+                glow::NEAREST as i32,
             );
             gl.tex_parameter_i32(
                 glow::TEXTURE_2D,
@@ -156,8 +147,8 @@ impl Gpu {
         };
         gpu.upload_atlas()?;
         eprintln!(
-            "font=Go Mono Bold atlas={}x{} (grayscale AA, 1px outline, no subpixel)",
-            gpu.atlas.width, gpu.atlas.height
+            "font={} atlas={}x{} (hinted LCD, 1px outline)",
+            gpu.font.name, gpu.atlas.width, gpu.atlas.height
         );
         Ok(gpu)
     }
@@ -173,18 +164,23 @@ impl Gpu {
         buf_h: i32,
         logical_w: i32,
         logical_h: i32,
-        lines: &[TextLine],
+        scene: &Scene,
     ) -> Result<(), Box<dyn Error>> {
         let sx = buf_w as f32 / logical_w.max(1) as f32;
         let sy = buf_h as f32 / logical_h.max(1) as f32;
-        let px = FONT_PT * PT_TO_PX * (logical_h.max(1) as f32 / REF_H) * sy;
-        if (px - self.px).abs() > 0.05 {
+        let hud_px = scene
+            .texts
+            .first()
+            .map(|t| t.font_px * sy)
+            .unwrap_or(FONT_PT * PT_TO_PX * sy);
+        if (hud_px - self.px).abs() > 0.05 {
             self.atlas.reset();
-            self.px = px;
+            self.px = hud_px;
         }
-        for line in lines {
-            for ch in line.text.chars() {
-                self.atlas.glyph(&self.font, ch, px)?;
+        for text in scene.texts.iter().chain(&scene.labels) {
+            let px = text.font_px * sy;
+            for ch in text.text.chars() {
+                self.atlas.glyph(&self.font, ch, px, text.lcd)?;
             }
         }
         if self.atlas.dirty {
@@ -192,11 +188,40 @@ impl Gpu {
         }
 
         let mut verts = Vec::new();
-        let ascent = self.font.ascent(px);
-        for line in lines {
-            let x0 = line.x * (logical_w.max(1) as f32 / REF_W) * sx;
-            let y0 = line.y * (logical_h.max(1) as f32 / REF_H) * sy;
-            self.push_text(&mut verts, x0, y0, ascent, px, line)?;
+        let (wu, wv) = self.atlas.white_uv();
+        for text in &scene.texts {
+            self.push_text(&mut verts, text, sx, sy)?;
+        }
+        for fill in &scene.fills {
+            push_quad(
+                &mut verts,
+                fill.x * sx,
+                fill.y * sy,
+                fill.w * sx,
+                fill.h * sy,
+                fill.color,
+                wu,
+                wv,
+                wu,
+                wv,
+            );
+        }
+        let stroke_s = (sx + sy) * 0.5;
+        for stroke in &scene.strokes {
+            push_line(
+                &mut verts,
+                stroke.x0 * sx,
+                stroke.y0 * sy,
+                stroke.x1 * sx,
+                stroke.y1 * sy,
+                stroke.width * stroke_s,
+                stroke.color,
+                wu,
+                wv,
+            );
+        }
+        for text in &scene.labels {
+            self.push_text(&mut verts, text, sx, sy)?;
         }
 
         unsafe {
@@ -224,57 +249,77 @@ impl Gpu {
     fn push_text(
         &self,
         verts: &mut Vec<f32>,
-        x0: f32,
-        y0: f32,
-        ascent: f32,
-        px: f32,
-        line: &TextLine,
+        text: &Text,
+        sx: f32,
+        sy: f32,
     ) -> Result<(), Box<dyn Error>> {
-        let baseline = y0 + ascent;
+        let px = text.font_px * sy;
+        let x0 = text.x * sx;
+        let y0 = text.y * sy;
+        let baseline = y0 + self.font.ascent(px);
         let mut pen = x0;
-        for ch in line.text.chars() {
+        let mut ink_top = f32::MAX;
+        let mut ink_bot = f32::MIN;
+        let mut runs: Vec<(f32, f32, crate::font::Glyph)> = Vec::new();
+        for ch in text.text.chars() {
             let glyph = self
                 .atlas
-                .get(ch, px)
+                .get(ch, px, text.lcd)
                 .ok_or("glyph missing from atlas after rasterize")?;
             if glyph.width > 0 && glyph.height > 0 {
                 let gx = (pen + glyph.xmin as f32).round();
-                let gy = (baseline - glyph.ymin as f32 - glyph.height as f32).round();
-                let (ou0, ov0, ou1, ov1) = self.atlas.uv(
-                    glyph.outline_x,
-                    glyph.outline_y,
-                    glyph.outline_w,
-                    glyph.outline_h,
-                );
+                let gy = (baseline - glyph.top as f32).round();
+                ink_top = ink_top.min(gy);
+                ink_bot = ink_bot.max(gy + glyph.height as f32);
+                runs.push((gx, gy, glyph));
+            }
+            pen += glyph.advance;
+        }
+        let dy = if let (Some(h), true) = (text.center_h, ink_bot > ink_top) {
+            let box_mid = y0 + h * sy * 0.5;
+            let ink_mid = (ink_top + ink_bot) * 0.5;
+            (box_mid - ink_mid).round()
+        } else {
+            0.0
+        };
+        for (gx, gy, glyph) in runs {
+            let gy = gy + dy;
+            let (ou0, ov0, ou1, ov1) = self.atlas.uv(
+                glyph.outline_x,
+                glyph.outline_y,
+                glyph.outline_w,
+                glyph.outline_h,
+            );
+            if text.outline {
+                let oc = text.outline_color.unwrap_or(OUTLINE_COLOR);
                 push_quad(
                     verts,
                     gx - 1.0,
                     gy - 1.0,
                     glyph.outline_w as f32,
                     glyph.outline_h as f32,
-                    OUTLINE_COLOR,
+                    [oc[0], oc[1], oc[2], oc[3] * text.color[3]],
                     ou0,
                     ov0,
                     ou1,
                     ov1,
                 );
-                let (u0, v0, u1, v1) =
-                    self.atlas
-                        .uv(glyph.atlas_x, glyph.atlas_y, glyph.width, glyph.height);
-                push_quad(
-                    verts,
-                    gx,
-                    gy,
-                    glyph.width as f32,
-                    glyph.height as f32,
-                    line.color,
-                    u0,
-                    v0,
-                    u1,
-                    v1,
-                );
             }
-            pen += glyph.advance;
+            let (u0, v0, u1, v1) =
+                self.atlas
+                    .uv(glyph.atlas_x, glyph.atlas_y, glyph.width, glyph.height);
+            push_quad(
+                verts,
+                gx,
+                gy,
+                glyph.width as f32,
+                glyph.height as f32,
+                text.color,
+                u0,
+                v0,
+                u1,
+                v1,
+            );
         }
         Ok(())
     }
@@ -286,11 +331,11 @@ impl Gpu {
             self.gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
-                glow::R8 as i32,
+                glow::RGB8 as i32,
                 self.atlas.width as i32,
                 self.atlas.height as i32,
                 0,
-                glow::RED,
+                glow::RGB,
                 glow::UNSIGNED_BYTE,
                 PixelUnpackData::Slice(Some(self.atlas.pixels.as_slice())),
             );
@@ -339,6 +384,36 @@ fn push_quad(
         [x2, y2, u1, v1],
     ];
     for [px, py, u, v] in verts_px {
+        verts.extend_from_slice(&[px, py, r, g, b, a, u, v]);
+    }
+}
+
+fn push_line(
+    verts: &mut Vec<f32>,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    width: f32,
+    color: [f32; 4],
+    u: f32,
+    v: f32,
+) {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+    let hx = (-dy / len) * (width * 0.5);
+    let hy = (dx / len) * (width * 0.5);
+    let [r, g, b, a] = color;
+    let corners = [
+        [x0 + hx, y0 + hy],
+        [x1 + hx, y1 + hy],
+        [x0 - hx, y0 - hy],
+        [x0 - hx, y0 - hy],
+        [x1 + hx, y1 + hy],
+        [x1 - hx, y1 - hy],
+    ];
+    for [px, py] in corners {
         verts.extend_from_slice(&[px, py, r, g, b, a, u, v]);
     }
 }

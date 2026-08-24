@@ -1,7 +1,7 @@
-//! Phase 3: one [`crate::gpu`] renderer on Wayland EGL and Win32 WGL.
-//!
-//! Keep the Go `df-hud` installed until Phase 8. Do not copy
-//! `internal/hud/gtk` or `internal/hud/ebiten`.
+//! Product overlay: GLES 3.0 on zwlr_layer_shell_v1 / WGL layered HWND.
+//! Overlay stays `keyboard_interactivity = none` / `WS_EX_TRANSPARENT`.
+//! Hidden HUD unmaps the layer surface / hides the HWND. HTTP overlay toggle
+//! and the tray share `overlay_on` (Decide's Enabled).
 //!
 //! Surface contracts from the 2026-08-23 spikes (do not rediscover):
 //!
@@ -17,19 +17,48 @@
 //!   1px inset. Dummy WGL window uses a distinct class so `WM_DESTROY` on it
 //!   does not end the process.
 
-#[cfg(any(target_os = "linux", windows))]
+mod app;
+mod bossmap;
+mod bridge;
+mod catalog;
+mod challenges;
+mod citymap;
+mod cli;
+mod config;
+mod creds;
+mod desktop;
+mod dfclient;
+#[cfg(test)]
 mod dummy;
 #[cfg(target_os = "linux")]
 mod egl;
 mod font;
+mod format;
+mod game;
+mod gamekeys;
 #[cfg(any(target_os = "linux", windows))]
 mod gpu;
+mod groups;
+mod hotkeys;
+mod layout;
+mod model;
+mod poller;
+mod presence;
+mod present;
+mod rategate;
+mod scene;
+mod state;
+mod store;
+mod tray;
+mod visibility;
+mod wake;
 #[cfg(target_os = "linux")]
 mod wayland;
 #[cfg(windows)]
 mod wgl;
 #[cfg(windows)]
 mod win32;
+mod xp;
 
 fn main() {
     if let Err(err) = run() {
@@ -39,6 +68,9 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(cmd) = cli::take()? {
+        return cli::run(cmd);
+    }
     #[cfg(target_os = "linux")]
     {
         let args = wayland::Args::parse()?;

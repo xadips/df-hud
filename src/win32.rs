@@ -7,16 +7,20 @@
 //! Dummy WGL bootstrap uses [`DUMMY_CLASS`], not the overlay class. Sharing the
 //! class made `DestroyWindow` on the dummy fire `WM_DESTROY` and end the process.
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::mem::size_of;
+use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
+
 use glow::Context as Glow;
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{
-    GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+    GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows_sys::Win32::Graphics::Dwm::{
     DwmEnableBlurBehindWindow, DwmExtendFrameIntoClientArea, DWM_BB_BLURREGION, DWM_BB_ENABLE,
@@ -39,12 +43,16 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_OWNDC, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA,
     MONITORINFOF_PRIMARY, MSG, PM_REMOVE, QS_ALLINPUT, SWP_FRAMECHANGED, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA, WM_CLOSE, WM_DESTROY,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-    WS_POPUP,
+    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_EX_TRANSPARENT, WS_POPUP,
 };
 
-use crate::dummy;
+use crate::app;
+use crate::config;
 use crate::gpu::Gpu;
+use crate::layout::Viewport;
+use crate::present;
+use crate::scene;
 use crate::wgl::GlSurface;
 
 pub const OVERLAY_CLASS: &str = "df-hud";
@@ -57,18 +65,22 @@ static CLOSED: AtomicBool = AtomicBool::new(false);
 pub struct Args {
     monitor: Option<String>,
     duration: Duration,
-    unmap_at: Option<Duration>,
     list_monitors: bool,
     requested: bool,
+    config: Option<PathBuf>,
+    print_view: bool,
+    print_hud: bool,
 }
 
 impl Args {
     pub fn parse() -> Result<Self, Box<dyn Error>> {
         let mut monitor = None;
         let mut duration = Duration::ZERO;
-        let mut unmap_at = None;
         let mut list_monitors = false;
         let mut requested = false;
+        let mut config = None;
+        let mut print_view = false;
+        let mut print_hud = false;
 
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -98,19 +110,23 @@ impl Args {
                         Duration::from_secs_f32(secs)
                     };
                 }
-                "--unmap-at" => {
+                "-config" | "--config" => {
                     requested = true;
-                    unmap_at = Some(Duration::from_secs_f32(next("--unmap-at")?.parse()?));
+                    config = Some(PathBuf::from(next("-config")?));
                 }
+                "-print-view" | "--print-view" => print_view = true,
+                "-print-hud" | "--print-hud" => print_hud = true,
                 other => return Err(format!("unknown flag {other} (see --help)").into()),
             }
         }
         Ok(Self {
             monitor,
             duration,
-            unmap_at,
             list_monitors,
             requested,
+            config,
+            print_view,
+            print_hud,
         })
     }
 }
@@ -118,12 +134,22 @@ impl Args {
 fn print_help() {
     eprintln!(
         "\
-df-hud — Phase 3 Win32 + WGL text (Go HUD remains the installed product)
+df-hud — overlay (live derive)
 
-  --monitor NAME        Win32 device (\\\\.\\DISPLAY1). default: primary
+  -once                 poll once, print the view, and exit
+  -print-view [PATH]    fixture JSON (PATH) or live JSON each update
+  -print-hud            print HUD text lines each update
+  -dump-fields          with -once / -dump-challenges, print the player record (secrets withheld)
+  -dump-challenges      fetch the challenge board once and print it
+  -check-config         validate TOML and print the request budget
+  -check-game           report whether the game client is detected
+  -headless             run pollers without the overlay window
+  -version              print the version and exit
+  -config PATH          config file (also --config)
+  --monitor NAME        Win32 device (\\\\.\\DISPLAY1). overrides hud.monitor
   --list-monitors       print monitors and exit
+  --config PATH         TOML. default: %APPDATA%\\df-hud\\config.toml (missing = built-in defaults)
   --duration SECS       exit after SECS; 0 runs until Ctrl-C (default 0)
-  --unmap-at SECS       hide at T, show 5s later (WGL context must survive)
 "
     );
 }
@@ -230,12 +256,19 @@ fn utf16_z(buf: &[u16]) -> String {
 fn pick_monitor<'a>(
     monitors: &'a [Monitor],
     want: Option<&str>,
+    warned: &mut HashSet<String>,
 ) -> Result<&'a Monitor, Box<dyn Error>> {
-    if let Some(want) = want {
-        return monitors
-            .iter()
-            .find(|m| m.matches(want))
-            .ok_or_else(|| format!("monitor {want:?} was not found (see --list-monitors)").into());
+    if let Some(want) = want.filter(|s| !s.is_empty()) {
+        if let Some(found) = monitors.iter().find(|m| m.matches(want)) {
+            return Ok(found);
+        }
+        if warned.insert(want.to_string()) {
+            let names: Vec<&str> = monitors.iter().map(|m| m.name.as_str()).collect();
+            eprintln!(
+                "hud: no monitor named {want:?} (have {}); using primary",
+                names.join(", ")
+            );
+        }
     }
     monitors
         .iter()
@@ -309,11 +342,8 @@ impl OverlayWindow {
             )
             .into());
         }
-        let ex = WS_EX_LAYERED
-            | WS_EX_TRANSPARENT
-            | WS_EX_TOPMOST
-            | WS_EX_TOOLWINDOW
-            | WS_EX_NOACTIVATE;
+        let ex =
+            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
         let class = wide(OVERLAY_CLASS);
         let title = wide(WINDOW_TITLE);
         let w = monitor.width - 2 * inset;
@@ -400,8 +430,11 @@ impl OverlayWindow {
 
     fn reassert_exstyle(&self) {
         let mut ex = unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) };
-        ex |= (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
-            as isize;
+        ex |= (WS_EX_LAYERED
+            | WS_EX_TRANSPARENT
+            | WS_EX_TOPMOST
+            | WS_EX_TOOLWINDOW
+            | WS_EX_NOACTIVATE) as isize;
         unsafe { SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex) };
         unsafe {
             SetWindowPos(
@@ -460,9 +493,16 @@ impl OverlayWindow {
         }
     }
 
-    fn wait(timeout_ms: u32) {
+    fn wait(timeout_ms: u32, extra: Option<HANDLE>) {
         unsafe {
-            MsgWaitForMultipleObjects(0, ptr::null(), 0, timeout_ms, QS_ALLINPUT);
+            match extra {
+                Some(h) => {
+                    MsgWaitForMultipleObjects(1, &h, 0, timeout_ms, QS_ALLINPUT);
+                }
+                None => {
+                    MsgWaitForMultipleObjects(0, ptr::null(), 0, timeout_ms, QS_ALLINPUT);
+                }
+            }
         }
     }
 }
@@ -489,7 +529,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     }
     register_classes(instance)?;
 
-    let monitors = match list_monitors() {
+    let mut monitors = match list_monitors() {
         Ok(monitors) => monitors,
         Err(err) => {
             if args.requested {
@@ -515,9 +555,21 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let monitor = pick_monitor(&monitors, args.monitor.as_deref())?;
-    let buf_w = monitor.width - 2 * WINDOW_INSET;
-    let buf_h = monitor.height - 2 * WINDOW_INSET;
+    let mut watch = config::Watch::open(args.config.clone())?;
+    let mut warned_monitors = HashSet::new();
+    let want_name = config::overlay_monitor(args.monitor.as_deref(), &watch.cfg.hud.monitor, "");
+    let monitor = pick_monitor(
+        &monitors,
+        if want_name.is_empty() {
+            None
+        } else {
+            Some(want_name.as_str())
+        },
+        &mut warned_monitors,
+    )?;
+    let mut current_monitor = monitor.name.clone();
+    let mut buf_w = monitor.width - 2 * WINDOW_INSET;
+    let mut buf_h = monitor.height - 2 * WINDOW_INSET;
 
     let win = OverlayWindow::create(instance, monitor)?;
     let surface = GlSurface::create(instance, win.hwnd)?;
@@ -530,29 +582,30 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     eprintln!(
         "hwnd layered+topmost+tool+noactivate+transparent  swap-interval=0  inset={WINDOW_INSET}"
     );
-    eprintln!("done-when: outlined dummy text at 1 Hz over the game; clicks still hit it");
+    eprintln!("done-when: live HUD (block / XP / challenges / map) at 1 Hz over the game; clicks still pass through");
 
-    let mut clock = dummy::clock_hms();
+    let handle = app::start_with(
+        watch.cfg.clone(),
+        app::PrintOpts {
+            view: args.print_view,
+            hud: args.print_hud,
+        },
+    )?;
     let mut swaps = 0u32;
     let mut mapped = true;
     let mut needs_present = true;
 
     let started = Instant::now();
-    let remap_after_unmap = Duration::from_secs(5);
-    let mut hide_at = args.unmap_at.map(|d| started + d);
-    let mut show_at: Option<Instant> = None;
     let mut next_tick = started + Duration::from_secs(1);
-    if hide_at.is_some() {
-        eprintln!(
-            "unmap schedule: hide at {:?}, show 5s later, then stay up",
-            args.unmap_at
-        );
-    }
 
     loop {
         OverlayWindow::pump();
         if CLOSED.load(Ordering::SeqCst) {
             eprintln!("clean shutdown after {swaps} swaps (window closed)");
+            return Ok(());
+        }
+        if handle.stopped() {
+            eprintln!("clean shutdown after {swaps} swaps");
             return Ok(());
         }
         if args.duration > Duration::ZERO && started.elapsed() >= args.duration {
@@ -563,41 +616,73 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         let now = Instant::now();
         if now >= next_tick {
             next_tick = now + Duration::from_secs(1);
-            let next = dummy::clock_hms();
-            if next != clock {
-                clock = next;
-                needs_present = true;
+            needs_present = true;
+            if watch.poll() {
+                handle.replace_config(watch.cfg.clone());
             }
         }
-        if let Some(at) = hide_at {
-            if now >= at && mapped {
-                win.hide();
-                mapped = false;
-                hide_at = None;
-                show_at = Some(now + remap_after_unmap);
-                needs_present = false;
+        let vis = handle.visible.load(Ordering::SeqCst);
+        if mapped && !vis {
+            win.hide();
+            mapped = false;
+            needs_present = false;
+        } else if !mapped && vis {
+            let vis_mon = handle.vis.state().monitor;
+            let want_name =
+                config::overlay_monitor(args.monitor.as_deref(), &watch.cfg.hud.monitor, &vis_mon);
+            if let Ok(list) = list_monitors() {
+                monitors = list;
             }
-        }
-        if let Some(at) = show_at {
-            if now >= at && !mapped {
-                show_at = None;
-                mapped = true;
-                win.show()?;
-                needs_present = true;
+            if let Ok(m) = pick_monitor(
+                &monitors,
+                if want_name.is_empty() {
+                    None
+                } else {
+                    Some(want_name.as_str())
+                },
+                &mut warned_monitors,
+            ) {
+                if m.name != current_monitor {
+                    win.place(m)?;
+                    let next_w = m.width - 2 * WINDOW_INSET;
+                    let next_h = m.height - 2 * WINDOW_INSET;
+                    if next_w != buf_w || next_h != buf_h {
+                        buf_w = next_w;
+                        buf_h = next_h;
+                        gpu.resize(buf_w, buf_h);
+                    }
+                    current_monitor = m.name.clone();
+                    eprintln!("hud: pinned to {}", current_monitor);
+                }
             }
+            win.show()?;
+            mapped = true;
+            needs_present = true;
         }
         if mapped && needs_present {
             win.reassert_exstyle();
             surface.make_current()?;
-            let lines = dummy::lines(&clock);
-            gpu.draw(buf_w, buf_h, buf_w, buf_h, &lines)?;
+            let view =
+                present::from_view(&handle.store.derive(Utc::now()), &watch.cfg, &handle.groups);
+            let built = scene::build(
+                &view,
+                &watch.cfg,
+                Viewport {
+                    width: buf_w as f32,
+                    height: buf_h as f32,
+                    game_width: 0.0,
+                    game_height: 0.0,
+                },
+            );
+            gpu.draw(buf_w, buf_h, buf_w, buf_h, &built)?;
             surface.swap()?;
             swaps += 1;
-            needs_present = false;
         }
 
-        let timeout_ms = poll_timeout_ms(now, started, args.duration, hide_at, show_at, next_tick);
-        OverlayWindow::wait(timeout_ms);
+        let timeout_ms = poll_timeout_ms(now, started, args.duration, next_tick);
+        OverlayWindow::wait(timeout_ms, Some(handle.wake.event_handle()));
+        handle.wake.take();
+        needs_present = true;
     }
 }
 
@@ -605,8 +690,6 @@ fn poll_timeout_ms(
     now: Instant,
     started: Instant,
     duration: Duration,
-    hide_at: Option<Instant>,
-    show_at: Option<Instant>,
     next_tick: Instant,
 ) -> u32 {
     let mut deadline: Option<Instant> = Some(next_tick);
@@ -618,12 +701,6 @@ fn poll_timeout_ms(
     };
     if duration > Duration::ZERO {
         consider(&mut deadline, started + duration);
-    }
-    if let Some(at) = hide_at {
-        consider(&mut deadline, at);
-    }
-    if let Some(at) = show_at {
-        consider(&mut deadline, at);
     }
     match deadline {
         None => 1000,

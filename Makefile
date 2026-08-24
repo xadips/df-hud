@@ -1,7 +1,8 @@
 # df-hud
 #
-# `make` builds. `make install` puts the binary somewhere stable and installs the
-# systemd user unit; `make enable` starts it and starts it at login from then on.
+# `make` builds the Rust overlay. `make install` puts the binary somewhere
+# stable and installs the systemd user unit; `make enable` starts it and starts
+# it at login from then on.
 #
 # The install target exists mainly so the running df-hud is NOT the binary in this
 # directory. Rebuilding under a running process leaves it holding the old inode:
@@ -13,6 +14,8 @@ PREFIX  ?= $(HOME)/.local
 BINDIR  := $(PREFIX)/bin
 UNITDIR ?= $(HOME)/.config/systemd/user
 WINE    ?= wine
+CARGO   ?= cargo
+RELEASE := target/release/$(BIN)
 
 # Stamped into -version and the User-Agent, so a running daemon can be told from a
 # working tree. The base stays a dev string - nothing produces release numbers yet -
@@ -25,17 +28,15 @@ VERSION ?= 0.1.0-dev+$(REV)
 all: build
 
 build:
-	go build -buildvcs=false -ldflags "-X main.version=$(VERSION)" -o $(BIN) ./cmd/df-hud
+	$(CARGO) build --release
+	cp -f $(RELEASE) $(BIN)
 
-# Everything CI would run, in the order that fails fastest.
+# Product tests.
 check:
-	gofmt -l .
-	go vet ./...
-	go test ./... -race
-	go build -buildvcs=false -tags nolayershell -o /dev/null ./cmd/df-hud
+	$(CARGO) test --locked
 
 test:
-	go test ./...
+	$(CARGO) test --locked
 
 package-linux:
 	./build-linux.sh "$(VERSION)"
@@ -50,7 +51,7 @@ smoke-windows:
 		WINEDEBUG=-all $(WINE) ./df-hud.exe -check-config
 
 install: build
-	install -Dm755 $(BIN) $(BINDIR)/$(BIN)
+	install -Dm755 $(RELEASE) $(BINDIR)/$(BIN)
 	install -Dm644 contrib/df-hud.service $(UNITDIR)/df-hud.service
 	systemctl --user daemon-reload
 	@echo
@@ -83,3 +84,4 @@ uninstall: disable
 
 clean:
 	rm -f $(BIN)
+	$(CARGO) clean

@@ -2,10 +2,10 @@
 
 A native heads-up display for Dead Frontier on Windows and Wayland/Hyprland.
 
-It draws over the game — including fullscreen — using Ebitengine/OpenGL on
-Windows and `zwlr_layer_shell_v1` on Linux, and passes every pointer event
-through to the game underneath. Data comes from the game's own API, so there is
-no screen scraping and no OCR anywhere.
+It draws over the game — including fullscreen — using GLES 3.0 on a
+`zwlr_layer_shell_v1` overlay on Linux and a layered WGL HWND on Windows, and
+passes every pointer event through to the game underneath. Data comes from the
+game's own API, so there is no screen scraping and no OCR anywhere.
 
 Replaces SilverOverlays, a Windows PyQt app that under Proton gives no reliable
 always-on-top over a fullscreen game, no global hotkeys on Wayland, and no tray.
@@ -39,9 +39,15 @@ Planned: a console window for the full board with per-objective detail.
 
 ## Keybinds
 
-A Wayland client cannot grab a global hotkey - the compositor owns them, by
-design - so df-hud publishes each action on its loopback listener and the binding
-is yours:
+On both platforms df-hud registers the chords in `[hotkeys]` **only while the
+game window is focused**, and releases them when you alt-tab. Defaults are `V`
+for the map, `T` for challenges, grave/backtick for the run clock, `X` for the
+XP rate and `K` for the whole overlay. An empty value leaves one action unbound.
+
+A Wayland client cannot grab a global hotkey by itself — the compositor owns
+them — so Linux uses Hyprland intercepts driven from that same `[hotkeys]`
+table. The overlay never takes a keyboard seat. The loopback listener is the
+portable test hatch:
 
 | | |
 |---|---|
@@ -51,55 +57,19 @@ is yours:
 | `POST /api/widget/<group>/toggle` | show or hide one group: `block`, `bosses`, `session`, `xp`, `challenges`, `map` |
 | `POST /api/console/toggle` | the console window - **not built yet**, answers 503, and has no default bind |
 
-On Windows these are native hotkeys, with no AutoHotkey helper required. They
-are registered only while the real game window is focused and released when you
-alt-tab. The defaults are `V` for the map, `T` for challenges, grave/backtick for
-the run clock, `X` for the XP rate and `K` for the whole overlay. `[hotkeys]` in
-the config changes them; chords such as `Ctrl+Shift+M` and `Alt+F8` are accepted,
-and an empty value leaves one action unbound.
+On Windows these are native `RegisterHotKey` chords, with no AutoHotkey helper
+required. The defaults and `[hotkeys]` rules are the same as Linux.
 
-Ready-made, with the layer rules: [contrib/df-hud.lua](contrib/df-hud.lua) for
-Hyprland's Lua configuration, [contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf)
-for `hyprland.conf`. Keep off the function keys and the number row, which Dead
-Frontier uses itself; the file itself is where the current combinations live, since
-they are yours to change and any list here goes stale the first time you do.
+**The keys exist only while Dead Frontier is focused.** The overlay toggle
+stops working when you alt-tab off the game, which is sometimes exactly when
+you want it (the overlay is hidden by workspace, not by focus, so a window in
+front of the game on the same workspace still has the HUD over it). Keep off
+the function keys and the number row, which Dead Frontier uses itself.
 
-The Lua one is a module, so it needs a `require` as well as being on
-`package.path`, and nothing happens if you only do one of the two:
-
-```sh
-ln -s ~/Programming/df-hud/contrib/df-hud.lua ~/.config/hypr/conf.d/df-hud.lua
-```
-
-```lua
-require("df-hud")     -- in hyprland.lua, next to the other require lines
-```
-
-**The keys exist only while Dead Frontier is focused.** Hyprland has no per-window
-bind filter, so [contrib/df-hud.lua](contrib/df-hud.lua) subscribes to
-`window.active` and calls `set_enabled` on each bind: while you are in a browser they
-are not registered at all. That is what makes a BARE key affordable for the map -
-outside the game a lone backtick or tab is still a backtick or a tab in every
-terminal you have, which is why the file uses one. Two
-consequences worth knowing before leaving it on - the overlay toggle stops
-working when you alt-tab off the game, which is sometimes exactly when you want
-it (the overlay is hidden by workspace, not by focus, so a window in front of the
-game on the same workspace still has the HUD over it), and a disabled bind is
-silent, which looks identical to df-hud being down. `only_when_game_focused =
-false` at the top of that file turns the whole thing off; `always = true` on one
-`bind_action` exempts one key.
-
-The click catcher is gated the same way and not optionally: a global bind on the left
-mouse button forks a curl on every click you make all day. `hyprland.conf` can
-express none of this - see the note at the top of
-[contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf) for the nearest approximation.
-
-Then `hyprctl reload`, and `hyprctl binds -j | grep df-hud` to see the six binds.
-That lists them whether or not they are armed - Hyprland does not report the enabled
-flag - so the way to check the gate is to press one in another window and get nothing.
-There is a stubbed-`hl` check for that file in
-[contrib/df-hud_spec.lua](contrib/df-hud_spec.lua), run by `go test`, because a
-mistake in it is otherwise only visible in the compositor's log.
+Do not also load [contrib/df-hud.lua](contrib/df-hud.lua): the binary already
+binds from `[hotkeys]`, and a second compositor copy of the same chords races
+it. Layer-shell rules in that file and in
+[contrib/df-hud.hypr.conf](contrib/df-hud.hypr.conf) are optional.
 
 The tray menu offers the same corrections, and the two stay in step: toggle the
 overlay or the challenge board from a key and the tray's tick follows.
@@ -225,8 +195,8 @@ only ever taken away when there is a heading to move it to. Categories appear in
 the board's own order, so the dividers describe what is on screen without
 rearranging it, and a single category on screen gets no heading at all.
 
-They are drawn as text, not as a CSS border, because a GTK label is only as wide as
-its own content: `border-bottom` would stop at the end of the word.
+They are drawn as text, not as a CSS border, because a heading is only as wide as
+its own content: a rule under the letters would stop at the end of the word.
 
 Every value sits in one column, and every challenge after the first gets a few
 pixels above it, so a board of nineteen rows reads as groups. The column is built
@@ -235,9 +205,8 @@ anything else - and is why the objective is dimmed rather than drawn a size
 smaller, since a narrower character would make the same count of padding a
 different width and drift the column on exactly the rows it exists to line up.
 
-Everything from the board is escaped before it reaches Pango. That is not
-optional: Pango refuses to parse malformed markup and GTK answers with an empty
-label, so one challenge named with an ampersand would silently blank its own row.
+Everything from the board is escaped before it is drawn. That is not optional:
+one challenge named with an ampersand must not be able to blank its own row.
 
 ### Which way to walk
 
@@ -256,7 +225,7 @@ being wrong.
 
 **Nearest means nearest to walk to.** The city is not a rectangle: 1716 of the 3245
 coordinates in its bounding box are blocks, and the rest are gaps you have to go
-around. So df-hud holds the city's shape ([citymap.txt](cmd/df-hud/citymap.txt), and
+around. So df-hud holds the city's shape ([citymap.txt](assets/citymap.txt), and
 [knowledge/city-map.md](knowledge/city-map.md) for where it comes from and what was
 checked), searches outward from the block you are on, and picks the event with the
 shortest walk - which is not always the one with the smallest difference in
@@ -273,7 +242,7 @@ rows are `y`, so the smallest `y` renders topmost - and was checked in the game 
 coordinates stay beside the words regardless, since they are what the game's own
 readout shows.
 
-That also settles the map's orientation: [citymap.txt](cmd/df-hud/citymap.txt) is stored with
+That also settles the map's orientation: [citymap.txt](assets/citymap.txt) is stored with
 `y` increasing downwards and drawn the same way, so north on the overlay is north in
 the game.
 
@@ -570,7 +539,7 @@ server, the budget is set by what their own page already costs them:
 Turning `bossmap.enabled` off costs that one line of the HUD and nothing else.
 
 The city's own shape comes from there too, and this one is **not** a runtime
-request. `cmd/df-hud/citymap.txt` is generated once by `tools/citymapgen` from their bossmap
+request. [assets/citymap.txt](assets/citymap.txt) is generated once from their bossmap
 stylesheet - the only published thing that knows which coordinates are blocks and
 which are the gaps between them - then committed and embedded. The map changes when
 the game changes, so re-deriving it from someone else's CSS on every start would be
@@ -587,41 +556,34 @@ hourly, it would send you somewhere for nothing.
 
 ## Requirements
 
-- Windows: no external runtime; the release executable is cgo-free
-- Linux: Hyprland (or another layer-shell compositor), GTK 4,
-  `gtk4-layer-shell`, and cgo
-- Go 1.26+ to build from source
-
-The first build compiles gotk4, which is large and single-package, so expect
-several minutes; rebuilds are a few seconds.
+- Windows: no extra runtime. Build with `cargo build --release` (native) or
+  `cargo build --release --target x86_64-pc-windows-gnu` from Linux (MinGW)
+- Linux: a wlroots compositor that speaks layer-shell (Hyprland), plus
+  `libEGL`, `libGLESv2`, and `libwayland-client` at runtime. **No GTK.**
+- Rust stable to build from source. `cargo test --locked` is the product test.
 
 ```sh
-make            # go build, with the commit stamped into -version
+make            # cargo build --release, copy to ./df-hud
 ./df-hud -check-config
 ./df-hud
 ```
 
-`go build -tags nolayershell ./cmd/df-hud` builds the headless core with no GTK at all, for
-CI or a machine with no Wayland. `make check` is everything CI runs: `gofmt`,
-`go vet`, `go test -race`, and that headless build.
+`make check` is `cargo test --locked`.
 
 ## Release builds
 
 `make package-linux` writes `dist/df-hud-<version>-linux-amd64.tar.gz`.
 
-`make package-windows VERSION=...` cross-compiles the cgo-free native Windows
-frontend on Linux using MinGW `windres`, and writes
-`dist/df-hud-<version>-windows-amd64.zip`. On Windows,
-`build-windows.ps1 -Version ...` creates the same package.
+`make package-windows VERSION=...` cross-compiles `x86_64-pc-windows-gnu` from
+Linux and writes `dist/df-hud-<version>-windows-amd64.zip`. On Windows,
+`build-windows.ps1 -Version ...` creates the same package from a native
+`cargo build --release`.
 
 `make smoke-windows` can check a packaged executable's version and configuration
-paths through Wine. Required CI runs the complete cgo-free test graph and builds
-the GUI executable on `windows-latest`, without GTK or MSYS2. Transparent overlay behavior remains covered by
-`tools/windows-overlay-spike` and manual GPU validation.
+paths through Wine.
 
-Manual and tagged GitHub Actions runs build both archives again, with the Windows
-release cross-compiled on Linux. A `v*` tag publishes both archives
-as release assets.
+Manual and tagged GitHub Actions runs build both archives. A `v*` tag publishes
+both as release assets.
 
 ## Running it
 
@@ -646,17 +608,21 @@ A **systemd user service**, not a terminal you have to keep open and not an
   `~/.local/bin`; rebuilding under a running process otherwise leaves it holding
   the old inode, so the log claims one version and the file on disk is another.
 
-`systemctl --user reload df-hud` re-reads the config **without restarting**, so the
-run clock and the XP window survive - SIGHUP is handled for exactly that reason,
-since its default disposition is to terminate and a "reload" that kills the daemon
-is not a reload. A restart is safe too: the run is tied to the game's own process
-and resumes rather than starting from zero.
+`systemctl --user reload df-hud` sends SIGHUP, which re-reads the config
+**without restarting**, so the run clock and the XP window survive. Saving
+`config.toml` also reloads within a second. A restart is safe too: the run is
+tied to the game's own process and resumes rather than starting from zero.
 
 `make restart` rebuilds, reinstalls and restarts in one step, which is the edit
 loop while working on df-hud itself.
 
 Nothing here is required. `./df-hud` from a terminal still works and is still the
 right way to try a change before installing it.
+
+Under Proton, Dead Frontier talks Discord IPC through a wineserver named pipe.
+Stock Proton copies `discord-rpc-bridge` into the prefix and never launches it.
+See [knowledge/presence.md](knowledge/presence.md) to run that bridge **inside
+the game's wineserver** so block position stays fresh.
 
 ## Configuration
 

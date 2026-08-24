@@ -13,9 +13,8 @@ rm -f -- "$archive"
 mkdir -p -- "$stage"
 
 cd -- "$repo_root"
-go build -mod=readonly -trimpath -buildvcs=false \
-    -ldflags "-X main.version=$version" \
-    -o "$stage/df-hud" ./cmd/df-hud
+cargo build --locked --release --target x86_64-unknown-linux-gnu
+cp -- target/x86_64-unknown-linux-gnu/release/df-hud "$stage/df-hud"
 
 cp -- df-hud.example.toml LICENSE "$stage/"
 cp -- contrib/df-hud.service "$stage/"

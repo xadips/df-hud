@@ -13,58 +13,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check-linux:
+  test:
     runs-on: ubuntu-latest
-    container: archlinux:base
     steps:
-      - name: Install Linux build dependencies
-        run: |
-          pacman -Syu --noconfirm --needed \
-            base-devel \
-            git \
-            go \
-            gobject-introspection \
-            gtk4-layer-shell
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Check
-        env:
-          CGO_ENABLED: "1"
-        run: make check
-
-  test-windows-native:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Test and build native Windows frontend
-        env:
-          CGO_ENABLED: "0"
+      - name: Install Wayland headers
         run: |
-          go test ./... -count=1
-          go build -trimpath -buildvcs=false -ldflags "-H=windowsgui" -o df-hud.exe ./cmd/df-hud
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libwayland-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --locked
 
   build-linux:
-    needs: [check-linux, test-windows-native]
+    needs: [test]
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    container: archlinux:base
     steps:
-      - name: Install Linux build dependencies
-        run: |
-          pacman -Syu --noconfirm --needed \
-            base-devel \
-            git \
-            go \
-            gobject-introspection \
-            gtk4-layer-shell
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Install Wayland headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libwayland-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
       - name: Set version
         id: version
         run: |
@@ -76,8 +57,6 @@ jobs:
           printf 'VERSION=%s\n' "$version" >> "$GITHUB_ENV"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Build Linux archive
-        env:
-          CGO_ENABLED: "1"
         run: make package-linux VERSION="$VERSION"
       - uses: actions/upload-artifact@v4
         with:
@@ -86,25 +65,24 @@ jobs:
           if-no-files-found: error
 
   build-windows:
-    needs: [check-linux, test-windows-native]
+    needs: [test]
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Install Windows resource tools
+      - name: Install MinGW
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             binutils-mingw-w64-x86-64 \
             gcc-mingw-w64-x86-64 \
-            unzip \
             zip
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
       - name: Set version
         id: version
         run: |
@@ -117,7 +95,7 @@ jobs:
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Build Windows archive
         run: make package-windows VERSION="$VERSION"
-      - name: Verify native Windows package
+      - name: Verify Windows package
         run: |
           archive="dist/df-hud-$VERSION-windows-amd64.zip"
           stage="dist/df-hud-$VERSION-windows-amd64"
@@ -127,15 +105,9 @@ jobs:
 
           x86_64-w64-mingw32-objdump -p "$stage/df-hud.exe" \
             | awk '/DLL Name:/ { print tolower($3) }' > imports.txt
-          if awk '/gtk|glib|gobject|cairo|pango|msys|libgcc|libstdc|libwinpthread/ { found=1 } END { exit !found }' imports.txt; then
-            echo "unexpected GTK/MSYS dependency:"
-            awk '/gtk|glib|gobject|cairo|pango|msys|libgcc|libstdc|libwinpthread/' imports.txt
-            exit 1
-          fi
-
-          go version -m "$stage/df-hud.exe" > modules.txt
-          if awk '/gotk4/ { found=1 } END { exit !found }' modules.txt; then
-            echo "Windows executable still links gotk4"
+          if awk '/gtk|glib|gobject|cairo|pango/ { found=1 } END { exit !found }' imports.txt; then
+            echo "unexpected GTK dependency:"
+            awk '/gtk|glib|gobject|cairo|pango/' imports.txt
             exit 1
           fi
       - uses: actions/upload-artifact@v4

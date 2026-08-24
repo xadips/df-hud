@@ -15,9 +15,6 @@ positions.ndjson
 /df-hud
 /target/
 /dist/
-/cmd/df-hud/df-hud_windows_amd64.syso
-/tools/linux-overlay-spike/target/
-/tools/wgl-overlay-spike/target/
 
 # Local Windows VM credentials.
 /windows-vm/.env

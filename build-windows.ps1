@@ -7,28 +7,9 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = $PSScriptRoot
 
-$GoCommand = Get-Command "go.exe" -ErrorAction SilentlyContinue
-$Go = if ($GoCommand) {
-    $GoCommand.Source
-} else {
-    Join-Path $env:ProgramFiles "Go\bin\go.exe"
-}
-if (-not (Test-Path $Go)) {
-    throw "Go was not found."
-}
-
-$WindresCommand = Get-Command "x86_64-w64-mingw32-windres.exe" -ErrorAction SilentlyContinue
-if (-not $WindresCommand) {
-    $WindresCommand = Get-Command "windres.exe" -ErrorAction SilentlyContinue
-}
-$Windres = if ($WindresCommand) {
-    $WindresCommand.Source
-} else {
-    $MsysRoot = if ($env:MSYS2_ROOT) { $env:MSYS2_ROOT } else { "C:\msys64" }
-    Join-Path $MsysRoot "ucrt64\bin\windres.exe"
-}
-if (-not (Test-Path $Windres)) {
-    throw "windres was not found. Install MinGW binutils or set MSYS2_ROOT."
+$Cargo = Get-Command "cargo.exe" -ErrorAction SilentlyContinue
+if (-not $Cargo) {
+    throw "cargo was not found."
 }
 
 if (-not [IO.Path]::IsPathRooted($OutputDirectory)) {
@@ -39,59 +20,24 @@ $BaseName = "df-hud-$Version-windows-amd64"
 $Stage = Join-Path $OutputDirectory $BaseName
 $Archive = Join-Path $OutputDirectory "$BaseName.zip"
 $Executable = Join-Path $Stage "df-hud.exe"
-$ResourceObject = Join-Path $RepoRoot "cmd\df-hud\df-hud_windows_amd64.syso"
 
-if (Test-Path $ResourceObject) {
-    throw "Refusing to overwrite existing generated resource: $ResourceObject"
-}
 if (Test-Path $Stage) {
     Remove-Item $Stage -Recurse -Force
 }
 New-Item $Stage -ItemType Directory -Force | Out-Null
 
+Push-Location $RepoRoot
 try {
-    $PreviousPath = $env:PATH
-    try {
-        $env:PATH = "$(Split-Path $Windres);$env:PATH"
-        & $Windres (Join-Path $RepoRoot "df-hud.rc") -O coff -o $ResourceObject
-        if ($LASTEXITCODE -ne 0) {
-            throw "windres failed to compile the Windows manifest."
-        }
-    }
-    finally {
-        $env:PATH = $PreviousPath
-    }
-
-    $PreviousCGO = $env:CGO_ENABLED
-    $PreviousGOOS = $env:GOOS
-    $PreviousGOARCH = $env:GOARCH
-    try {
-        $env:CGO_ENABLED = "0"
-        $env:GOOS = "windows"
-        $env:GOARCH = "amd64"
-        Push-Location $RepoRoot
-        try {
-            & $Go build -trimpath -buildvcs=false `
-                -ldflags "-H=windowsgui -X main.version=$Version" `
-                -o $Executable ./cmd/df-hud
-            if ($LASTEXITCODE -ne 0) {
-                throw "go build failed."
-            }
-        }
-        finally {
-            Pop-Location
-        }
-    }
-    finally {
-        $env:CGO_ENABLED = $PreviousCGO
-        $env:GOOS = $PreviousGOOS
-        $env:GOARCH = $PreviousGOARCH
+    & $Cargo.Source build --locked --release
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo build failed."
     }
 }
 finally {
-    Remove-Item $ResourceObject -Force -ErrorAction SilentlyContinue
+    Pop-Location
 }
 
+Copy-Item (Join-Path $RepoRoot "target\release\df-hud.exe") $Executable
 Copy-Item (Join-Path $RepoRoot "df-hud.example.toml") $Stage
 Copy-Item (Join-Path $RepoRoot "LICENSE") $Stage
 

@@ -1,7 +1,5 @@
-# Product crate (overlay rewrite). Do not fold this into the Arch
-# check-linux job: pacman rust cannot cross-compile and conflicts with rustup.
-# Ubuntu + rustup + MinGW is the path in the rewrite plan (same as the Go
-# Windows package job). Not zigbuild, not windows-latest.
+# Product crate. Everyday tests stay here; .github/workflows/ci.yml packages
+# on tags. Ubuntu + rustup + MinGW; not zigbuild, not windows-latest.
 name: Product crate
 
 on:
@@ -64,22 +62,41 @@ jobs:
             echo "kitchen-sink windows crate is forbidden; use windows-sys"
             exit 1
           fi
-          if ! printf '%s\n' "$win_tree" | grep -q '^fontdue '; then
-            echo "windows-gnu should include fontdue"
+          if ! printf '%s\n' "$win_tree" | grep -q '^swash '; then
+            echo "windows-gnu should include swash"
             exit 1
           fi
           if ! printf '%s\n' "$win_tree" | grep -q '^glow '; then
-            echo "windows-gnu should include glow in Phase 3"
+            echo "windows-gnu should include glow"
             exit 1
           fi
           if ! printf '%s\n' "$win_tree" | grep -q '^libloading '; then
-            echo "windows-gnu should include libloading in Phase 3"
+            echo "windows-gnu should include libloading"
             exit 1
           fi
           if ! printf '%s\n' "$win_tree" | grep -q '^windows-sys '; then
-            echo "windows-gnu should include windows-sys in Phase 3"
+            echo "windows-gnu should include windows-sys"
             exit 1
           fi
+          if ! printf '%s\n' "$linux_tree" | grep -q '^serde '; then
+            echo "linux-gnu should include serde"
+            exit 1
+          fi
+          if ! printf '%s\n' "$linux_tree" | grep -q '^toml '; then
+            echo "linux-gnu should include toml"
+            exit 1
+          fi
+          if ! printf '%s\n' "$win_tree" | grep -q '^serde '; then
+            echo "windows-gnu should include serde"
+            exit 1
+          fi
+          if ! printf '%s\n' "$win_tree" | grep -q '^toml '; then
+            echo "windows-gnu should include toml"
+            exit 1
+          fi
+
+      - name: Test linux-gnu
+        run: cargo test --locked --target x86_64-unknown-linux-gnu
 
       - name: Build linux-gnu
         run: cargo build --locked --release --target x86_64-unknown-linux-gnu

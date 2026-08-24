@@ -1,0 +1,29 @@
+{
+  "now": "2026-08-23T12:00:03Z",
+  "tick_at": "2026-08-23T12:00:00Z",
+  "credentials_at": "2026-08-23T12:00:00Z",
+  "game": {
+    "running": true,
+    "pid": 1,
+    "started_at": "2026-08-23T11:18:03Z"
+  },
+  "vars": {
+    "df_level": "415",
+    "df_exp": "10000",
+    "df_exptotal": "10000000",
+    "df_freepoints": "0",
+    "df_positionx": "1058",
+    "df_positiony": "1019",
+    "df_positionz": "0",
+    "df_tradezone": "21",
+    "df_inoutpost": "1",
+    "df_dangerlevel": "0",
+    "df_block_support_until": "0",
+    "df_hpcurrent": "100",
+    "df_hpmax": "100",
+    "df_cash": "1000",
+    "df_bankcash": "50000",
+    "df_hungerhp": "50",
+    "df_dead": "0"
+  }
+}

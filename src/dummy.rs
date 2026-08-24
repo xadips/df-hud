@@ -1,21 +1,9 @@
-//! Hardcoded dummy groups. Not Derive. Screenshot coords are 2560×1440
-//! (`df-hud.example.toml` widget x/y). `font_path` waits for Phase 4.
+//! Dummy View for font/layout tests. Not Derive. Clock is still local.
+//!
+//! Widget x/y come from defaults (`df-hud.example.toml`).
+//! Map is a tiny fake city, not `citymap.txt`.
 
-use crate::gpu::TextLine;
-
-const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-const HUD_YELLOW: [f32; 4] = [
-    0xe6 as f32 / 255.0,
-    0xcc as f32 / 255.0,
-    0x4d as f32 / 255.0,
-    1.0,
-];
-const BLOCK_BLUE: [f32; 4] = [
-    0x9e as f32 / 255.0,
-    0xcb as f32 / 255.0,
-    0xff as f32 / 255.0,
-    1.0,
-];
+use crate::scene::{Line, MapCell, MapMarker, MapView, View};
 
 #[cfg(target_os = "linux")]
 pub fn clock_hms() -> String {
@@ -41,31 +29,94 @@ pub fn clock_hms() -> String {
     )
 }
 
-pub fn lines(clock: &str) -> [TextLine; 4] {
-    [
-        TextLine {
-            x: 10.0,
-            y: 10.0,
-            color: HUD_YELLOW,
-            text: "df-hud overlay".into(),
-        },
-        TextLine {
-            x: 350.0,
-            y: 60.0,
-            color: WHITE,
-            text: format!("IC Time: {clock}"),
-        },
-        TextLine {
-            x: 220.0,
-            y: 85.0,
-            color: WHITE,
-            text: "Xp/Hr: 12,345,678".into(),
-        },
-        TextLine {
-            x: 2340.0,
-            y: 300.0,
-            color: BLOCK_BLUE,
-            text: "Nastya's Holdout".into(),
-        },
-    ]
+pub fn view(clock: &str) -> View {
+    View {
+        status: "df-hud overlay".into(),
+        clock: clock.to_string(),
+        xp: "12,345,678".into(),
+        xp_color: None,
+        block: "Nastya's Holdout".into(),
+        block_sub: String::new(),
+        challenges: vec![],
+        bosses: vec![],
+        map: fake_map(),
+    }
+}
+
+fn fake_map() -> MapView {
+    let origin = 1000;
+    let size = 17;
+    let player = origin + 8;
+    let mut cells = Vec::new();
+    for y in origin..origin + size {
+        for x in origin..origin + size {
+            if (x + y) % 11 == 0 && x != player && y != player {
+                continue;
+            }
+            if x == origin + 2 && y % 4 == 0 {
+                continue;
+            }
+            let band = ((x * 3 + y * 5) as i32).rem_euclid(4);
+            let (r, g, b) = match band {
+                0 => (0x2a, 0x4c, 0x2a),
+                1 => (0x3a, 0x5c, 0x34),
+                2 => (0x48, 0x64, 0x38),
+                _ => (0x24, 0x3c, 0x28),
+            };
+            cells.push(MapCell {
+                x,
+                y,
+                fill: [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0],
+            });
+        }
+    }
+    MapView {
+        player_x: player,
+        player_y: player,
+        cells,
+        markers: vec![
+            MapMarker {
+                x: player - 3,
+                y: player - 2,
+                text: "N".into(),
+                ink: [0.75, 1.0, 0.75, 1.0],
+                color: [0.75, 1.0, 0.75, 1.0],
+                ring: false,
+            },
+            MapMarker {
+                x: player + 4,
+                y: player + 1,
+                text: "1".into(),
+                ink: [1.0, 1.0, 1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                ring: false,
+            },
+        ],
+        dividers_x: vec![player],
+        dividers_y: vec![player],
+        list: vec![
+            Line {
+                text: "N  Nastya's Holdout".into(),
+                ..Line::default()
+            },
+            Line {
+                text: "1  Titan".into(),
+                ..Line::default()
+            },
+        ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dummy_view_keeps_the_clock() {
+        let clock = clock_hms();
+        assert_eq!(clock.len(), 8);
+        let v = view(&clock);
+        assert_eq!(v.clock, clock);
+        assert!(!v.block.is_empty());
+    }
 }

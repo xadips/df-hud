@@ -21,8 +21,8 @@ Nothing the game publishes says which coordinates are blocks:
 every real block by coordinate and paints it. `.coord` defaults to `opacity:0`, and
 a block is a coordinate the stylesheet gives a colour and `opacity:1;cursor:pointer`.
 
-`tools/citymapgen` turns that into `cmd/df-hud/citymap.txt`, which is committed and embedded.
-It is run by hand, once - the city changes when the game changes, which is to say
+`assets/citymap.txt` is generated from that stylesheet, committed, and embedded.
+It is rebuilt by hand, once - the city changes when the game changes, which is to say
 almost never - and **df-hud never fetches the stylesheet at runtime**. Re-deriving
 its own map from someone else's CSS on every start would be both fragile and rude.
 The map's shape is the game's, but this encoding of it is DFProfiler's work, and
@@ -43,7 +43,7 @@ df-hud already depends on their bossmap feed; credit is in the README.
    of Ground Zero, and there is no such place. The only way out of that outpost is
    west.
 
-Each of these is in `citymap_test.go`, so a regenerated map that breaks one of them
+Each of these is in `src/citymap.rs` tests, so a regenerated map that breaks one of them
 fails the build rather than quietly changing where df-hud sends you.
 
 ## Orientation: `y` increases southwards

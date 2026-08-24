@@ -12,17 +12,27 @@
 //! This module owns the EGL window and `eglSwapBuffers`. [`crate::gpu::Gpu`] is
 //! shader + atlas + draw list and must not see `WlSurface`.
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::ffi::c_void;
 use std::os::fd::{AsFd, AsRawFd};
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use chrono::Utc;
 
 use glow::Context as Glow;
 use wayland_backend::client::ObjectId;
 use wayland_egl::WlEglSurface;
 
-use crate::dummy;
+use crate::app;
+use crate::config::{self, Config};
 use crate::egl::Egl;
+use crate::layout::Viewport;
+use crate::present;
+use crate::scene;
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::wl_compositor::WlCompositor;
@@ -50,9 +60,11 @@ pub struct Args {
     output: Option<String>,
     namespace: String,
     duration: Duration,
-    unmap_at: Option<Duration>,
     list_outputs: bool,
     requested: bool,
+    config: Option<PathBuf>,
+    print_view: bool,
+    print_hud: bool,
 }
 
 impl Args {
@@ -60,9 +72,11 @@ impl Args {
         let mut output = None;
         let mut namespace = "df-hud".to_string();
         let mut duration = Duration::ZERO;
-        let mut unmap_at = None;
         let mut list_outputs = false;
         let mut requested = false;
+        let mut config = None;
+        let mut print_view = false;
+        let mut print_hud = false;
 
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -96,10 +110,12 @@ impl Args {
                         Duration::from_secs_f32(secs)
                     };
                 }
-                "--unmap-at" => {
+                "-config" | "--config" => {
                     requested = true;
-                    unmap_at = Some(Duration::from_secs_f32(next("--unmap-at")?.parse()?));
+                    config = Some(PathBuf::from(next("-config")?));
                 }
+                "-print-view" | "--print-view" => print_view = true,
+                "-print-hud" | "--print-hud" => print_hud = true,
                 other => return Err(format!("unknown flag {other} (see --help)").into()),
             }
         }
@@ -107,9 +123,11 @@ impl Args {
             output,
             namespace,
             duration,
-            unmap_at,
             list_outputs,
             requested,
+            config,
+            print_view,
+            print_hud,
         })
     }
 }
@@ -117,19 +135,29 @@ impl Args {
 fn print_help() {
     eprintln!(
         "\
-df-hud — Phase 2 Wayland + GLES text (Go HUD remains the installed product)
+df-hud — overlay (live derive)
 
-  --output NAME         pin to this connector (DP-1). default: compositor chooses
+  -once                 poll once, print the view, and exit
+  -print-view [PATH]    fixture JSON (PATH) or live JSON each update
+  -print-hud            print HUD text lines each update
+  -dump-fields          with -once / -dump-challenges, print the player record (secrets withheld)
+  -dump-challenges      fetch the challenge board once and print it
+  -check-config         validate TOML and print the request budget
+  -check-game           report whether the game client is detected
+  -headless             run pollers without the overlay window
+  -version              print the version and exit
+  -config, --config PATH
+                        TOML. default ~/.config/df-hud/config.toml (missing = built-in defaults)
+  --output NAME         pin to this connector (DP-1). overrides hud.monitor
   --namespace NAME      layer-shell namespace (default df-hud)
   --duration SECS       exit after SECS; 0 runs until Ctrl-C (default 0)
-  --unmap-at SECS       unmap at T, remap 5s later (EGL context must survive)
   --list-outputs        print connector names and exit
 "
     );
 }
 
 /// EGL window + context. Present (`eglSwapBuffers`) lives here so Gpu stays
-/// surface-agnostic for Phase 3 WGL.
+/// surface-agnostic (WGL uses the same Gpu).
 struct GlWindow {
     egl: Egl,
     display: crate::egl::Display,
@@ -220,6 +248,7 @@ struct OutputInfo {
 struct App {
     qh: QueueHandle<App>,
     compositor: Option<WlCompositor>,
+    layer_shell: Option<ZwlrLayerShellV1>,
     surface: Option<WlSurface>,
     layer_surface: Option<ZwlrLayerSurfaceV1>,
     viewport: Option<WpViewport>,
@@ -227,7 +256,7 @@ struct App {
     outputs: Vec<OutputInfo>,
     gpu: Option<Gpu>,
     gl_window: Option<GlWindow>,
-    clock: String,
+    handle: Option<Arc<app::Handle>>,
     logical_w: i32,
     logical_h: i32,
     frac_scale: u32,
@@ -239,6 +268,11 @@ struct App {
     output_name: String,
     pending_serial: Option<u32>,
     needs_present: bool,
+    cfg: Config,
+    namespace: String,
+    cli_output: Option<String>,
+    pinned_output: String,
+    warned_outputs: HashSet<String>,
 }
 
 impl App {
@@ -303,7 +337,20 @@ impl App {
                 layer.ack_configure(serial);
             }
         }
-        let lines = dummy::lines(&self.clock);
+        let view = match &self.handle {
+            Some(h) => present::from_view(&h.store.derive(Utc::now()), &self.cfg, &h.groups),
+            None => present::blank(),
+        };
+        let built = scene::build(
+            &view,
+            &self.cfg,
+            Viewport {
+                width: self.logical_w as f32,
+                height: self.logical_h as f32,
+                game_width: 0.0,
+                game_height: 0.0,
+            },
+        );
         let (buf_w, buf_h) = self.buffer_size();
         self.gl_window.as_ref().expect("gl_window").make_current()?;
         self.gpu.as_mut().expect("gpu").draw(
@@ -311,7 +358,7 @@ impl App {
             buf_h,
             self.logical_w,
             self.logical_h,
-            &lines,
+            &built,
         )?;
         self.gl_window.as_ref().expect("gl_window").swap()?;
         self.swaps += 1;
@@ -337,16 +384,99 @@ impl App {
         eprintln!("unmapped (EGL context kept)");
     }
 
+    fn vis_monitor(&self) -> String {
+        self.handle
+            .as_ref()
+            .map(|h| h.vis.state().monitor)
+            .unwrap_or_default()
+    }
+
+    fn wanted_output(&self) -> String {
+        config::overlay_monitor(
+            self.cli_output.as_deref(),
+            &self.cfg.hud.monitor,
+            &self.vis_monitor(),
+        )
+    }
+
+    fn lookup_output(&self, want: &str) -> Option<WlOutput> {
+        if want.is_empty() {
+            return None;
+        }
+        self.outputs
+            .iter()
+            .find(|o| o.name.eq_ignore_ascii_case(want))
+            .map(|o| o.wl.clone())
+    }
+
+    fn pin_output(&mut self) {
+        let want = self.wanted_output();
+        let found = self.lookup_output(&want);
+        if !want.is_empty() && found.is_none() {
+            if self.warned_outputs.insert(want.clone()) {
+                let names: Vec<&str> = self
+                    .outputs
+                    .iter()
+                    .map(|o| o.name.as_str())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                eprintln!(
+                    "hud: no output named {want:?} (have {}); using compositor default",
+                    names.join(", ")
+                );
+            }
+        }
+        let pin_name = if found.is_some() { want } else { String::new() };
+        if pin_name == self.pinned_output && self.layer_surface.is_some() {
+            return;
+        }
+        self.rebind_layer(found.as_ref());
+        self.pinned_output = pin_name.clone();
+        self.output_name = if pin_name.is_empty() {
+            "auto".into()
+        } else {
+            pin_name
+        };
+    }
+
+    fn rebind_layer(&mut self, output: Option<&WlOutput>) {
+        if let Some(old) = self.layer_surface.take() {
+            old.destroy();
+        }
+        let Some(shell) = &self.layer_shell else {
+            return;
+        };
+        let Some(surface) = &self.surface else {
+            return;
+        };
+        let ls = shell.get_layer_surface(
+            surface,
+            output,
+            zwlr_layer_shell_v1::Layer::Overlay,
+            self.namespace.clone(),
+            &self.qh,
+            (),
+        );
+        self.layer_surface = Some(ls);
+        self.configured = false;
+        self.pending_serial = None;
+        self.mapped = false;
+    }
+
     fn request_remap(&mut self) {
         // wlr-layer-shell: after a null attach the surface is back to
         // post-get_layer_surface. Re-apply role, commit *without* a buffer,
         // wait for configure, then ack+swap. Swap first = Hyprland protocol error.
+        self.pin_output();
         self.apply_layer_role();
         if let Some(surface) = &self.surface {
             surface.commit();
         }
         self.awaiting_remap = true;
-        eprintln!("remap: empty commit, waiting for configure");
+        eprintln!(
+            "remap: empty commit, waiting for configure (output={})",
+            self.output_name
+        );
     }
 }
 
@@ -512,9 +642,12 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         .bind::<ZxdgOutputManagerV1, _, _>(&qh, 1..=3, ())
         .ok();
 
+    let mut watch = config::Watch::open(args.config.clone())?;
+
     let mut app = App {
         qh: qh.clone(),
         compositor: Some(compositor),
+        layer_shell: Some(layer_shell),
         surface: None,
         layer_surface: None,
         viewport: None,
@@ -522,7 +655,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         outputs: Vec::new(),
         gpu: None,
         gl_window: None,
-        clock: dummy::clock_hms(),
+        handle: None,
         logical_w: 0,
         logical_h: 0,
         frac_scale: 120,
@@ -534,6 +667,11 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         output_name: args.output.clone().unwrap_or_else(|| "auto".into()),
         pending_serial: None,
         needs_present: false,
+        cfg: watch.cfg.clone(),
+        namespace: args.namespace.clone(),
+        cli_output: args.output.clone(),
+        pinned_output: String::new(),
+        warned_outputs: HashSet::new(),
     };
 
     let output_globals: Vec<_> = globals
@@ -579,28 +717,20 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let pinned = if let Some(want) = &args.output {
-        let found = app
-            .outputs
-            .iter()
-            .find(|output| output.name.eq_ignore_ascii_case(want))
-            .ok_or_else(|| format!("output {want} was not found (see --list-outputs)"))?;
-        app.output_name = found.name.clone();
-        Some(found.wl.clone())
-    } else {
-        None
-    };
+    app.handle = Some(app::start_with(
+        watch.cfg.clone(),
+        app::PrintOpts {
+            view: args.print_view,
+            hud: args.print_hud,
+        },
+    )?);
 
     if viewporter.is_none() {
         eprintln!("warning: wp_viewporter missing; 125/150% will be blurry");
     }
     if frac_mgr.is_none() {
         eprintln!("warning: wp_fractional_scale_v1 missing; using integer wl_output.scale");
-        if let Some(output) = pinned
-            .as_ref()
-            .and_then(|wl| app.outputs.iter().find(|o| o.wl.id() == wl.id()))
-            .or_else(|| app.outputs.first())
-        {
+        if let Some(output) = app.outputs.first() {
             app.frac_scale = (output.scale.max(1) as u32) * 120;
         }
     }
@@ -613,16 +743,18 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
     if let Some(viewporter) = &viewporter {
         app.viewport = Some(viewporter.get_viewport(&surface, &qh, ()));
     }
-    let layer_surface = layer_shell.get_layer_surface(
-        &surface,
-        pinned.as_ref(),
-        zwlr_layer_shell_v1::Layer::Overlay,
-        args.namespace.clone(),
-        &qh,
-        (),
-    );
     app.surface = Some(surface);
-    app.layer_surface = Some(layer_surface);
+    app.pin_output();
+    if frac_mgr.is_none() {
+        if let Some(output) = app
+            .outputs
+            .iter()
+            .find(|o| o.name.eq_ignore_ascii_case(&app.output_name))
+            .or_else(|| app.outputs.first())
+        {
+            app.frac_scale = (output.scale.max(1) as u32) * 120;
+        }
+    }
     app.apply_layer_role();
     app.surface.as_ref().expect("surface").commit();
 
@@ -648,21 +780,12 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         args.namespace, app.output_name
     );
     eprintln!("check: hyprctl layers | grep -A5 {}", args.namespace);
-    eprintln!("done-when: outlined dummy text at 1 Hz over the game; clicks still hit it");
+    eprintln!("done-when: live HUD (block / XP / challenges / map) at 1 Hz over the game; clicks still pass through");
 
     app.present()?;
 
     let started = Instant::now();
-    let remap_after_unmap = Duration::from_secs(5);
-    let mut hide_at = args.unmap_at.map(|d| started + d);
-    let mut show_at: Option<Instant> = None;
     let mut next_tick = started + Duration::from_secs(1);
-    if hide_at.is_some() {
-        eprintln!(
-            "unmap schedule: hide at {:?}, show 5s later, then stay up",
-            args.unmap_at
-        );
-    }
 
     loop {
         event_queue.dispatch_pending(&mut app)?;
@@ -676,44 +799,59 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
 
+        if let Some(h) = &app.handle {
+            if h.stopped() {
+                app.drop_gpu_before_window();
+                return Ok(());
+            }
+        }
+
         let now = Instant::now();
         if now >= next_tick {
             next_tick = now + Duration::from_secs(1);
-            let clock = dummy::clock_hms();
-            if clock != app.clock {
-                app.clock = clock;
-                app.needs_present = true;
+            app.needs_present = true;
+            if watch.poll() {
+                app.cfg = watch.cfg.clone();
+                if let Some(h) = &app.handle {
+                    h.replace_config(app.cfg.clone());
+                }
             }
         }
-        if let Some(at) = hide_at {
-            if now >= at && app.mapped {
-                app.unmap();
-                hide_at = None;
-                show_at = Some(now + remap_after_unmap);
-            }
-        }
-        if let Some(at) = show_at {
-            if now >= at && !app.mapped && !app.awaiting_remap {
-                show_at = None;
-                app.request_remap();
-            }
+        let vis = app
+            .handle
+            .as_ref()
+            .map(|h| h.visible.load(Ordering::SeqCst))
+            .unwrap_or(true);
+        if app.mapped && !vis {
+            app.unmap();
+        } else if !app.mapped && vis && !app.awaiting_remap {
+            app.request_remap();
         }
         if app.needs_present {
             app.present()?;
         }
 
         event_queue.flush()?;
-        let timeout_ms = poll_timeout_ms(now, started, args.duration, hide_at, show_at, next_tick);
+        let timeout_ms = poll_timeout_ms(now, started, args.duration, next_tick);
         match event_queue.prepare_read() {
             None => continue,
             Some(guard) => {
                 let fd = event_queue.as_fd().as_raw_fd();
-                let mut pfd = libc::pollfd {
-                    fd,
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
-                let n = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+                let wake_fd = app.handle.as_ref().map(|h| h.wake.read_fd()).unwrap_or(-1);
+                let mut pfds = [
+                    libc::pollfd {
+                        fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    },
+                    libc::pollfd {
+                        fd: wake_fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    },
+                ];
+                let nfds = if wake_fd >= 0 { 2 } else { 1 };
+                let n = unsafe { libc::poll(pfds.as_mut_ptr(), nfds, timeout_ms) };
                 if n < 0 {
                     let err = std::io::Error::last_os_error();
                     if err.kind() == std::io::ErrorKind::Interrupted {
@@ -722,10 +860,16 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
                     }
                     return Err(err.into());
                 }
-                if n > 0 && pfd.revents != 0 {
+                if n > 0 && pfds[0].revents != 0 {
                     guard.read()?;
                 } else {
                     drop(guard);
+                }
+                if n > 0 && nfds > 1 && pfds[1].revents != 0 {
+                    if let Some(h) = &app.handle {
+                        h.wake.take();
+                    }
+                    app.needs_present = true;
                 }
             }
         }
@@ -736,8 +880,6 @@ fn poll_timeout_ms(
     now: Instant,
     started: Instant,
     duration: Duration,
-    hide_at: Option<Instant>,
-    show_at: Option<Instant>,
     next_tick: Instant,
 ) -> i32 {
     let mut deadline: Option<Instant> = Some(next_tick);
@@ -749,12 +891,6 @@ fn poll_timeout_ms(
     };
     if duration > Duration::ZERO {
         consider(&mut deadline, started + duration);
-    }
-    if let Some(at) = hide_at {
-        consider(&mut deadline, at);
-    }
-    if let Some(at) = show_at {
-        consider(&mut deadline, at);
     }
     match deadline {
         None => -1,
