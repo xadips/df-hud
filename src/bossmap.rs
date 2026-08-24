@@ -68,10 +68,6 @@ impl BossMap {
         }
     }
 
-    pub fn block_boundary(&self, _x: i32, _y: i32, _now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        None
-    }
-
     pub fn active_marks(&self, now: DateTime<Utc>, from: [i32; 2], dist: &[i32]) -> Vec<CityMark> {
         let in_onslaught = from[0] == ONSLAUGHT_COORD && from[1] == ONSLAUGHT_COORD;
         let active: Vec<&CityEvent> = self

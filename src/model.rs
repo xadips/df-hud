@@ -28,10 +28,6 @@ impl Serialize for Ns {
     }
 }
 
-fn rfc3339<S: Serializer>(t: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(&t.to_rfc3339_opts(SecondsFormat::Secs, true))
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum XpSource {
     #[default]
@@ -709,9 +705,4 @@ pub fn marshal_indent(view: &View) -> Result<String, serde_json::Error> {
         out.push('\n');
     }
     Ok(out)
-}
-
-#[allow(dead_code)]
-pub(crate) fn _rfc3339_used() {
-    let _ = rfc3339::<serde_json::value::Serializer>;
 }

@@ -10,19 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crate::citymap;
 use crate::model::PresenceState;
 
 const INNER_CITY: &str = "Inner City";
-
-const KNOWN_OUTPOSTS: &[&str] = &[
-    "Nastya's Holdout",
-    "Dogg's Stockade",
-    "Precinct 13",
-    "Fort Pastor",
-    "Secronom Bunker",
-    "Valcrest",
-    "Ground Zero",
-];
 
 const OP_HANDSHAKE: u32 = 0;
 const OP_FRAME: u32 = 1;
@@ -53,7 +44,7 @@ pub fn parse_details(details: &str, at: DateTime<Utc>) -> PresenceState {
         s.indoors = !place.eq_ignore_ascii_case(INNER_CITY);
         return s;
     }
-    if KNOWN_OUTPOSTS.iter().any(|n| *n == text) {
+    if citymap::outpost_coords(text).is_some() {
         s.in_outpost = true;
         s.outpost_name = text.to_string();
         return s;
@@ -562,11 +553,6 @@ struct WindowsListener {
 unsafe impl Send for WindowsListener {}
 
 #[cfg(windows)]
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-#[cfg(windows)]
 fn listen_windows(path: &str) -> io::Result<Listener> {
     if !path.to_ascii_lowercase().starts_with(r"\\.\pipe\") {
         return Err(io::Error::other(format!(
@@ -603,8 +589,8 @@ fn create_pipe(path: &str, first: bool) -> io::Result<windows_sys::Win32::Founda
     const SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;GRGW;;;AU)";
     const SDDL_REVISION_1: u32 = 1;
 
-    let name = wide(path);
-    let sddl = wide(SDDL);
+    let name = crate::win32::wide(path);
+    let sddl = crate::win32::wide(SDDL);
     let mut sd = std::ptr::null_mut();
     let ok = unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -759,7 +745,7 @@ impl Drop for WindowsListener {
         if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             return;
         }
-        let name = wide(&self.path);
+        let name = crate::win32::wide(&self.path);
         let wake = unsafe {
             CreateFileW(
                 name.as_ptr(),

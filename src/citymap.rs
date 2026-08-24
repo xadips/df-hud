@@ -47,7 +47,7 @@ pub struct Outpost {
     pub x: i32,
     pub y: i32,
     pub name: &'static str,
-    pub slug: &'static str,
+    pub letter: &'static str,
 }
 
 static DEFAULT: OnceLock<Map> = OnceLock::new();
@@ -353,43 +353,43 @@ const OUTPOSTS: &[Outpost] = &[
         x: 1000,
         y: 1000,
         name: "Nastya's Holdout",
-        slug: "nastya",
+        letter: "N",
     },
     Outpost {
         x: 1005,
         y: 985,
         name: "Dogg's Stockade",
-        slug: "doggs",
+        letter: "D",
     },
     Outpost {
         x: 1012,
         y: 1019,
         name: "Precinct 13",
-        slug: "precinct",
+        letter: "P",
     },
     Outpost {
         x: 1029,
         y: 1003,
         name: "Fort Pastor",
-        slug: "fort",
+        letter: "F",
     },
     Outpost {
         x: 1054,
         y: 987,
         name: "Secronom Bunker",
-        slug: "bunker",
+        letter: "S",
     },
     Outpost {
         x: 1032,
         y: 985,
         name: "Valcrest",
-        slug: "valcrest",
+        letter: "C",
     },
     Outpost {
         x: 1058,
         y: 1019,
         name: "Ground Zero",
-        slug: "groundzero",
+        letter: "Z",
     },
 ];
 

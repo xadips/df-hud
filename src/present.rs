@@ -7,8 +7,9 @@ use crate::citymap;
 use crate::config::Config;
 use crate::format;
 use crate::groups::Groups;
+use crate::layout::Viewport;
 use crate::model::{Challenge, CityEvent, CityEventKind, CityMark, View as ModelView, XpStability};
-use crate::scene::{Line, MapCell, MapMarker, MapView, View};
+use crate::scene::{self, Line, MapCell, MapMarker, MapView, View};
 
 const BOARD_GAP_PX: f32 = 6.0;
 const DONE_RGB: [f32; 4] = [
@@ -42,6 +43,34 @@ const NEAREST_RANGE: i32 = 12;
 const XP_PENDING: &str = "--";
 const XP_ROUGH: &str = "~";
 const ONSLAUGHT: i32 = 3000;
+
+pub fn overlay_scene(
+    model: &ModelView,
+    cfg: &Config,
+    groups: &Groups,
+    width: f32,
+    height: f32,
+) -> scene::Scene {
+    overlay_scene_view(&from_view(model, cfg, groups), cfg, width, height)
+}
+
+#[cfg(target_os = "linux")]
+pub fn empty_overlay_scene(cfg: &Config, width: f32, height: f32) -> scene::Scene {
+    overlay_scene_view(&scene::View::default(), cfg, width, height)
+}
+
+fn overlay_scene_view(view: &View, cfg: &Config, width: f32, height: f32) -> scene::Scene {
+    scene::build(
+        view,
+        cfg,
+        Viewport {
+            width,
+            height,
+            game_width: 0.0,
+            game_height: 0.0,
+        },
+    )
+}
 
 pub fn hud_lines(v: &ModelView, cfg: &Config, groups: &Groups) -> Vec<String> {
     let scene = from_view(v, cfg, groups);
@@ -758,16 +787,10 @@ fn map_window(v: &ModelView, city: &citymap::Map, radius: i32) -> (i32, i32, i32
 }
 
 fn outpost_letter(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "Nastya's Holdout" => "N",
-        "Dogg's Stockade" => "D",
-        "Precinct 13" => "P",
-        "Fort Pastor" => "F",
-        "Secronom Bunker" => "S",
-        "Valcrest" => "C",
-        "Ground Zero" => "Z",
-        _ => return None,
-    })
+    citymap::outposts()
+        .iter()
+        .find(|o| o.name == name)
+        .map(|o| o.letter)
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> [f32; 4] {

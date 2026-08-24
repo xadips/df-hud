@@ -25,6 +25,8 @@ glow = "0.16"
 libloading = "0.8"
 # Tray reticle PNG. Small encoder; not a GUI toolkit.
 png = "0.17"
+# One argv walk. No clap; optional --print-view PATH is a peek, not a second parser.
+lexopt = "0.3"
 
 # Mesa EGL on a layer surface needs a libwayland wl_surface*. That is the
 # wayland-backend client_system feature (FFI for EGL), not GTK.

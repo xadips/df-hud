@@ -28,11 +28,10 @@ use wayland_backend::client::ObjectId;
 use wayland_egl::WlEglSurface;
 
 use crate::app;
+use crate::cli::OverlayArgs;
 use crate::config::{self, Config};
 use crate::egl::Egl;
-use crate::layout::Viewport;
 use crate::present;
-use crate::scene;
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::wl_compositor::WlCompositor;
@@ -67,93 +66,19 @@ pub struct Args {
     print_hud: bool,
 }
 
-impl Args {
-    pub fn parse() -> Result<Self, Box<dyn Error>> {
-        let mut output = None;
-        let mut namespace = "df-hud".to_string();
-        let mut duration = Duration::ZERO;
-        let mut list_outputs = false;
-        let mut requested = false;
-        let mut config = None;
-        let mut print_view = false;
-        let mut print_hud = false;
-
-        let mut args = std::env::args().skip(1);
-        while let Some(arg) = args.next() {
-            let mut next = |name: &str| -> Result<String, Box<dyn Error>> {
-                args.next()
-                    .ok_or_else(|| format!("{name} needs a value").into())
-            };
-            match arg.as_str() {
-                "-h" | "--help" => {
-                    print_help();
-                    std::process::exit(0);
-                }
-                "--list-outputs" => {
-                    requested = true;
-                    list_outputs = true;
-                }
-                "--output" => {
-                    requested = true;
-                    output = Some(next("--output")?);
-                }
-                "--namespace" => {
-                    requested = true;
-                    namespace = next("--namespace")?;
-                }
-                "--duration" => {
-                    requested = true;
-                    let secs: f32 = next("--duration")?.parse()?;
-                    duration = if secs <= 0.0 {
-                        Duration::ZERO
-                    } else {
-                        Duration::from_secs_f32(secs)
-                    };
-                }
-                "-config" | "--config" => {
-                    requested = true;
-                    config = Some(PathBuf::from(next("-config")?));
-                }
-                "-print-view" | "--print-view" => print_view = true,
-                "-print-hud" | "--print-hud" => print_hud = true,
-                other => return Err(format!("unknown flag {other} (see --help)").into()),
-            }
+impl From<OverlayArgs> for Args {
+    fn from(args: OverlayArgs) -> Self {
+        Self {
+            output: args.output,
+            namespace: args.namespace,
+            duration: args.duration,
+            list_outputs: args.list_outputs,
+            requested: args.requested,
+            config: args.config,
+            print_view: args.print_view,
+            print_hud: args.print_hud,
         }
-        Ok(Self {
-            output,
-            namespace,
-            duration,
-            list_outputs,
-            requested,
-            config,
-            print_view,
-            print_hud,
-        })
     }
-}
-
-fn print_help() {
-    eprintln!(
-        "\
-df-hud — overlay (live derive)
-
-  -once                 poll once, print the view, and exit
-  -print-view [PATH]    fixture JSON (PATH) or live JSON each update
-  -print-hud            print HUD text lines each update
-  -dump-fields          with -once / -dump-challenges, print the player record (secrets withheld)
-  -dump-challenges      fetch the challenge board once and print it
-  -check-config         validate TOML and print the request budget
-  -check-game           report whether the game client is detected
-  -headless             run pollers without the overlay window
-  -version              print the version and exit
-  -config, --config PATH
-                        TOML. default ~/.config/df-hud/config.toml (missing = built-in defaults)
-  --output NAME         pin to this connector (DP-1). overrides hud.monitor
-  --namespace NAME      layer-shell namespace (default df-hud)
-  --duration SECS       exit after SECS; 0 runs until Ctrl-C (default 0)
-  --list-outputs        print connector names and exit
-"
-    );
 }
 
 /// EGL window + context. Present (`eglSwapBuffers`) lives here so Gpu stays
@@ -337,20 +262,20 @@ impl App {
                 layer.ack_configure(serial);
             }
         }
-        let view = match &self.handle {
-            Some(h) => present::from_view(&h.store.derive(Utc::now()), &self.cfg, &h.groups),
-            None => scene::View::default(),
+        let built = match &self.handle {
+            Some(h) => present::overlay_scene(
+                &h.store.derive(Utc::now()),
+                &self.cfg,
+                &h.groups,
+                self.logical_w as f32,
+                self.logical_h as f32,
+            ),
+            None => present::empty_overlay_scene(
+                &self.cfg,
+                self.logical_w as f32,
+                self.logical_h as f32,
+            ),
         };
-        let built = scene::build(
-            &view,
-            &self.cfg,
-            Viewport {
-                width: self.logical_w as f32,
-                height: self.logical_h as f32,
-                game_width: 0.0,
-                game_height: 0.0,
-            },
-        );
         let (buf_w, buf_h) = self.buffer_size();
         self.gl_window.as_ref().expect("gl_window").make_current()?;
         self.gpu.as_mut().expect("gpu").draw(
