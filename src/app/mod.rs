@@ -116,6 +116,12 @@ impl Handle {
     }
 
     pub fn replace_config(&self, cfg: Config) {
+        if !cfg.bossmap.enabled {
+            self.store.clear_boss_map();
+        }
+        if !cfg.widget.challenges.enabled {
+            self.store.clear_challenges();
+        }
         self.gamekeys.apply_config(&cfg.game_keys);
         *self.cfg.lock().unwrap() = cfg;
         self.game.poke();
@@ -261,7 +267,9 @@ pub fn start_with(
         store.set_on_run_change(move || persist_run(&hud, &persist));
     }
 
-    let client = Arc::new(Mutex::new(df_client(&cfg)));
+    let player_client = Arc::new(Mutex::new(df_client(&cfg)));
+    let challenge_client = Arc::new(Mutex::new(df_client(&cfg)));
+    let session_stale = Arc::new(AtomicBool::new(false));
     let cfg = Arc::new(Mutex::new(cfg));
     let stop = Arc::new(AtomicBool::new(false));
     let game_running = Arc::new(AtomicBool::new(false));
@@ -291,16 +299,17 @@ pub fn start_with(
     let vis = visibility::Watcher::new(game.clone(), cfg.clone(), query);
 
     let player = PlayerPoller::new(
-        client.clone(),
+        player_client,
         creds.clone(),
         store.clone(),
         cfg.clone(),
         gate.clone(),
         stop.clone(),
         game_running.clone(),
+        session_stale.clone(),
     );
     let challenges = ChallengePoller::new(
-        client.clone(),
+        challenge_client,
         creds.clone(),
         store.clone(),
         persist.clone(),
@@ -308,6 +317,7 @@ pub fn start_with(
         gate,
         stop.clone(),
         game_running.clone(),
+        session_stale,
     );
 
     let handle = Arc::new(Handle {
@@ -657,6 +667,8 @@ fn bossmap_loop(
         }
         let c = cfg.lock().unwrap().clone();
         if !c.bossmap.enabled {
+            store.clear_boss_map();
+            wake.ping();
             thread::sleep(Duration::from_secs(2));
             continue;
         }

@@ -50,6 +50,7 @@ pub struct PlayerPoller {
     wake: Arc<Notify>,
     min_gap: Mutex<Duration>,
     game_running: Arc<AtomicBool>,
+    session_stale: Arc<AtomicBool>,
     status: Mutex<PollerStatus>,
     last_poll: Mutex<Option<Instant>>,
     on_tick: Mutex<Option<Arc<dyn Fn(Tick) + Send + Sync>>>,
@@ -64,6 +65,7 @@ impl PlayerPoller {
         gate: Arc<Gate>,
         stop: Arc<AtomicBool>,
         game_running: Arc<AtomicBool>,
+        session_stale: Arc<AtomicBool>,
     ) -> Arc<Self> {
         Arc::new(Self {
             client,
@@ -75,6 +77,7 @@ impl PlayerPoller {
             wake: Arc::new(Notify::new()),
             min_gap: Mutex::new(MIN_REQUEST_GAP),
             game_running,
+            session_stale,
             status: Mutex::new(PollerStatus::default()),
             last_poll: Mutex::new(None),
             on_tick: Mutex::new(None),
@@ -97,12 +100,13 @@ impl PlayerPoller {
     pub fn resume(&self) {
         {
             let mut st = self.status.lock().unwrap();
-            if st.stale {
+            if st.stale || self.session_stale.load(Ordering::SeqCst) {
                 eprintln!("poller: credentials refreshed, resuming");
             }
             st.stale = false;
             st.failures = 0;
         }
+        self.session_stale.store(false, Ordering::SeqCst);
         self.wake();
     }
 
@@ -114,10 +118,16 @@ impl PlayerPoller {
         if self.creds.get().is_none() {
             return Some("waiting for the browser bridge to deliver a session".into());
         }
-        if self.status.lock().unwrap().stale {
-            return Some(
-                "credentials were rejected; open any Dead Frontier page to refresh them".into(),
-            );
+        {
+            let mut st = self.status.lock().unwrap();
+            if self.session_stale.load(Ordering::SeqCst) {
+                st.stale = true;
+            }
+            if st.stale {
+                return Some(
+                    "credentials were rejected; open any Dead Frontier page to refresh them".into(),
+                );
+            }
         }
         let cfg = self.cfg.lock().unwrap().clone();
         if cfg.poll.only_when_game_running && !self.game_running.load(Ordering::SeqCst) {
@@ -286,6 +296,7 @@ impl PlayerPoller {
                         || err.contains("credentials rejected") =>
                 {
                     st.stale = true;
+                    self.session_stale.store(true, Ordering::SeqCst);
                     st.last_error = err.clone();
                     st.total_failure += 1;
                     eprintln!(
@@ -334,6 +345,7 @@ pub struct ChallengePoller {
     stop: Arc<AtomicBool>,
     wake: Arc<Notify>,
     game_running: Arc<AtomicBool>,
+    session_stale: Arc<AtomicBool>,
     stale: AtomicBool,
     failures: Mutex<i32>,
 }
@@ -348,6 +360,7 @@ impl ChallengePoller {
         gate: Arc<Gate>,
         stop: Arc<AtomicBool>,
         game_running: Arc<AtomicBool>,
+        session_stale: Arc<AtomicBool>,
     ) -> Arc<Self> {
         Arc::new(Self {
             client,
@@ -359,6 +372,7 @@ impl ChallengePoller {
             stop,
             wake: Arc::new(Notify::new()),
             game_running,
+            session_stale,
             stale: AtomicBool::new(false),
             failures: Mutex::new(0),
         })
@@ -370,19 +384,26 @@ impl ChallengePoller {
 
     pub fn resume(&self) {
         self.stale.store(false, Ordering::SeqCst);
+        self.session_stale.store(false, Ordering::SeqCst);
         *self.failures.lock().unwrap() = 0;
         self.wake();
+    }
+
+    #[cfg(test)]
+    pub fn pause_reason_for_test(&self) -> Option<String> {
+        self.pause_reason()
     }
 
     fn pause_reason(&self) -> Option<String> {
         let cfg = self.cfg.lock().unwrap().clone();
         if !cfg.widget.challenges.enabled {
+            self.store.clear_challenges();
             return Some("the challenge widget is disabled".into());
         }
         let Some((cr, salt)) = self.creds.get() else {
             return Some("waiting for the browser bridge to deliver a session".into());
         };
-        if self.stale.load(Ordering::SeqCst) {
+        if self.session_stale.load(Ordering::SeqCst) || self.stale.load(Ordering::SeqCst) {
             return Some(
                 "credentials were rejected; open any Dead Frontier page to refresh them".into(),
             );
@@ -510,8 +531,11 @@ impl ChallengePoller {
             Err(err) => {
                 if err.contains("credentials rejected") {
                     self.stale.store(true, Ordering::SeqCst);
+                    self.session_stale.store(true, Ordering::SeqCst);
                 } else {
                     *self.failures.lock().unwrap() += 1;
+                    self.store
+                        .set_challenge_status("could not load the board (retrying)".into());
                 }
                 let n = *self.failures.lock().unwrap();
                 if n == 1 || n % 10 == 0 || err.contains("credentials rejected") {
@@ -542,6 +566,7 @@ mod tests {
     use super::*;
     use crate::net::creds::Credentials;
     use crate::net::dfclient::Client;
+    use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
     use std::sync::Mutex as StdMutex;
@@ -633,6 +658,7 @@ mod tests {
             Arc::new(Gate::new(Duration::from_millis(5))),
             stop.clone(),
             running,
+            Arc::new(AtomicBool::new(false)),
         );
         p.set_min_gap(Duration::from_millis(20));
         (p, stop)
@@ -682,5 +708,73 @@ mod tests {
             !err.contains("credentials rejected"),
             "HTML is not a credential problem: {err}"
         );
+    }
+
+    fn test_challenge_poller(
+        session_stale: Arc<AtomicBool>,
+    ) -> (Arc<ChallengePoller>, Arc<Store>, Arc<Mutex<Config>>) {
+        let mut cfg = Config::default();
+        cfg.widget.challenges.enabled = true;
+        cfg.poll.only_when_game_running = false;
+        let creds = Arc::new(Creds::new(""));
+        creds
+            .set(
+                Credentials {
+                    user_id: "1234567".into(),
+                    password: "hash".into(),
+                    sc: "sc".into(),
+                    cookie: "session=1".into(),
+                },
+                "salt",
+            )
+            .unwrap();
+        let store = Arc::new(Store::new(None));
+        store.apply_tick(Tick {
+            at: Utc::now(),
+            vars: HashMap::from([("df_level".into(), "415".into())]),
+            err: None,
+            scheduled: false,
+        });
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(2))
+            .build();
+        let cfg = Arc::new(Mutex::new(cfg));
+        let p = ChallengePoller::new(
+            Arc::new(Mutex::new(Client::with_agent(
+                agent,
+                "http://127.0.0.1:1",
+                "df-hud-test",
+            ))),
+            creds,
+            store.clone(),
+            Arc::new(state::Store::new("")),
+            cfg.clone(),
+            Arc::new(Gate::new(Duration::from_millis(5))),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(true)),
+            session_stale,
+        );
+        (p, store, cfg)
+    }
+
+    #[test]
+    fn challenge_pauses_when_player_session_is_stale() {
+        let stale = Arc::new(AtomicBool::new(true));
+        let (p, _, _) = test_challenge_poller(stale);
+        let reason = p.pause_reason_for_test().expect("paused");
+        assert!(reason.contains("credentials were rejected"), "{reason}");
+    }
+
+    #[test]
+    fn challenge_clears_board_when_widget_disabled() {
+        let (p, store, cfg) = test_challenge_poller(Arc::new(AtomicBool::new(false)));
+        store.set_challenges(vec![crate::model::Challenge {
+            name: "Travel".into(),
+            ..crate::model::Challenge::default()
+        }]);
+        cfg.lock().unwrap().widget.challenges.enabled = false;
+        let reason = p.pause_reason_for_test().expect("paused");
+        assert!(reason.contains("disabled"), "{reason}");
+        assert!(store.derive(Utc::now()).challenges.is_none());
     }
 }
