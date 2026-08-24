@@ -18,7 +18,7 @@ impl Ns {
     }
 
     pub fn std(self) -> Duration {
-        Duration::from_nanos(self.0.max(0) as u64)
+        Duration::from_nanos(self.0.max(0).cast_unsigned())
     }
 }
 
@@ -311,7 +311,7 @@ impl Challenge {
     }
 
     pub(crate) fn live_complete(&self) -> bool {
-        !self.objectives.is_empty() && self.objectives.iter().all(|o| o.done())
+        !self.objectives.is_empty() && self.objectives.iter().all(Objective::done)
     }
 
     pub fn remaining(&self, now: DateTime<Utc>) -> Duration {

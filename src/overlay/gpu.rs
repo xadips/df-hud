@@ -229,7 +229,7 @@ impl Gpu {
                 UvRect::point(wu, wv),
             );
         }
-        let stroke_s = (sx + sy) * 0.5;
+        let stroke_s = sx.midpoint(sy);
         for stroke in &scene.strokes {
             push_line(
                 &mut verts,
@@ -301,7 +301,7 @@ impl Gpu {
         }
         let dy = if let (Some(h), true) = (text.center_h, ink_bot > ink_top) {
             let box_mid = y0 + h * sy * 0.5;
-            let ink_mid = (ink_top + ink_bot) * 0.5;
+            let ink_mid = ink_top.midpoint(ink_bot);
             (box_mid - ink_mid).round()
         } else {
             0.0

@@ -91,7 +91,7 @@ pub fn parse_snapshot(
     s.gold_member = bool_var(vars, "df_goldmember");
     s.dead = bool_var(vars, "df_dead");
     s.server_time = df_compact_time_var(vars, "df_servertime");
-    s.session_3d = fingerprint(vars.get("df_session3d").map(String::as_str).unwrap_or(""));
+    s.session_3d = fingerprint(vars.get("df_session3d").map_or("", String::as_str));
     s
 }
 
@@ -129,7 +129,7 @@ fn int64_var(vars: &HashMap<String, String>, key: &str) -> Option<i64> {
 }
 
 fn bool_var(vars: &HashMap<String, String>, key: &str) -> bool {
-    vars.get(key).map(|s| s.trim() == "1").unwrap_or(false)
+    vars.get(key).is_some_and(|s| s.trim() == "1")
 }
 
 fn df_compact_time_var(vars: &HashMap<String, String>, key: &str) -> Option<DateTime<Utc>> {
@@ -328,7 +328,7 @@ impl Store {
     pub fn set_presence(&self, p: PresenceState) {
         let (run_changed, on_change) = {
             let mut s = self.inner.lock().unwrap();
-            if !s.game.running || s.game.started_at.map(|t| p.at < t).unwrap_or(false) {
+            if !s.game.running || s.game.started_at.is_some_and(|t| p.at < t) {
                 return;
             }
             s.presence_connected = true;
@@ -557,11 +557,7 @@ impl Store {
             if !marks.is_empty() {
                 v.city_marks = Some(marks.clone());
             }
-            let block_empty = v
-                .block_events
-                .as_ref()
-                .map(|e| e.is_empty())
-                .unwrap_or(true);
+            let block_empty = v.block_events.as_ref().is_none_or(Vec::is_empty);
             if v.has_position && block_empty && !v.client_loading {
                 if let Some(m) = bossmap::nearest_mark(&marks) {
                     v.has_nearest = true;

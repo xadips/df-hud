@@ -1,4 +1,4 @@
-//! Tray icon and menu. Linux StatusNotifierItem via ksni; Windows Shell_NotifyIconW.
+//! Tray icon and menu. Linux `StatusNotifierItem` via ksni; Windows `Shell_NotifyIconW`.
 //! No GTK, no fyne, no tokio.
 //!
 //! Grey: game not running. Yellow: game up and IPC is fine (or unused).
@@ -158,7 +158,7 @@ pub fn menu_alert(
     if ipc_missing {
         return Some("Discord IPC is not connected".into());
     }
-    let status = view.map(TrayState::status).unwrap_or("").trim();
+    let status = view.map_or("", TrayState::status).trim();
     if status.is_empty()
         || status.contains("only_when_game_running")
         || status == "waiting for the first poll"
@@ -256,7 +256,7 @@ pub fn icon_kind(view: Option<&dyn TrayState>, bind_failed: bool, ipc_missing: b
     if ipc_missing {
         return IconKind::Warn;
     }
-    if view.map(TrayState::game_running).unwrap_or(false) {
+    if view.is_some_and(TrayState::game_running) {
         IconKind::Active
     } else {
         IconKind::Idle

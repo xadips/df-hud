@@ -21,7 +21,7 @@ pub const ATTRIB_NONE: Attrib = 0x3038;
 pub const SURFACE_TYPE: Int = 0x3033;
 pub const WINDOW_BIT: Int = 0x0004;
 pub const RENDERABLE_TYPE: Int = 0x3040;
-pub const OPENGL_ES3_BIT: Int = 0x00000040;
+pub const OPENGL_ES3_BIT: Int = 0x0000_0040;
 pub const RED_SIZE: Int = 0x3024;
 pub const GREEN_SIZE: Int = 0x3023;
 pub const BLUE_SIZE: Int = 0x3022;
@@ -52,7 +52,7 @@ type QueryString = unsafe extern "C" fn(Display, Int) -> *const c_char;
 
 pub struct Egl {
     _lib: Library,
-    _gles: Option<Library>,
+    gles: Option<Library>,
     p_get_proc_address: GetProcAddress,
     p_get_platform_display: Option<GetPlatformDisplay>,
     p_get_display: GetDisplay,
@@ -82,7 +82,7 @@ impl Egl {
             .map_err(|err| format!("load libEGL.so.1: {err}"))?;
         let gles = unsafe { Library::new("libGLESv2.so.2") }.ok();
         Ok(Self {
-            _gles: gles,
+            gles,
             p_get_proc_address: load(&lib, b"eglGetProcAddress\0")?,
             p_get_platform_display: load(&lib, b"eglGetPlatformDisplay\0").ok(),
             p_get_display: load(&lib, b"eglGetDisplay\0")?,
@@ -103,13 +103,12 @@ impl Egl {
     }
 
     pub fn get_proc_address(&self, name: &str) -> *const c_void {
-        let owned = match std::ffi::CString::new(name) {
-            Ok(c) => c,
-            Err(_) => return ptr::null(),
+        let Ok(owned) = std::ffi::CString::new(name) else {
+            return ptr::null();
         };
-        let mut ptr = unsafe { (self.p_get_proc_address)(owned.as_ptr()) as *const c_void };
+        let mut ptr = unsafe { (self.p_get_proc_address)(owned.as_ptr()).cast_const() };
         if ptr.is_null() {
-            if let Some(gles) = &self._gles {
+            if let Some(gles) = &self.gles {
                 if let Ok(sym) =
                     unsafe { gles.get::<unsafe extern "C" fn()>(owned.as_bytes_with_nul()) }
                 {

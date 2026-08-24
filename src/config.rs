@@ -1294,16 +1294,16 @@ pub fn parse_color(hex: &str, alpha: f32) -> [f32; 4] {
     let h = hex.trim().trim_start_matches('#');
     let (r, g, b, a) = match h.len() {
         3 => {
-            let n = u32::from_str_radix(h, 16).unwrap_or(0xffffff);
+            let n = u32::from_str_radix(h, 16).unwrap_or(0x00ff_ffff);
             (
                 (((n >> 8) & 0xf) * 0x11) as f32 / 255.0,
                 (((n >> 4) & 0xf) * 0x11) as f32 / 255.0,
-                ((n & 0xf) as f32) / 255.0 * 0.0 + ((n & 0xf) * 0x11) as f32 / 255.0,
+                ((n & 0xf) * 0x11) as f32 / 255.0,
                 alpha,
             )
         }
         6 => {
-            let n = u32::from_str_radix(h, 16).unwrap_or(0xffffff);
+            let n = u32::from_str_radix(h, 16).unwrap_or(0x00ff_ffff);
             (
                 ((n >> 16) & 0xff) as f32 / 255.0,
                 ((n >> 8) & 0xff) as f32 / 255.0,
@@ -1312,7 +1312,7 @@ pub fn parse_color(hex: &str, alpha: f32) -> [f32; 4] {
             )
         }
         8 => {
-            let n = u32::from_str_radix(h, 16).unwrap_or(0xffffffff);
+            let n = u32::from_str_radix(h, 16).unwrap_or(0xffff_ffff);
             (
                 ((n >> 24) & 0xff) as f32 / 255.0,
                 ((n >> 16) & 0xff) as f32 / 255.0,

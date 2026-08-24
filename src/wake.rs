@@ -79,7 +79,7 @@ impl Wake {
             loop {
                 match f.read(&mut buf) {
                     Ok(0) | Err(_) => break,
-                    Ok(_) => continue,
+                    Ok(_) => {}
                 }
             }
         }

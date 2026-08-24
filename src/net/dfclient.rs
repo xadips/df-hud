@@ -151,11 +151,8 @@ fn numeric_id(id: &str) -> bool {
 }
 
 fn record_looks_real(vars: &Vars) -> bool {
-    vars.get("df_level").map(|s| !s.is_empty()).unwrap_or(false)
-        && vars
-            .get("id_member")
-            .map(|s| !s.is_empty())
-            .unwrap_or(false)
+    vars.get("df_level").is_some_and(|s| !s.is_empty())
+        && vars.get("id_member").is_some_and(|s| !s.is_empty())
 }
 
 fn allowed(endpoint: &str) -> bool {

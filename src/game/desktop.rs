@@ -236,9 +236,8 @@ fn hypr_key_ok(key: &str) -> bool {
 
 #[cfg(any(test, target_os = "linux"))]
 fn hypr_address_ok(address: &str) -> bool {
-    let rest = match address.strip_prefix("0x") {
-        Some(r) => r,
-        None => return false,
+    let Some(rest) = address.strip_prefix("0x") else {
+        return false;
     };
     !rest.is_empty() && rest.chars().all(|c| c.is_ascii_hexdigit())
 }
