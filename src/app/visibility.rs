@@ -184,6 +184,7 @@ impl Watcher {
         };
         if session_changed {
             *self.place.lock().unwrap() = Placement::default();
+            *self.last_query_error.lock().unwrap() = None;
         }
         let mut window_seen = *self.window_seen.lock().unwrap();
         let mut place = self.place.lock().unwrap().clone();

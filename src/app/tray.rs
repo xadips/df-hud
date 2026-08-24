@@ -11,9 +11,9 @@ use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::Mutex;
 
-use crate::app::Handle;
+use crate::app::{store::TrayHint, Handle};
 use crate::format;
-use crate::model::{View, Visibility};
+use crate::model::{Ns, View, Visibility};
 
 const ICON_SIZE: i32 = 64;
 const ACTIVE: [u8; 4] = [0xe6, 0xcc, 0x4d, 0xff];
@@ -29,37 +29,88 @@ pub enum IconKind {
     Error,
 }
 
+pub trait TrayState {
+    fn game_running(&self) -> bool;
+    fn has_session(&self) -> bool;
+    fn session_time(&self) -> Ns;
+    fn client_uptime(&self) -> Ns;
+    fn have_data(&self) -> bool;
+    fn xp_available(&self) -> bool;
+    fn xp_per_hour(&self) -> f64;
+    fn status(&self) -> &str;
+}
+
+macro_rules! impl_tray_state {
+    ($type:ty) => {
+        impl TrayState for $type {
+            fn game_running(&self) -> bool {
+                self.game_running
+            }
+            fn has_session(&self) -> bool {
+                self.has_session
+            }
+            fn session_time(&self) -> Ns {
+                self.session_time
+            }
+            fn client_uptime(&self) -> Ns {
+                self.client_uptime
+            }
+            fn have_data(&self) -> bool {
+                self.have_data
+            }
+            fn xp_available(&self) -> bool {
+                self.xp_available
+            }
+            fn xp_per_hour(&self) -> f64 {
+                self.xp_per_hour
+            }
+            fn status(&self) -> &str {
+                &self.status
+            }
+        }
+    };
+}
+
+impl_tray_state!(View);
+impl_tray_state!(TrayHint);
+
 pub fn version_label() -> String {
     format!("df-hud {}", env!("CARGO_PKG_VERSION"))
 }
 
 #[cfg(test)]
 fn tooltip(view: Option<&View>, vis: Visibility) -> String {
-    tooltip_with_version(view, vis, "")
+    tooltip_with_version(view.map(|v| v as &dyn TrayState), vis, "")
 }
 
-pub fn tooltip_with_version(view: Option<&View>, vis: Visibility, version: &str) -> String {
+pub fn tooltip_with_version(
+    view: Option<&dyn TrayState>,
+    vis: Visibility,
+    version: &str,
+) -> String {
     let primary = match view {
         None => "starting".to_string(),
-        Some(v) if !v.game_running => "the game is not running".to_string(),
-        Some(v) if v.has_session => format!("in the city {}", format::clock(v.session_time.std())),
+        Some(v) if !v.game_running() => "the game is not running".to_string(),
+        Some(v) if v.has_session() => {
+            format!("in the city {}", format::clock(v.session_time().std()))
+        }
         Some(v) => format!(
             "client up {}, not in the city",
-            format::clock(v.client_uptime.std())
+            format::clock(v.client_uptime().std())
         ),
     };
     let mut lines = vec![primary.clone()];
     if let Some(v) = view {
-        if v.have_data && v.xp_available {
-            let rate = format::rate(v.xp_per_hour);
+        if v.have_data() && v.xp_available() {
+            let rate = format::rate(v.xp_per_hour());
             if !rate.is_empty() {
                 lines.push(format!("xp {rate}/hr"));
             }
         }
-        if let Some(status) = tooltip_status_line(&primary, &v.status) {
+        if let Some(status) = tooltip_status_line(&primary, v.status()) {
             lines.push(status);
         }
-        if v.game_running && !vis.visible && !vis.reason.is_empty() {
+        if v.game_running() && !vis.visible && !vis.reason.is_empty() {
             lines.push(format!("overlay hidden: {}", vis.reason));
         }
     }
@@ -70,7 +121,7 @@ pub fn tooltip_with_version(view: Option<&View>, vis: Visibility, version: &str)
 }
 
 pub fn tooltip_with_presence(
-    view: Option<&View>,
+    view: Option<&dyn TrayState>,
     vis: Visibility,
     bind_failed: bool,
     ipc_missing: bool,
@@ -93,7 +144,7 @@ pub fn tooltip_with_presence(
 
 /// One unclickable tray-menu line, or none when nothing is wrong.
 pub fn menu_alert(
-    view: Option<&View>,
+    view: Option<&dyn TrayState>,
     config_err: Option<&str>,
     bind_failed: bool,
     ipc_missing: bool,
@@ -107,7 +158,7 @@ pub fn menu_alert(
     if ipc_missing {
         return Some("Discord IPC is not connected".into());
     }
-    let status = view.map(|v| v.status.as_str()).unwrap_or("").trim();
+    let status = view.map(TrayState::status).unwrap_or("").trim();
     if status.is_empty()
         || status.contains("only_when_game_running")
         || status == "waiting for the first poll"
@@ -146,7 +197,7 @@ fn clip_menu_alert(s: &str) -> String {
 }
 
 fn menu_alert_from(handle: &Handle) -> Option<String> {
-    let view = handle.store.derive(chrono::Utc::now());
+    let view = handle.store.tray_hint(chrono::Utc::now());
     let bind_failed = handle.presence_bind_failed();
     let missing = ipc_unconnected(
         Some(&view),
@@ -181,7 +232,7 @@ fn tooltip_status_line(primary: &str, status: &str) -> Option<String> {
 /// Game is in-world, we own the socket, but the client never connected
 /// (started the overlay after the game, or the game gave up).
 pub fn ipc_unconnected(
-    view: Option<&View>,
+    view: Option<&dyn TrayState>,
     presence_enabled: bool,
     bind_failed: bool,
     client_connected: bool,
@@ -193,19 +244,19 @@ pub fn ipc_unconnected(
     presence_enabled
         && !bind_failed
         && !client_connected
-        && v.game_running
-        && v.have_data
+        && v.game_running()
+        && v.have_data()
         && !launcher_only
 }
 
-pub fn icon_kind(view: Option<&View>, bind_failed: bool, ipc_missing: bool) -> IconKind {
+pub fn icon_kind(view: Option<&dyn TrayState>, bind_failed: bool, ipc_missing: bool) -> IconKind {
     if bind_failed {
         return IconKind::Error;
     }
     if ipc_missing {
         return IconKind::Warn;
     }
-    if view.map(|v| v.game_running).unwrap_or(false) {
+    if view.map(TrayState::game_running).unwrap_or(false) {
         IconKind::Active
     } else {
         IconKind::Idle
@@ -540,7 +591,7 @@ mod linux {
 
     fn snapshot(handle: &Handle) -> (IconKind, String, bool, bool, bool, bool) {
         let vis = handle.store.visibility();
-        let view = handle.store.derive(chrono::Utc::now());
+        let view = handle.store.tray_hint(chrono::Utc::now());
         let bind_failed = handle.presence_bind_failed();
         let missing = ipc_unconnected(
             Some(&view),
@@ -736,7 +787,7 @@ mod windows {
         let Some(ctx) = g.as_mut() else {
             return;
         };
-        let view = ctx.handle.store.derive(chrono::Utc::now());
+        let view = ctx.handle.store.tray_hint(chrono::Utc::now());
         let vis = ctx.handle.store.visibility();
         let bind_failed = ctx.handle.presence_bind_failed();
         let missing = ipc_unconnected(

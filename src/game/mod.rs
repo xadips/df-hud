@@ -25,6 +25,11 @@ pub fn base_name(p: &str) -> &str {
 
 pub trait Scanner: Send {
     fn scan(&self) -> Result<GameState, String>;
+
+    fn scan_known(&self, known: GameState) -> Result<GameState, String> {
+        let _ = known;
+        self.scan()
+    }
 }
 
 pub struct Watcher {
@@ -96,7 +101,8 @@ impl Watcher {
     }
 
     fn scan_once(&self) {
-        let next = match self.scanner.lock().unwrap().scan() {
+        let known = self.state();
+        let next = match self.scanner.lock().unwrap().scan_known(known) {
             Ok(s) => s,
             Err(_) => return,
         };
@@ -293,6 +299,33 @@ pub mod linux {
         fn scan(&self) -> Result<GameState, String> {
             scan_proc(&self.proc_root, &self.exe_name, self.self_pid)
         }
+
+        fn scan_known(&self, known: GameState) -> Result<GameState, String> {
+            if verify_known(&self.proc_root, &self.exe_name, self.self_pid, known) {
+                Ok(known)
+            } else {
+                self.scan()
+            }
+        }
+    }
+
+    pub fn verify_known(root: &Path, exe_name: &str, self_pid: i32, known: GameState) -> bool {
+        if !known.running || known.pid <= 0 || known.pid == self_pid {
+            return false;
+        }
+        let Some(started_at) = known.started_at else {
+            return false;
+        };
+        let Ok(argv0) = process_argv0(root, known.pid) else {
+            return false;
+        };
+        if !base_name(&argv0).eq_ignore_ascii_case(exe_name) {
+            return false;
+        }
+        let Ok(boot) = boot_time(root) else {
+            return false;
+        };
+        process_start_time(root, known.pid, boot).ok() == Some(started_at)
     }
 
     pub fn scan_proc(root: &Path, exe_name: &str, self_pid: i32) -> Result<GameState, String> {
@@ -804,6 +837,52 @@ mod linux_tests {
         p.add_process(800, "firefox", "/usr/lib/firefox/firefox", 100);
         let got = p.scanner("DeadFrontier.exe").scan().unwrap();
         assert!(!got.running && got.pid == 0 && got.started_at.is_none());
+    }
+
+    #[test]
+    fn proc_scan_reuses_a_matching_known_pid() {
+        let p = FakeProc::new();
+        p.add_process(810, "DeadFrontier.e", "/games/DeadFrontier.exe", 100_000);
+        let scanner = p.scanner("DeadFrontier.exe");
+        let known = scanner.scan().unwrap();
+        assert!(verify_known(
+            &p.root,
+            "DeadFrontier.exe",
+            scanner.self_pid,
+            known
+        ));
+        assert_eq!(scanner.scan_known(known).unwrap(), known);
+    }
+
+    #[test]
+    fn proc_scan_known_pid_falls_back_after_exit_or_exe_change() {
+        let p = FakeProc::new();
+        p.add_process(820, "DeadFrontier.e", "/games/DeadFrontier.exe", 100_000);
+        p.add_process(821, "DeadFrontier.e", "/games/DeadFrontier.exe", 200_000);
+        let scanner = p.scanner("DeadFrontier.exe");
+        let known = scanner.scan().unwrap();
+        assert_eq!(known.pid, 820);
+
+        fs::remove_dir_all(p.root.join("820")).unwrap();
+        let replacement = scanner.scan_known(known).unwrap();
+        assert_eq!(replacement.pid, 821);
+
+        fs::write(p.root.join("821").join("cmdline"), b"/usr/bin/firefox\x00").unwrap();
+        assert!(!scanner.scan_known(replacement).unwrap().running);
+    }
+
+    #[test]
+    fn proc_scan_detects_pid_reuse() {
+        let p = FakeProc::new();
+        p.add_process(830, "DeadFrontier.e", "/games/DeadFrontier.exe", 100_000);
+        let scanner = p.scanner("DeadFrontier.exe");
+        let known = scanner.scan().unwrap();
+        fs::remove_dir_all(p.root.join("830")).unwrap();
+        p.add_process(830, "DeadFrontier.e", "/games/DeadFrontier.exe", 200_000);
+
+        let reused = scanner.scan_known(known).unwrap();
+        assert_eq!(reused.pid, known.pid);
+        assert_ne!(reused.started_at, known.started_at);
     }
 
     #[test]

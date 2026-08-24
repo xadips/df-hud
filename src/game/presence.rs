@@ -704,28 +704,26 @@ impl WindowsListener {
         };
         use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
 
-        loop {
-            if stop.load(Ordering::SeqCst) {
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "stopped"));
-            }
-            let handle = *self.pending.lock().unwrap();
-            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-                return Err(io::Error::other("pipe closed"));
-            }
-            let ok = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) };
-            if ok == 0 {
-                let err = unsafe { GetLastError() };
-                if err != ERROR_PIPE_CONNECTED {
-                    if stop.load(Ordering::SeqCst) {
-                        return Err(io::Error::new(io::ErrorKind::Interrupted, "stopped"));
-                    }
-                    return Err(io::Error::from_raw_os_error(err as i32));
-                }
-            }
-            let next = create_pipe(&self.path, false).unwrap_or(std::ptr::null_mut());
-            *self.pending.lock().unwrap() = next;
-            return Ok(IpcStream::Windows(WindowsPipe { handle }));
+        if stop.load(Ordering::SeqCst) {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "stopped"));
         }
+        let handle = *self.pending.lock().unwrap();
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            return Err(io::Error::other("pipe closed"));
+        }
+        let ok = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) };
+        if ok == 0 {
+            let err = unsafe { GetLastError() };
+            if err != ERROR_PIPE_CONNECTED {
+                if stop.load(Ordering::SeqCst) {
+                    return Err(io::Error::new(io::ErrorKind::Interrupted, "stopped"));
+                }
+                return Err(io::Error::from_raw_os_error(err as i32));
+            }
+        }
+        let next = create_pipe(&self.path, false).unwrap_or(std::ptr::null_mut());
+        *self.pending.lock().unwrap() = next;
+        Ok(IpcStream::Windows(WindowsPipe { handle }))
     }
 }
 

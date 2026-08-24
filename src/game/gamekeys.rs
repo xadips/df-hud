@@ -201,7 +201,7 @@ pub fn spawn(handle: Arc<crate::app::Handle>, stop: Arc<std::sync::atomic::Atomi
                 let game = handle.game.state();
                 let place = handle.vis.placement();
                 let ready = handle.store.client_in_world(chrono::Utc::now());
-                let active = send.active_address();
+                let active = handle.active_address();
                 handle.gamekeys.tick(
                     SystemTime::now(),
                     &cfg,

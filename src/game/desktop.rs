@@ -366,17 +366,23 @@ pub fn watch_events(
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     on_game: impl Fn(),
     on_place: impl Fn(),
+    on_focus: impl Fn(),
 ) {
-    let path = match hypr_socket_path(".socket2.sock") {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("game: no Hyprland event stream ({e}); falling back to periodic scans");
-            return;
-        }
-    };
     let mut backoff = std::time::Duration::from_secs(1);
     while !stop.load(std::sync::atomic::Ordering::SeqCst) {
-        match stream_hypr_events(&path, &stop, &on_game, &on_place) {
+        let path = match hypr_socket_path(".socket2.sock") {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!("game: no Hyprland event stream ({e}); retrying in {backoff:?}");
+                std::thread::sleep(backoff);
+                if backoff < std::time::Duration::from_secs(30) {
+                    backoff *= 2;
+                }
+                continue;
+            }
+        };
+        on_focus();
+        match stream_hypr_events(&path, &stop, &on_game, &on_place, &on_focus) {
             Ok(()) => {}
             Err(e) => {
                 if stop.load(std::sync::atomic::Ordering::SeqCst) {
@@ -401,6 +407,7 @@ fn stream_hypr_events(
     stop: &std::sync::atomic::AtomicBool,
     on_game: &impl Fn(),
     on_place: &impl Fn(),
+    on_focus: &impl Fn(),
 ) -> Result<(), String> {
     use std::io::{BufRead, BufReader};
     use std::os::unix::net::UnixStream;
@@ -417,18 +424,30 @@ fn stream_hypr_events(
         let Some((name, _)) = line.split_once(">>") else {
             continue;
         };
-        match name {
-            "openwindow" | "closewindow" | "fullscreen" => {
-                on_game();
-                on_place();
-            }
-            "workspace" | "workspacev2" | "focusedmon" | "focusedmonv2" | "movewindow"
-            | "movewindowv2" | "moveworkspace" | "moveworkspacev2" | "activespecial"
-            | "monitoradded" | "monitorremoved" => on_place(),
-            _ => {}
-        }
+        dispatch_hypr_event(name, on_game, on_place, on_focus);
     }
     Err("socket closed".into())
+}
+
+#[cfg(any(test, unix))]
+fn dispatch_hypr_event(
+    name: &str,
+    on_game: &impl Fn(),
+    on_place: &impl Fn(),
+    on_focus: &impl Fn(),
+) {
+    match name {
+        "openwindow" | "closewindow" | "fullscreen" => {
+            on_game();
+            on_place();
+            on_focus();
+        }
+        "workspace" | "workspacev2" | "focusedmon" | "focusedmonv2" | "movewindow"
+        | "movewindowv2" | "moveworkspace" | "moveworkspacev2" | "activespecial"
+        | "monitoradded" | "monitorremoved" => on_place(),
+        "activewindow" | "activewindowv2" => on_focus(),
+        _ => {}
+    }
 }
 
 #[cfg(windows)]
@@ -436,6 +455,7 @@ pub fn watch_events(
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     on_game: impl Fn(),
     on_place: impl Fn(),
+    on_focus: impl Fn(),
 ) {
     use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
     let mut last = unsafe { GetForegroundWindow() };
@@ -446,12 +466,19 @@ pub fn watch_events(
             last = next;
             on_game();
             on_place();
+            on_focus();
         }
     }
 }
 
 #[cfg(not(any(unix, windows)))]
-pub fn watch_events(_: std::sync::Arc<std::sync::atomic::AtomicBool>, _: impl Fn(), _: impl Fn()) {}
+pub fn watch_events(
+    _: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    _: impl Fn(),
+    _: impl Fn(),
+    _: impl Fn(),
+) {
+}
 
 #[derive(Clone, Debug)]
 pub struct ListedWindow {
@@ -829,6 +856,23 @@ mod tests {
             serde_json::from_str(HYPR_CLIENTS).unwrap(),
             serde_json::from_str(HYPR_MONITORS).unwrap(),
         )
+    }
+
+    #[test]
+    fn hypr_events_route_focus_without_refreshing_placement() {
+        let game = std::cell::Cell::new(0);
+        let place = std::cell::Cell::new(0);
+        let focus = std::cell::Cell::new(0);
+        let on_game = || game.set(game.get() + 1);
+        let on_place = || place.set(place.get() + 1);
+        let on_focus = || focus.set(focus.get() + 1);
+
+        dispatch_hypr_event("activewindowv2", &on_game, &on_place, &on_focus);
+        assert_eq!((game.get(), place.get(), focus.get()), (0, 0, 1));
+        dispatch_hypr_event("openwindow", &on_game, &on_place, &on_focus);
+        assert_eq!((game.get(), place.get(), focus.get()), (1, 1, 2));
+        dispatch_hypr_event("workspacev2", &on_game, &on_place, &on_focus);
+        assert_eq!((game.get(), place.get(), focus.get()), (1, 2, 2));
     }
 
     #[test]
