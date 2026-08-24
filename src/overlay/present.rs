@@ -90,7 +90,7 @@ pub fn hud_lines(v: &ModelView, cfg: &Config, groups: &Groups) -> Vec<String> {
         rows.push((
             cfg.widget.bosses.y,
             cfg.widget.bosses.x,
-            scene.bosses.into_iter().map(|l| l.text).collect(),
+            scene.bosses.iter().map(line_plain).collect(),
         ));
     }
     if !scene.clock.is_empty() {
@@ -169,10 +169,28 @@ pub fn from_view(v: &ModelView, cfg: &Config, groups: &Groups) -> View {
     if !groups.hidden("bosses") {
         out.bosses = boss_lines(v, cfg);
     }
-    if !groups.hidden("map") && cfg.widget.map.enabled && v.has_position {
+    if !groups.hidden("map") && cfg.widget.map.enabled && v.has_position && !in_onslaught(v) {
         out.map = map_view(v, cfg);
     }
     out
+}
+
+fn in_onslaught(v: &ModelView) -> bool {
+    v.has_position && v.position_x == ONSLAUGHT && v.position_y == ONSLAUGHT
+}
+
+fn line_plain(l: &Line) -> String {
+    let mut s = String::new();
+    if !l.label.is_empty() {
+        s.push_str(&l.label);
+        s.push_str("  ");
+    }
+    s.push_str(&l.text);
+    if !l.timer.is_empty() {
+        s.push_str("  ");
+        s.push_str(&l.timer);
+    }
+    s
 }
 
 fn session_line(v: &ModelView, cfg: &Config) -> Option<String> {
@@ -241,69 +259,130 @@ fn boss_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
             ..Line::default()
         });
     }
-    let mut rest = Vec::new();
-    if v.position_x == ONSLAUGHT && v.position_y == ONSLAUGHT {
-        rest.extend(onslaught_panel(v));
-    } else {
-        for e in v.block_events.iter().flatten() {
-            rest.extend(with_time_left(event_rows(e, ""), e, v.now));
+    if let Some(panel) = onslaught_panel(v) {
+        rows.extend(panel);
+        return rows;
+    }
+    for e in v.block_events.iter().flatten() {
+        for text in with_time_left(event_rows(e, ""), e, v.now) {
+            rows.push(Line {
+                text,
+                ..Line::default()
+            });
         }
     }
     if cfg.widget.bosses.show_nearest {
-        if let Some(line) = nearest_line(v) {
-            rest.push(line);
+        if let Some(text) = nearest_line(v) {
+            rows.push(Line {
+                text,
+                ..Line::default()
+            });
         }
     }
-    rows.extend(rest.into_iter().map(|text| Line {
-        text,
-        ..Line::default()
-    }));
     rows
 }
 
-fn onslaught_panel(v: &ModelView) -> Vec<String> {
+fn onslaught_header_timer(v: &ModelView) -> Option<String> {
+    if !v.have_data || !v.has_onslaught_countdown {
+        return None;
+    }
+    Some(format::mmss(v.onslaught_countdown.std()))
+}
+
+fn onslaught_panel(v: &ModelView) -> Option<Vec<Line>> {
+    if !v.have_data || v.position_x != ONSLAUGHT || v.position_y != ONSLAUGHT {
+        return None;
+    }
     let mut rows = Vec::new();
+    rows.push(Line {
+        text: "Onslaught Cycles".into(),
+        timer: onslaught_header_timer(v).unwrap_or_default(),
+        color: Some(rgb(0xff, 0xff, 0xff)),
+        ..Line::default()
+    });
     rows.extend(onslaught_section(
         "prev",
         v.block_events_past.as_deref().unwrap_or(&[]),
+        rgb(0xb5, 0xb5, 0xb5),
         "cleared",
     ));
+    if let Some(past) = v.block_events_past.as_deref().and_then(|e| e.first()) {
+        if let Some(end) = onslaught_cycle_end(past) {
+            if v.now >= end {
+                let since = v.now - end;
+                let text = if since.num_minutes() >= 1 {
+                    format!("ended {}m ago", since.num_minutes())
+                } else {
+                    "ended just now".into()
+                };
+                rows.push(Line {
+                    text,
+                    color: Some(rgb(0x6f, 0x6f, 0x6f)),
+                    ..Line::default()
+                });
+            }
+        }
+    }
     rows.extend(onslaught_section(
         "now",
         v.block_events.as_deref().unwrap_or(&[]),
+        rgb(0xff, 0x4d, 0x4d),
         "nothing this cycle",
     ));
     rows.extend(onslaught_section(
         "next",
         v.block_events_upcoming.as_deref().unwrap_or(&[]),
+        rgb(0x4f, 0xc3, 0xff),
         "not announced",
     ));
-    rows
+    Some(rows)
 }
 
-fn onslaught_section(label: &str, events: &[CityEvent], empty: &str) -> Vec<String> {
+fn onslaught_cycle_end(e: &CityEvent) -> Option<DateTime<Utc>> {
+    if e.end.timestamp() == 0 {
+        return None;
+    }
+    if e.enemies.len() < 2 || e.start.timestamp() == 0 {
+        return Some(e.end);
+    }
+    let cycle = e.end - e.start;
+    if cycle <= chrono::Duration::zero() {
+        return Some(e.end);
+    }
+    Some(e.end + cycle * (e.enemies.len() as i32 - 1))
+}
+
+fn onslaught_section(label: &str, events: &[CityEvent], color: [f32; 4], empty: &str) -> Vec<Line> {
     let mut texts = Vec::new();
     for e in events {
-        let mut ev = e.clone();
-        if ev.enemies.len() > 1 {
-            ev.enemies = vec![ev.enemies[ev.enemies.len() - 1].clone()];
-        }
-        texts.extend(event_rows(&ev, ""));
+        texts.extend(onslaught_event_rows(e));
     }
     if texts.is_empty() {
-        return vec![format!("{label}  {empty}")];
+        return vec![Line {
+            label: label.into(),
+            text: empty.into(),
+            color: Some(rgb(0x6f, 0x6f, 0x6f)),
+            ..Line::default()
+        }];
     }
     texts
         .into_iter()
         .enumerate()
-        .map(|(i, t)| {
-            if i == 0 {
-                format!("{label}  {t}")
-            } else {
-                format!("     {t}")
-            }
+        .map(|(i, text)| Line {
+            label: if i == 0 { label.into() } else { String::new() },
+            text,
+            color: Some(color),
+            ..Line::default()
         })
         .collect()
+}
+
+fn onslaught_event_rows(e: &CityEvent) -> Vec<String> {
+    let mut ev = e.clone();
+    if ev.enemies.len() > 1 {
+        ev.enemies = vec![ev.enemies[ev.enemies.len() - 1].clone()];
+    }
+    event_rows(&ev, "")
 }
 
 fn event_rows(e: &CityEvent, prefix: &str) -> Vec<String> {
@@ -496,6 +575,7 @@ fn challenge_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
             chip_ring: false,
             strike: r.done,
             timer: String::new(),
+            label: String::new(),
         })
         .collect();
     if !v.challenge_status.is_empty() {
@@ -767,9 +847,7 @@ fn map_view(v: &ModelView, cfg: &Config) -> MapView {
             });
         }
         if cfg.widget.map.show_list {
-            let in_onslaught =
-                v.has_position && v.position_x == ONSLAUGHT && v.position_y == ONSLAUGHT;
-            list = map_list(&visible, cfg.widget.map.max_listed, in_onslaught);
+            list = map_list(&visible, cfg.widget.map.max_listed, in_onslaught(v));
         }
     }
     MapView {
@@ -1063,6 +1141,25 @@ mod tests {
 
     fn texts(lines: &[Line]) -> Vec<String> {
         lines.iter().map(|l| l.text.clone()).collect()
+    }
+
+    fn spawn(enemies: &[&str]) -> CityEvent {
+        CityEvent {
+            kind: CityEventKind::Spawn,
+            enemies: enemies.iter().map(|s| (*s).to_string()).collect(),
+            ..CityEvent::default()
+        }
+    }
+
+    fn onslaught_view(now: DateTime<Utc>) -> ModelView {
+        ModelView {
+            now,
+            have_data: true,
+            has_position: true,
+            position_x: ONSLAUGHT,
+            position_y: ONSLAUGHT,
+            ..ModelView::default()
+        }
     }
 
     fn mark(
@@ -1728,5 +1825,201 @@ mod tests {
             ..ModelView::default()
         };
         assert_eq!(from_view(&stuck, &cfg, &g).status_color, Some(EXPIRING_RGB));
+    }
+
+    fn panel_body(rows: &[Line]) -> &[Line] {
+        assert_eq!(rows[0].text, "Onslaught Cycles");
+        &rows[1..]
+    }
+
+    #[test]
+    fn onslaught_panel_orders_prev_now_next() {
+        let v = ModelView {
+            block_events_past: Some(vec![spawn(&["3 x Irradiated Wraith"])]),
+            block_events: Some(vec![spawn(&["3 x Charred Giant Spider"])]),
+            block_events_upcoming: Some(vec![spawn(&["2 x Titan"])]),
+            ..onslaught_view(Utc::now())
+        };
+        let rows = onslaught_panel(&v).expect("in Onslaught");
+        let body = panel_body(&rows);
+        assert_eq!(body.len(), 3);
+        assert_eq!(body[0].label, "prev");
+        assert_eq!(body[0].text, "3 x Irradiated Wraith");
+        assert_eq!(body[0].color, Some(rgb(0xb5, 0xb5, 0xb5)));
+        assert_eq!(body[1].label, "now");
+        assert_eq!(body[1].text, "3 x Charred Giant Spider");
+        assert_eq!(body[1].color, Some(rgb(0xff, 0x4d, 0x4d)));
+        assert_eq!(body[2].label, "next");
+        assert_eq!(body[2].text, "2 x Titan");
+        assert_eq!(body[2].color, Some(rgb(0x4f, 0xc3, 0xff)));
+    }
+
+    #[test]
+    fn onslaught_panel_keeps_only_the_last_bundled_name() {
+        let v = ModelView {
+            block_events_past: Some(vec![spawn(&[
+                "3 x Irradiated Giant Spider",
+                "3 x Mega Giant Spider",
+            ])]),
+            ..onslaught_view(Utc::now())
+        };
+        let rows = onslaught_panel(&v).unwrap();
+        let body = panel_body(&rows);
+        assert_eq!(body[0].text, "3 x Mega Giant Spider");
+    }
+
+    #[test]
+    fn onslaught_panel_shows_placeholders_when_empty() {
+        let rows = onslaught_panel(&onslaught_view(Utc::now())).unwrap();
+        let body = panel_body(&rows);
+        assert_eq!(body.len(), 3);
+        let empty = Some(rgb(0x6f, 0x6f, 0x6f));
+        assert_eq!(body[0].text, "cleared");
+        assert_eq!(body[0].color, empty);
+        assert_eq!(body[1].text, "nothing this cycle");
+        assert_eq!(body[1].color, empty);
+        assert_eq!(body[2].text, "not announced");
+        assert_eq!(body[2].color, empty);
+    }
+
+    #[test]
+    fn onslaught_panel_shows_age_of_the_previous_cycle() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        let mut past = spawn(&["1 x Titan"]);
+        past.end = now - ChronoDuration::minutes(3);
+        let v = ModelView {
+            block_events_past: Some(vec![past]),
+            ..onslaught_view(now)
+        };
+        let rows = onslaught_panel(&v).unwrap();
+        let body = panel_body(&rows);
+        let age = body
+            .iter()
+            .find(|r| r.text == "ended 3m ago")
+            .expect("age row");
+        assert_eq!(age.color, Some(rgb(0x6f, 0x6f, 0x6f)));
+        assert!(age.label.is_empty());
+    }
+
+    #[test]
+    fn onslaught_panel_ages_the_displayed_boss_not_the_bundle() {
+        let start = DateTime::from_timestamp(1_786_828_501, 0).unwrap();
+        let now = start + ChronoDuration::minutes(13) + ChronoDuration::seconds(50);
+        let mut past = spawn(&["3 x Mega Giant Spider", "3 x Irradiated Mother"]);
+        past.start = start;
+        past.end = start + ChronoDuration::minutes(5);
+        let v = ModelView {
+            block_events_past: Some(vec![past]),
+            ..onslaught_view(now)
+        };
+        let rows = onslaught_panel(&v).unwrap();
+        let ages: Vec<_> = panel_body(&rows)
+            .iter()
+            .filter(|r| r.text.starts_with("ended "))
+            .map(|r| r.text.as_str())
+            .collect();
+        assert_eq!(ages, ["ended 3m ago"]);
+    }
+
+    #[test]
+    fn onslaught_panel_omits_the_age_when_the_bundle_is_still_running() {
+        let start = DateTime::from_timestamp(1_786_828_501, 0).unwrap();
+        let mut past = spawn(&["3 x Mega Giant Spider", "3 x Irradiated Mother"]);
+        past.start = start;
+        past.end = start + ChronoDuration::minutes(5);
+        let v = ModelView {
+            block_events_past: Some(vec![past]),
+            ..onslaught_view(start + ChronoDuration::minutes(7))
+        };
+        for r in panel_body(&onslaught_panel(&v).unwrap()) {
+            assert!(
+                !r.text.starts_with("ended "),
+                "age {} while displayed cycle still running",
+                r.text
+            );
+        }
+    }
+
+    #[test]
+    fn onslaught_panel_only_applies_in_onslaught() {
+        let v = ModelView {
+            have_data: true,
+            has_position: true,
+            position_x: 1058,
+            position_y: 1016,
+            block_events: Some(vec![spawn(&["6 x Bandits"])]),
+            ..ModelView::default()
+        };
+        assert!(onslaught_panel(&v).is_none());
+    }
+
+    #[test]
+    fn onslaught_header_timer_is_mmss() {
+        let v = ModelView {
+            have_data: true,
+            has_onslaught_countdown: true,
+            onslaught_countdown: Ns::from_std(Duration::from_secs(3 * 60 + 59)),
+            ..ModelView::default()
+        };
+        assert_eq!(onslaught_header_timer(&v).as_deref(), Some("3:59"));
+        assert!(onslaught_header_timer(&ModelView {
+            have_data: true,
+            ..ModelView::default()
+        })
+        .is_none());
+        assert!(onslaught_header_timer(&ModelView {
+            has_onslaught_countdown: true,
+            onslaught_countdown: Ns::from_std(Duration::from_secs(60)),
+            ..ModelView::default()
+        })
+        .is_none());
+    }
+
+    #[test]
+    fn map_is_hidden_in_onslaught() {
+        let cfg = Config::default();
+        let g = Groups::new();
+        assert!(!g.toggle("map").unwrap());
+        let onslaught = ModelView {
+            city_marks: Some(vec![mark(
+                "z",
+                0,
+                false,
+                Duration::from_secs(60),
+                &["3 x Mega Wraith"],
+            )]),
+            ..onslaught_view(Utc::now())
+        };
+        let hidden = from_view(&onslaught, &cfg, &g);
+        assert!(hidden.map.cells.is_empty());
+        assert!(hidden.map.markers.is_empty());
+        assert!(hidden.map.list.is_empty());
+
+        let city = ModelView {
+            have_data: true,
+            has_position: true,
+            position_x: 1016,
+            position_y: 1020,
+            ..ModelView::default()
+        };
+        assert!(!from_view(&city, &cfg, &g).map.cells.is_empty());
+    }
+
+    #[test]
+    fn nearest_is_skipped_in_onslaught() {
+        let mut cfg = Config::default();
+        cfg.widget.bosses.show_nearest = true;
+        let v = ModelView {
+            has_nearest: true,
+            nearest_dx: 2,
+            nearest_dy: -1,
+            nearest_x: 1055,
+            nearest_y: 985,
+            nearest_distance_in_blocks: 3,
+            ..onslaught_view(Utc::now())
+        };
+        let lines = boss_lines(&v, &cfg);
+        assert!(lines.iter().all(|l| !l.text.contains("nearest")));
+        assert!(lines.iter().any(|l| l.text == "Onslaught Cycles"));
     }
 }

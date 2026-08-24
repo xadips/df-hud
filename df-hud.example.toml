@@ -450,7 +450,8 @@ offset_y = 350
 #
 # The window is clamped into the city rather than hanging off the edge, so its
 # size never changes and the map does not jump sideways near a boundary. With no
-# position yet, or in Onslaught, it falls back to the whole city.
+# position yet it falls back to the whole city. Onslaught (3000,3000) is not on
+# this grid, so the map group is hidden there and the bosses panel covers it.
 radius = 8
 
 # The size of the whole thing, grid AND key, from one number. 1.0 is 1180 pixels

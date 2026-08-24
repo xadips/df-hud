@@ -26,6 +26,12 @@ pub fn clock(d: Duration) -> String {
     format!("{h}:{m:02}:{s:02}")
 }
 
+/// Onslaught header clock: `m:ss`, including minutes past 59.
+pub fn mmss(d: Duration) -> String {
+    let total = d.as_secs();
+    format!("{}:{:02}", total / 60, total % 60)
+}
+
 /// Expiration durations at a deliberately coarse precision.
 pub fn countdown(d: Duration) -> String {
     if d.is_zero() {
@@ -156,6 +162,9 @@ mod tests {
         assert_eq!(rate(-1.0), "");
         assert_eq!(position(1058, 1019, 2), "1058, 1019 (floor 2)");
         assert_eq!(position(1058, 1019, 0), "1058, 1019");
+        assert_eq!(mmss(Duration::from_secs(3 * 60 + 59)), "3:59");
+        assert_eq!(mmss(Duration::ZERO), "0:00");
+        assert_eq!(mmss(Duration::from_secs(90)), "1:30");
         assert_eq!(ago(Duration::from_secs(7)), "7s");
         assert_eq!(ago(Duration::from_secs(60)), "1m");
         assert_eq!(ago(Duration::from_secs(62)), "1m2s");
