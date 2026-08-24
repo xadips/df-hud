@@ -19,3 +19,7 @@ positions.ndjson
 # Local Windows VM credentials.
 /windows-vm/.env
 /windows-vm/.ssh/
+
+# Editor / agent scratch. Rules under .cursor/rules/ stay tracked.
+.cursor/plans/
+.vscode/
