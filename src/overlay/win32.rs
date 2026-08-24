@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 use std::error::Error;
 use std::mem::size_of;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -28,17 +28,22 @@ use windows_sys::Win32::Graphics::Gdi::{
     CreateRectRgn, DeleteObject, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR,
     MONITORINFOEXW,
 };
+use windows_sys::Win32::System::Console::GetConsoleProcessList;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::Controls::MARGINS;
+use windows_sys::Win32::UI::Controls::{
+    TaskDialogIndirect, MARGINS, TASKDIALOGCONFIG, TASKDIALOG_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION,
+    TDF_SIZE_TO_CONTENT, TD_ERROR_ICON,
+};
 use windows_sys::Win32::UI::HiDpi::{
     GetDpiForMonitor, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     MDT_EFFECTIVE_DPI,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW,
-    LoadCursorW, MsgWaitForMultipleObjects, PeekMessageW, RegisterClassExW,
+    LoadCursorW, MessageBoxW, MsgWaitForMultipleObjects, PeekMessageW, RegisterClassExW,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
-    CS_HREDRAW, CS_OWNDC, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA,
+    CS_HREDRAW, CS_OWNDC, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MB_ICONERROR,
+    MB_OK,
     MONITORINFOF_PRIMARY, MSG, PM_REMOVE, QS_ALLINPUT, SWP_FRAMECHANGED, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA, WM_CLOSE, WM_DESTROY,
     WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
@@ -81,6 +86,103 @@ impl From<OverlayArgs> for Args {
 
 pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+const ID_OPEN_LOG: i32 = 100;
+const ID_CLOSE: i32 = 2;
+
+/// Explorer and the Run key allocate a console that vanishes on exit. Keep a
+/// dialog up so a bad config is readable. `cmd` / `cargo run` already have
+/// stderr; skip the box there.
+pub fn fatal_alert(err: &str) {
+    let log = write_fatal_log(err);
+    if shared_console() {
+        return;
+    }
+    if let Some(path) = &log {
+        if show_fatal_task_dialog(err, path) {
+            return;
+        }
+    }
+    let text = wide(&format!(
+        "{err}\n\nThe overlay did not start. Fix the problem and launch df-hud again."
+    ));
+    let title = wide("df-hud");
+    unsafe {
+        MessageBoxW(
+            ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
+fn write_fatal_log(err: &str) -> Option<PathBuf> {
+    let path = fatal_log_path()?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok()?;
+    }
+    std::fs::write(&path, format!("{err}\n")).ok()?;
+    Some(path)
+}
+
+fn fatal_log_path() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("LOCALAPPDATA") {
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir).join("df-hud").join("df-hud.log"));
+        }
+    }
+    Some(config::default_path().parent()?.join("df-hud.log"))
+}
+
+fn show_fatal_task_dialog(err: &str, log: &Path) -> bool {
+    let title = wide("df-hud");
+    let instruction = wide("The overlay did not start");
+    let content = wide(&format!(
+        "{err}\n\nFix the problem and launch df-hud again."
+    ));
+    let open_label = wide("Open log");
+    let close_label = wide("Close");
+    let buttons = [
+        TASKDIALOG_BUTTON {
+            nButtonID: ID_OPEN_LOG,
+            pszButtonText: open_label.as_ptr(),
+        },
+        TASKDIALOG_BUTTON {
+            nButtonID: ID_CLOSE,
+            pszButtonText: close_label.as_ptr(),
+        },
+    ];
+    let mut cfg = TASKDIALOGCONFIG::default();
+    cfg.cbSize = size_of::<TASKDIALOGCONFIG>() as u32;
+    cfg.pszWindowTitle = title.as_ptr();
+    cfg.pszMainInstruction = instruction.as_ptr();
+    cfg.pszContent = content.as_ptr();
+    cfg.cButtons = buttons.len() as u32;
+    cfg.pButtons = buttons.as_ptr();
+    cfg.nDefaultButton = ID_CLOSE;
+    cfg.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+    cfg.Anonymous1.pszMainIcon = TD_ERROR_ICON;
+    let mut button = 0i32;
+    let hr = unsafe {
+        TaskDialogIndirect(&cfg, &mut button, ptr::null_mut(), ptr::null_mut())
+    };
+    if hr < 0 {
+        return false;
+    }
+    if button == ID_OPEN_LOG {
+        if let Err(open_err) = crate::app::autostart::open_file(log) {
+            eprintln!("could not open log: {open_err}");
+        }
+    }
+    true
+}
+
+fn shared_console() -> bool {
+    let mut pids = [0u32; 8];
+    let n = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) };
+    n > 1
 }
 
 pub fn last_err(op: &str) -> Box<dyn Error> {
@@ -560,10 +662,13 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         if overlay::due(now, &mut next_tick) {
             needs_present = true;
             if let Some(cfg) = overlay::take_reload(&mut watch) {
+                handle.note_config_watch(&watch, true);
                 match gpu.as_mut() {
                     Some(gpu) => overlay::push_config(&handle, gpu, &cfg),
                     None => handle.replace_config(cfg),
                 }
+            } else {
+                handle.note_config_watch(&watch, false);
             }
         }
         let vis = handle.visible.load(Ordering::SeqCst);

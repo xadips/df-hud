@@ -1111,6 +1111,7 @@ pub struct Watch {
     path: Option<PathBuf>,
     mtime: Option<SystemTime>,
     pub cfg: Config,
+    error: Option<String>,
 }
 
 impl Watch {
@@ -1124,12 +1125,17 @@ impl Watch {
             path: Some(path),
             mtime,
             cfg,
+            error: None,
         })
     }
 
     #[cfg(test)]
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     pub fn poll(&mut self) -> bool {
@@ -1147,12 +1153,14 @@ impl Watch {
             Ok(cfg) => {
                 self.cfg = cfg;
                 self.mtime = mtime;
+                self.error = None;
                 eprintln!("reloaded {}", path.display());
                 true
             }
             Err(err) => {
                 eprintln!("config reload failed: {err}");
                 self.mtime = mtime;
+                self.error = Some(err.to_string());
                 false
             }
         }

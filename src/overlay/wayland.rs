@@ -761,11 +761,14 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
             if let Some(cfg) = overlay::take_reload(&mut watch) {
                 app.cfg = cfg.clone();
                 if let Some(h) = app.handle.as_ref() {
+                    h.note_config_watch(&watch, true);
                     match app.gpu.as_mut() {
                         Some(gpu) => overlay::push_config(h, gpu, &cfg),
                         None => h.replace_config(cfg),
                     }
                 }
+            } else if let Some(h) = app.handle.as_ref() {
+                h.note_config_watch(&watch, false);
             }
         }
         let vis = app
