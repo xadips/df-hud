@@ -52,7 +52,7 @@ listen = "127.0.0.1:9275"
 # delay noticing the outpost-to-city transition by a whole idle interval.
 #
 # Minimums: active 5, idle 30, challenges 30, catalog 3600 seconds. Regardless of
-# these, two requests are never sent less than 5s apart, so nothing that wakes
+# these, two requests are never sent less than 1s apart, so nothing that wakes
 # df-hud can turn into a burst.
 active_interval = 10
 idle_interval = 120
@@ -253,20 +253,20 @@ reference_height = 1440
 # game's API knows where YOU are and the stats feed knows the map's geometry, but
 # neither knows what has spawned on it; dfprofiler publishes that.
 #
-# There is no fixed cadence. The feed states when every event starts and ends, so
-# the schedule comes from the data: a fetch shortly after the next changeover,
-# one when you arrive on a new block, and otherwise a heartbeat for the
-# once-a-day random spawns that nothing predicts. Since each event's own times
-# are read against the clock, a changeover costs no request at all.
+# There is no event-boundary scheduler. Some bosses (Devil Hound, Behemoth,
+# Volatile Leaper, 8x Bandits) appear once a day at a random time, so the feed
+# cannot say when to wake. interval is the poll period in the city (15s floor);
+# onslaught_interval is the same while you are standing in Onslaught. Timestamps
+# in the last fetch still drive HUD state between polls, so a changeover that
+# was already in the payload costs no extra request.
 #
-# interval is the MINIMUM gap between fetches, not the cadence. The floor for
-# both intervals is 15s. Nothing is fetched while the game is not running.
+# max_interval and onslaught_max_interval are unused; they stay so existing
+# config files keep loading.
 #
-# The onslaught_ pair is the same two numbers for while you are standing in
-# Onslaught, and tighter because that cycle is 300 seconds where the city's is
-# 3600 - a five-minute heartbeat against a five-minute cycle can miss a whole
-# turnover. dfprofiler's own page polls this endpoint every 30s per open tab,
-# which is the rate worth staying near.
+# The onslaught interval is tighter because that cycle is 300 seconds where the
+# city's is 3600 - a five-minute heartbeat against a five-minute cycle can miss a
+# whole turnover. dfprofiler's own page polls this endpoint every 30s per open
+# tab, which is the rate worth staying near.
 enabled = true
 url = "https://www.dfprofiler.com/bossmap/json/"
 interval = 60

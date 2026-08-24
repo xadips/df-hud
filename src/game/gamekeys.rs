@@ -221,7 +221,7 @@ pub fn spawn(handle: Arc<crate::app::Handle>, stop: Arc<std::sync::atomic::Atomi
                     active: active.as_deref(),
                     ready,
                 });
-                std::thread::sleep(Duration::from_millis(200));
+                handle.ui.wait_timeout(Duration::from_millis(200));
             }
         })
         .ok();

@@ -1,8 +1,8 @@
 //! Single source of HUD truth. Poller writes snapshots in; UI calls Derive.
 
 use chrono::{DateTime, Utc};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -116,8 +116,9 @@ fn fingerprint(v: &str) -> String {
     if v.is_empty() {
         return String::new();
     }
-    let sum = Sha256::digest(v.as_bytes());
-    format!("{:02x}{:02x}{:02x}{:02x}", sum[0], sum[1], sum[2], sum[3])
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    v.hash(&mut hasher);
+    format!("{:08x}", hasher.finish() as u32)
 }
 
 fn int_var(vars: &HashMap<String, String>, key: &str) -> Option<i32> {

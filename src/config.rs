@@ -153,8 +153,10 @@ pub struct BossMap {
     pub enabled: bool,
     pub url: String,
     pub interval: Duration,
+    /// Unused; kept so existing configs load.
     pub max_interval: Duration,
     pub onslaught_interval: Duration,
+    /// Unused; kept so existing configs load.
     pub onslaught_max_interval: Duration,
 }
 
