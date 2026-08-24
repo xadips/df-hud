@@ -468,8 +468,8 @@ The payload is account-equivalent, so:
 - **request bodies are never logged, at any level**
 - `credentials.json` is written atomically at mode 0600, and the mode is
   re-verified after writing
-- `String`, `GoString` and `MarshalJSON` all redact, so a stray `%v` cannot leak
-  them; a test asserts no secret ever reaches log output
+- `Display` and JSON serialization redact secrets; a test asserts none of them
+  reach log output
 
 The session cookie is stored, which reverses an earlier decision here. It was
 discarded at first on the reasoning that `userID`+`password`+`sc` authenticates
@@ -609,6 +609,10 @@ loop while working on df-hud itself.
 
 Nothing here is required. `./df-hud` from a terminal still works and is still the
 right way to try a change before installing it.
+
+On Windows the exe is a GUI app: Explorer and the Run key do not open a console.
+`--version` and friends still print when you launch from `cmd`. Otherwise stderr
+goes to `%LOCALAPPDATA%\df-hud\df-hud.log`.
 
 Under Proton, Dead Frontier talks Discord IPC through a wineserver named pipe.
 Stock Proton copies `discord-rpc-bridge` into the prefix and never launches it.

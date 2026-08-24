@@ -16,11 +16,9 @@ UNITDIR ?= $(HOME)/.config/systemd/user
 CARGO   ?= cargo
 RELEASE := target/release/$(BIN)
 
-# Stamped into -version and the User-Agent, so a running daemon can be told from a
-# working tree. The base stays a dev string - nothing produces release numbers yet -
-# and the commit is what makes it answerable.
-REV     := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
-VERSION ?= 0.1.0-dev+$(REV)
+# Archive names and the `make install` banner. `--version` / User-Agent come
+# from Cargo.toml. Tag CI passes VERSION= without the leading v.
+VERSION ?= $(or $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//'),unknown)
 
 .PHONY: all build test check package-linux package-windows install uninstall enable disable restart logs status clean
 

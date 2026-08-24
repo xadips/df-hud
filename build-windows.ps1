@@ -1,11 +1,19 @@
 [CmdletBinding()]
 param(
     [string]$OutputDirectory = "dist",
-    [string]$Version = "0.1.0-windows"
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $describe = git describe --tags --always --dirty 2>$null
+    if ($LASTEXITCODE -eq 0 -and $describe) {
+        $Version = $describe -replace '^v', ''
+    } else {
+        $Version = "unknown"
+    }
+}
 
 $Cargo = Get-Command "cargo.exe" -ErrorAction SilentlyContinue
 if (-not $Cargo) {

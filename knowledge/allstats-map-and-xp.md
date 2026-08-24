@@ -4,7 +4,7 @@ Source: `get_allstats.php?printvars=1` (unauthenticated, ~1MB, ~35,900 keys).
 Census taken 2026-08-11 against `testdata/allstats.txt`.
 
 This note records what was measured, not what was assumed. Every number below is
-pinned by a test in `catalog_test.go`, so if the feed changes, the tests say so.
+pinned by a test in `src/data/catalog.rs`, so if the feed changes, the tests say so.
 
 ## XP table: `exp_lvl<N>`
 

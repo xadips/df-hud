@@ -193,7 +193,7 @@ Notes that matter:
 
 ### Digests verified against the real algorithm
 
-`dfclient_test.go` pins hardcoded digests. They were re-derived from the game's
+`src/net/dfclient.rs` pins hardcoded digests. They were re-derived from the game's
 actual `md5.js` by an independent implementation, and all three agree:
 
 | params | digest |
