@@ -43,11 +43,39 @@ impl BossMap {
     }
 
     pub fn at_ended(&self, x: i32, y: i32, now: DateTime<Utc>) -> Vec<CityEvent> {
-        self.events_at(x, y, |e| e.ended_recently_at(now, PAST_WINDOW))
+        edge_group(
+            self.events_at(x, y, |e| e.ended_recently_at(now, PAST_WINDOW)),
+            |e| e.end,
+            |candidate, edge| candidate > edge,
+        )
     }
 
     pub fn at_upcoming(&self, x: i32, y: i32, now: DateTime<Utc>) -> Vec<CityEvent> {
-        self.events_at(x, y, |e| e.upcoming_at(now))
+        edge_group(
+            self.events_at(x, y, |e| e.upcoming_at(now)),
+            |e| e.start,
+            |candidate, edge| candidate < edge,
+        )
+    }
+
+    /// Soonest start or end on this block after `now`. Local clock only.
+    pub fn block_boundary(&self, x: i32, y: i32, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let idxs = self.by_block.get(&(x, y))?;
+        let mut best = None;
+        let mut consider = |t: DateTime<Utc>| {
+            if t.timestamp() == 0 || t <= now {
+                return;
+            }
+            if best.is_none_or(|b| t < b) {
+                best = Some(t);
+            }
+        };
+        for &i in idxs {
+            let e = &self.events[i];
+            consider(e.start);
+            consider(e.end);
+        }
+        best
     }
 
     fn events_at(&self, x: i32, y: i32, pred: impl Fn(&CityEvent) -> bool) -> Vec<CityEvent> {
@@ -124,6 +152,24 @@ impl BossMap {
         }
         marks
     }
+}
+
+fn edge_group(
+    events: Vec<CityEvent>,
+    field: impl Fn(&CityEvent) -> DateTime<Utc>,
+    more_extreme: impl Fn(DateTime<Utc>, DateTime<Utc>) -> bool,
+) -> Vec<CityEvent> {
+    let Some(first) = events.first() else {
+        return Vec::new();
+    };
+    let mut edge = field(first);
+    for e in &events {
+        let t = field(e);
+        if more_extreme(t, edge) {
+            edge = t;
+        }
+    }
+    events.into_iter().filter(|e| field(e) == edge).collect()
 }
 
 pub fn nearest_mark(marks: &[CityMark]) -> Option<CityMark> {
@@ -656,5 +702,125 @@ mod tests {
             assert!(!mk.reachable, "no distance table");
             assert!(!mk.marker.is_empty() && mk.marker != "?");
         }
+    }
+
+    fn unix(secs: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(secs, 0).unwrap()
+    }
+
+    fn parse_at(raw: &str, now: DateTime<Utc>) -> BossMap {
+        parse(raw.as_bytes(), now).unwrap()
+    }
+
+    #[test]
+    fn at_ended_narrows_to_the_most_recent_cycle() {
+        let raw = r#"{
+	  "0":{"event_id":"older","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"1",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Bear","special_enemy_amount":"1","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"100"},
+	  "1":{"event_id":"newer","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"1",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"2",
+	       "event_type":"","dfp_objectives":[],"start_time":"101","end_time":"200"},
+	  "bosshash":"abc","servertime":250,"version":"1"}"#;
+        let m = parse_at(raw, unix(250));
+        let got = m.at_ended(1000, 1000, unix(250));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].enemies[0], "1 x Titan");
+    }
+
+    #[test]
+    fn at_ended_keeps_the_whole_group_when_tied() {
+        let raw = r#"{
+	  "0":{"event_id":"a","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"1",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Bear","special_enemy_amount":"1","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"200"},
+	  "1":{"event_id":"b","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"1",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"2",
+	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"200"},
+	  "bosshash":"abc","servertime":250,"version":"1"}"#;
+        let m = parse_at(raw, unix(250));
+        assert_eq!(m.at_ended(1000, 1000, unix(250)).len(), 2);
+    }
+
+    #[test]
+    fn at_upcoming_returns_the_soonest_cycle() {
+        let raw = r#"{
+	  "0":{"event_id":"later","isoa":"0","locations":[["1000","1000"]],"started":"0","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Bear","special_enemy_amount":"1","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"500","end_time":"800"},
+	  "1":{"event_id":"sooner","isoa":"0","locations":[["1000","1000"]],"started":"0","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"2",
+	       "event_type":"","dfp_objectives":[],"start_time":"400","end_time":"700"},
+	  "bosshash":"abc","servertime":100,"version":"1"}"#;
+        let now = unix(100);
+        let m = parse_at(raw, now);
+        let got = m.at_upcoming(1000, 1000, now);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].enemies[0], "1 x Titan");
+        assert!(!got[0].active_at(now));
+        assert!(!got[0].ended_recently_at(now, PAST_WINDOW));
+    }
+
+    #[test]
+    fn block_boundary_is_the_nearest_start_or_end() {
+        let raw = r#"{
+	  "0":{"event_id":"active","isoa":"0","locations":[["1000","1000"]],"started":"1","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"200"},
+	  "bosshash":"abc","servertime":100,"version":"1"}"#;
+        let m = parse_at(raw, unix(100));
+        assert_eq!(m.block_boundary(1000, 1000, unix(100)), Some(unix(200)));
+        assert_eq!(m.block_boundary(2000, 2000, unix(100)), None);
+    }
+
+    #[test]
+    fn onslaught_cycles_shift_when_the_countdown_rolls_over() {
+        let raw = r#"{
+	  "0":{"event_id":"a","isoa":"0","locations":[["3000","3000"]],"started":"1","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"3 x Mega Mother","special_enemy_amount":"3","boss_num":"1",
+	       "event_type":"","dfp_objectives":[],"start_time":"1000","end_time":"1300"},
+	  "1":{"event_id":"b","isoa":"0","locations":[["3000","3000"]],"started":"0","ended":"0",
+	       "reward_cash":"0","reward_exp":"0","need_briefing":"0","title":"","briefing":"",
+	       "special_enemy_type":"3 x Eldritch Horror","special_enemy_amount":"3","boss_num":"17",
+	       "event_type":"","dfp_objectives":[],"start_time":"1300","end_time":"1600"},
+	  "bosshash":"abc","servertime":1147,"version":"1"}"#;
+        let m = parse_at(raw, unix(1200));
+        let names = |events: Vec<CityEvent>| {
+            events
+                .into_iter()
+                .flat_map(|e| e.enemies)
+                .collect::<Vec<_>>()
+                .join("+")
+        };
+        let cycles = |now: DateTime<Utc>| {
+            (
+                names(m.at_ended(ONSLAUGHT_COORD, ONSLAUGHT_COORD, now)),
+                names(m.at(ONSLAUGHT_COORD, ONSLAUGHT_COORD, now)),
+                names(m.at_upcoming(ONSLAUGHT_COORD, ONSLAUGHT_COORD, now)),
+                m.block_boundary(ONSLAUGHT_COORD, ONSLAUGHT_COORD, now)
+                    .map(|b| (b - now).num_seconds()),
+            )
+        };
+
+        let (prev, cur, next, left) = cycles(unix(1299));
+        assert_eq!(
+            (prev.as_str(), cur.as_str(), next.as_str()),
+            ("", "3 x Mega Mother", "3 x Eldritch Horror")
+        );
+        assert_eq!(left, Some(1));
+
+        let (prev, cur, next, left) = cycles(unix(1300));
+        assert_eq!(prev, "3 x Mega Mother");
+        assert_eq!(cur, "3 x Eldritch Horror");
+        assert_eq!(next, "");
+        assert_eq!(left, Some(300));
     }
 }

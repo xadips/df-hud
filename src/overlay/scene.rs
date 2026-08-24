@@ -39,6 +39,8 @@ pub struct Line {
     pub strike: bool,
     /// Map-key countdown. Dimmed so the boss / mission / bandit name stays the bright run.
     pub timer: String,
+    /// Onslaught prev/now/next caption. Empty on continuation and non-panel rows.
+    pub label: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -287,12 +289,57 @@ fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line
         hud_a,
     } = layout;
     let (x, mut y) = xf.point(ax as f32, ay as f32);
+    let label_col = rows.iter().any(|r| !r.label.is_empty());
+    let label_w = if label_col {
+        mono_advance("MMMMM", font_px)
+    } else {
+        0.0
+    };
+    let label_gap = if label_col { xf.size(6.0) } else { 0.0 };
+    let content_x = x + label_w + label_gap;
+    let mut label_color = [
+        0x8a as f32 / 255.0,
+        0x8a as f32 / 255.0,
+        0x8a as f32 / 255.0,
+        1.0,
+    ];
+    label_color[3] *= hud_a;
+
+    let timer_gap = xf.size(6.0);
+    let group_w = rows
+        .iter()
+        .map(|row| {
+            let left = if label_col { label_w + label_gap } else { 0.0 };
+            let content = mono_advance(&row.text, font_px);
+            let timer = if row.timer.is_empty() {
+                0.0
+            } else {
+                timer_gap + mono_advance(&row.timer, font_px)
+            };
+            left + content + timer
+        })
+        .fold(0.0_f32, f32::max);
+
     for row in rows {
         y += xf.size(row.extra_ascent_px);
         let mut color = row.color.unwrap_or(default_color);
         color[3] *= hud_a;
+        if label_col && !row.label.is_empty() {
+            scene.texts.push(Text {
+                x,
+                y,
+                color: label_color,
+                text: row.label.clone(),
+                font_px,
+                outline: true,
+                outline_color: None,
+                lcd: true,
+                center_h: None,
+            });
+        }
+        let text_x = if label_col { content_x } else { x };
         scene.texts.push(Text {
-            x,
+            x: text_x,
             y,
             color,
             text: row.text.clone(),
@@ -302,12 +349,26 @@ fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line
             lcd: true,
             center_h: None,
         });
+        if !row.timer.is_empty() {
+            let tw = mono_advance(&row.timer, font_px);
+            scene.texts.push(Text {
+                x: x + group_w - tw,
+                y,
+                color,
+                text: row.timer.clone(),
+                font_px,
+                outline: true,
+                outline_color: None,
+                lcd: true,
+                center_h: None,
+            });
+        }
         if row.strike {
             let tw = mono_advance(&row.text, font_px);
             scene.strokes.push(Stroke {
-                x0: x,
+                x0: text_x,
                 y0: y + font_px * 0.55,
-                x1: x + tw,
+                x1: text_x + tw,
                 y1: y + font_px * 0.55,
                 width: (font_px * 0.08).max(1.0),
                 color,
@@ -973,5 +1034,98 @@ mod tests {
                 .any(|s| (s.y0 - s.y1).abs() < 0.01 && s.x1 > s.x0 + 8.0),
             "strikethrough"
         );
+    }
+
+    #[test]
+    fn onslaught_rows_carry_label_column_and_header_timer() {
+        let mut view = dummy_view();
+        view.map = MapView::default();
+        view.block.clear();
+        view.clock.clear();
+        view.xp.clear();
+        view.status.clear();
+        view.challenges.clear();
+        let prev = [
+            0xb5 as f32 / 255.0,
+            0xb5 as f32 / 255.0,
+            0xb5 as f32 / 255.0,
+            1.0,
+        ];
+        let now = [
+            0xff as f32 / 255.0,
+            0x4d as f32 / 255.0,
+            0x4d as f32 / 255.0,
+            1.0,
+        ];
+        let next = [
+            0x4f as f32 / 255.0,
+            0xc3 as f32 / 255.0,
+            0xff as f32 / 255.0,
+            1.0,
+        ];
+        view.bosses = vec![
+            Line {
+                text: "Onslaught Cycles".into(),
+                timer: "1:30".into(),
+                color: Some([1.0, 1.0, 1.0, 1.0]),
+                ..Line::default()
+            },
+            Line {
+                label: "prev".into(),
+                text: "Wraith".into(),
+                color: Some(prev),
+                ..Line::default()
+            },
+            Line {
+                label: "now".into(),
+                text: "Titan".into(),
+                color: Some(now),
+                ..Line::default()
+            },
+            Line {
+                label: "next".into(),
+                text: "Mother".into(),
+                color: Some(next),
+                ..Line::default()
+            },
+        ];
+        let mut cfg = Config::default();
+        cfg.widget.session.enabled = false;
+        cfg.widget.xp.enabled = false;
+        cfg.widget.block.enabled = false;
+        cfg.widget.map.enabled = false;
+        cfg.widget.challenges.enabled = false;
+        let scene = build(&view, &cfg, vp_1440());
+        let title = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "Onslaught Cycles")
+            .expect("title");
+        let timer = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "1:30")
+            .expect("timer");
+        assert!(timer.x > title.x, "timer {} vs title {}", timer.x, title.x);
+        let label = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "prev")
+            .expect("label");
+        let content = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "Wraith")
+            .expect("content");
+        assert!(content.x > label.x);
+        assert!((label.color[0] - 0x8a as f32 / 255.0).abs() < 0.02);
+        let now_row = scene.texts.iter().find(|t| t.text == "Titan").expect("now");
+        assert!((now_row.color[0] - now[0]).abs() < 0.02);
+        let next_row = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "Mother")
+            .expect("next");
+        assert!((next_row.color[2] - next[2]).abs() < 0.02);
     }
 }
