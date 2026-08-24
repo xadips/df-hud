@@ -141,7 +141,7 @@ impl Egl {
     pub fn initialize(&self, display: Display) -> Result<(Int, Int), Box<dyn Error>> {
         let mut major = 0;
         let mut minor = 0;
-        if unsafe { (self.p_initialize)(display, &mut major, &mut minor) } == 0 {
+        if unsafe { (self.p_initialize)(display, &raw mut major, &raw mut minor) } == 0 {
             Err("eglInitialize failed".into())
         } else {
             Ok((major, minor))
@@ -175,7 +175,13 @@ impl Egl {
         let mut config = ptr::null_mut();
         let mut count = 0;
         let ok = unsafe {
-            (self.p_choose_config)(display, attribs.as_ptr(), &mut config, 1, &mut count)
+            (self.p_choose_config)(
+                display,
+                attribs.as_ptr(),
+                &raw mut config,
+                1,
+                &raw mut count,
+            )
         };
         if ok == 0 || count < 1 || config.is_null() {
             Err("no EGL config with ES3 + 8-bit alpha".into())

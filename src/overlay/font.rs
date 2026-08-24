@@ -156,8 +156,7 @@ fn resolve_font_path(want: &str) -> Result<PathBuf, Box<dyn Error>> {
     }
     let base = Path::new(want)
         .file_name()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(want));
+        .map_or_else(|| PathBuf::from(want), PathBuf::from);
     for dir in font_dirs() {
         let path = dir.join(&base);
         if path.is_file() {

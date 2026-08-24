@@ -40,14 +40,14 @@ pub fn parse(vars: &HashMap<String, String>, level: i32, gold: bool) -> Vec<Chal
                 .unwrap_or_default()
                 .trim()
                 .to_string(),
-            start: challenge_time(f.get("start_time").map(String::as_str).unwrap_or("")),
-            end: challenge_time(f.get("end_time").map(String::as_str).unwrap_or("")),
-            min_level: atoi(f.get("min_level").map(String::as_str).unwrap_or("")),
-            max_level: atoi(f.get("max_level").map(String::as_str).unwrap_or("")),
+            start: challenge_time(f.get("start_time").map_or("", String::as_str)),
+            end: challenge_time(f.get("end_time").map_or("", String::as_str)),
+            min_level: atoi(f.get("min_level").map_or("", String::as_str)),
+            max_level: atoi(f.get("max_level").map_or("", String::as_str)),
             repeatable: f.get("repeatable").map(String::as_str) == Some("1"),
-            reward_cash: atoi64(f.get("reward_cash").map(String::as_str).unwrap_or("")),
-            reward_credits: atoi64(f.get("reward_credits").map(String::as_str).unwrap_or("")),
-            reward_points: atoi64(f.get("reward_points").map(String::as_str).unwrap_or("")),
+            reward_cash: atoi64(f.get("reward_cash").map_or("", String::as_str)),
+            reward_credits: atoi64(f.get("reward_credits").map_or("", String::as_str)),
+            reward_points: atoi64(f.get("reward_points").map_or("", String::as_str)),
             reward_items: f
                 .get("reward_items")
                 .cloned()
@@ -62,14 +62,14 @@ pub fn parse(vars: &HashMap<String, String>, level: i32, gold: bool) -> Vec<Chal
                 .to_string(),
             ..Challenge::default()
         };
-        let exp = atoi64(f.get("reward_exp").map(String::as_str).unwrap_or(""));
+        let exp = atoi64(f.get("reward_exp").map_or("", String::as_str));
         if exp > 0 && level > 0 {
             c.reward_exp = exp * i64::from(level);
             if gold {
                 c.reward_exp *= 2;
             }
         }
-        let count = atoi(f.get("objectives").map(String::as_str).unwrap_or(""));
+        let count = atoi(f.get("objectives").map_or("", String::as_str));
         for j in 1..=count {
             let suffix = j.to_string();
             let mut o = Objective {
@@ -81,8 +81,7 @@ pub fn parse(vars: &HashMap<String, String>, level: i32, gold: bool) -> Vec<Chal
                     .to_string(),
                 target: atoi64(
                     f.get(&format!("objectives_{suffix}_target"))
-                        .map(String::as_str)
-                        .unwrap_or(""),
+                        .map_or("", String::as_str),
                 ),
                 ..Objective::default()
             };

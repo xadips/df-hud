@@ -111,8 +111,7 @@ impl fmt::Display for Store {
             g.creds,
             redact(&g.salt),
             g.updated_at
-                .map(|t| t.to_rfc3339())
-                .unwrap_or_else(|| "never".into())
+                .map_or_else(|| "never".into(), |t| t.to_rfc3339())
         )
     }
 }

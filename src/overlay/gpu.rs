@@ -22,7 +22,7 @@ const GLSL_VERSION: &str = "#version 330 core";
 #[cfg(not(target_os = "windows"))]
 const GLSL_VERSION: &str = "#version 300 es";
 
-const VS: &str = r#"
+const VS: &str = r"
 layout(location = 0) in vec2 a_pos;
 layout(location = 1) in vec4 a_color;
 layout(location = 2) in vec2 a_uv;
@@ -36,9 +36,9 @@ void main() {
     v_color = a_color;
     v_uv = a_uv;
 }
-"#;
+";
 
-const FS: &str = r#"
+const FS: &str = r"
 precision mediump float;
 in vec4 v_color;
 in vec2 v_uv;
@@ -51,7 +51,7 @@ void main() {
     // Wayland compositors and DWM layered windows blend premultiplied.
     frag = vec4(v_color.rgb * lcd * v_color.a, a);
 }
-"#;
+";
 
 const STRIDE: i32 = 32;
 const OUTLINE_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -195,8 +195,7 @@ impl Gpu {
         let hud_px = scene
             .texts
             .first()
-            .map(|t| t.font_px * sy)
-            .unwrap_or(FONT_PT * PT_TO_PX * sy);
+            .map_or(FONT_PT * PT_TO_PX * sy, |t| t.font_px * sy);
         if (hud_px - self.px).abs() > 0.05 {
             self.atlas.reset();
             self.px = hud_px;

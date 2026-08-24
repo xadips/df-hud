@@ -1,4 +1,4 @@
-//! One fetch of the DFProfiler bossmap feed, indexed by block.
+//! One fetch of the `DFProfiler` bossmap feed, indexed by block.
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -8,11 +8,11 @@ use std::time::Duration;
 use crate::model::{CityEvent, CityEventKind, CityMark, Walk};
 
 pub const ONSLAUGHT_COORD: i32 = 3000;
-/// DFProfiler's Wasteland QRF triangle.
+/// `DFProfiler`'s Wasteland QRF triangle.
 pub const QRF_MARKER: &str = "Δ";
 /// Death Row, inverted so the two QRFs do not share a glance at Δ.
 pub const QRF_DEATH_ROW_MARKER: &str = "▼";
-const PAST_WINDOW: Duration = Duration::from_secs(12 * 60);
+const PAST_WINDOW: Duration = Duration::from_mins(12);
 const LEGENDARY_BANDIT_PACK: i32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -166,7 +166,7 @@ pub fn parse(data: &[u8], fetched_at: DateTime<Utc>) -> Result<BossMap, String> 
     if let Some(h) = obj.get("bosshash").and_then(|v| v.as_str()) {
         out.hash = h.to_string();
     }
-    if let Some(t) = obj.get("servertime").and_then(|v| v.as_i64()) {
+    if let Some(t) = obj.get("servertime").and_then(serde_json::Value::as_i64) {
         out.server_time = DateTime::from_timestamp(t, 0).unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
     }
     for (key, raw) in obj {
@@ -177,7 +177,7 @@ pub fn parse(data: &[u8], fetched_at: DateTime<Utc>) -> Result<BossMap, String> 
             continue;
         };
         let isoa = ev.get("isoa").and_then(|v| v.as_str()) == Some("1")
-            || ev.get("isoa").and_then(|v| v.as_i64()) == Some(1);
+            || ev.get("isoa").and_then(serde_json::Value::as_i64) == Some(1);
         let ended = ev.get("ended").and_then(|v| v.as_str()) == Some("1");
         if isoa {
             if !ended {
@@ -328,7 +328,7 @@ pub fn mark_category(kind: CityEventKind, enemies: &[String]) -> MarkCategory {
     }
 }
 
-/// DFProfiler's Death Row QRF (`qrfdr`) has no cell border; Wasteland (`qrf`) does.
+/// `DFProfiler`'s Death Row QRF (`qrfdr`) has no cell border; Wasteland (`qrf`) does.
 pub fn qrf_is_death_row(event_type: &str, title: &str) -> bool {
     let kind = event_type.trim().to_ascii_lowercase();
     if kind == "qrfdr" {

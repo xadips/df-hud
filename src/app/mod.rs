@@ -222,8 +222,7 @@ impl Handle {
             .lock()
             .unwrap()
             .source_path()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(crate::config::default_path)
+            .map_or_else(crate::config::default_path, std::path::Path::to_path_buf)
     }
 
     pub fn reload_config(&self) {
@@ -705,8 +704,7 @@ fn persist_tray(handle: &Handle, option: crate::config::TrayOption, on: bool) ->
         .lock()
         .unwrap()
         .source_path()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(crate::config::default_path);
+        .map_or_else(crate::config::default_path, std::path::Path::to_path_buf);
     if let Err(err) = crate::config::set_tray_option(&path, option, on) {
         eprintln!("config: could not persist {option:?} from tray: {err}");
         return false;
@@ -771,8 +769,7 @@ fn bossmap_loop(
         }
         let onslaught = store
             .effective_position(Utc::now())
-            .map(|(x, y)| x == bossmap::ONSLAUGHT_COORD && y == bossmap::ONSLAUGHT_COORD)
-            .unwrap_or(false);
+            .is_some_and(|(x, y)| x == bossmap::ONSLAUGHT_COORD && y == bossmap::ONSLAUGHT_COORD);
         let wait = if onslaught {
             c.bossmap.onslaught_interval.0
         } else {

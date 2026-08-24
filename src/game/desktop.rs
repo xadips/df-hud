@@ -310,7 +310,7 @@ fn lone_hypr_socket(dirs: &[PathBuf], name: &str) -> Result<Option<PathBuf>, Str
         };
         let mut hits = Vec::new();
         for e in entries.flatten() {
-            if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            if !e.file_type().is_ok_and(|t| t.is_dir()) {
                 continue;
             }
             let candidate = e.path().join(name);

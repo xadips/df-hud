@@ -35,8 +35,7 @@ fn jitter_unit() -> f64 {
     static N: AtomicU64 = AtomicU64::new(1);
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos() as u64);
     let n = N.fetch_add(1, Ordering::Relaxed);
     let mix = t
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -527,8 +526,7 @@ impl ChallengePoller {
                 let (level, gold) = self
                     .store
                     .snapshot()
-                    .map(|s| (s.level, s.gold_member))
-                    .unwrap_or((0, false));
+                    .map_or((0, false), |s| (s.level, s.gold_member));
                 let board = challenges::parse(&vars, level, gold);
                 let board = self.persist.remember_challenge_board(board);
                 self.store.set_challenges(board);

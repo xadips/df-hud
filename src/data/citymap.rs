@@ -200,9 +200,7 @@ impl Map {
     }
 
     pub fn is_block(&self, x: i32, y: i32) -> bool {
-        self.index(x, y)
-            .map(|i| self.cells[i] != b'.')
-            .unwrap_or(false)
+        self.index(x, y).is_some_and(|i| self.cells[i] != b'.')
     }
 
     #[cfg(test)]
@@ -401,8 +399,7 @@ pub fn outpost_name(x: i32, y: i32) -> &'static str {
     OUTPOSTS
         .iter()
         .find(|o| o.x == x && o.y == y)
-        .map(|o| o.name)
-        .unwrap_or("")
+        .map_or("", |o| o.name)
 }
 
 pub fn outpost_coords(name: &str) -> Option<(i32, i32)> {
