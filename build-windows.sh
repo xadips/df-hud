@@ -1,7 +1,12 @@
 #!/bin/sh
 set -eu
 
-VERSION=${1:-0.1.0-windows}
+if [ -n "${1:-}" ]; then
+	VERSION=$1
+else
+	VERSION=$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+	VERSION=${VERSION:-unknown}
+fi
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 OUT=${OUTPUT_DIRECTORY:-"$ROOT/dist"}
 BASE="df-hud-$VERSION-windows-amd64"

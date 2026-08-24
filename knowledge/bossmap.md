@@ -77,7 +77,7 @@ useless for QRFs.
 Onslaught cycles are five minutes long and overlap - last cycle's boss is
 routinely still standing there, and the next one is already in the feed before
 it starts - so the previous and next cycles get their own panel
-(`onslaughtPanel` in hudlines.go, `bossesWidget` in widget_bosses.go), coloured
+(`onslaught_panel` in `src/overlay/present.rs`), coloured
 to match the `onslaught_bosses` userscript this mirrors: grey for `prev`, red
 for `now`, blue for `next`, a dimmer grey for an empty section
 ("cleared"/"nothing this cycle"/"not announced") or the "ended Nm ago" line.
@@ -92,32 +92,26 @@ thinner and a missing corner shows.
 City cycles are hourly, where the previous boss has gone and the next one is
 still just a countdown - so `threatLines` (the plain, uncoloured display used
 everywhere else on the map) never shows Onslaught's prev/next fields at all,
-only `onslaughtPanel` does.
+only `onslaught_panel` does.
 
 **How long the thing on your block has left goes on its first row, once.** A
 nest is one event carrying up to seven enemy types with a single `end_time`
 between them, so a countdown per row would print the same number seven times
 down a group that is already seven rows tall. The map's key had settled this
-first: `mapRow.Timer` is set on an entry's first row and empty on its
+first: `Line.timer` is set on an entry's first row and empty on its
 continuations. Every one of the 30 events in the recorded capture carries an
 `end_time` - 5, 60, 120 and 700 minute windows - but nothing in their format
 promises it, so a missing or already-passed one shows no countdown rather than a
-placeholder. `withTimeLeft` uses `e.End` and NOT `onslaughtCycleEnd`: that adds
+placeholder. `event_time_left` uses `e.end` and NOT `onslaughtCycleEnd`: that adds
 a cycle per extra name, which is right for an Onslaught bundle of consecutive
 cycles and an hour wrong for a city nest whose types are all standing there at
 the same time.
 
-**Each row is two GTK labels, not one with a mixed-colour markup span.** The
-"prev"/"now"/"next" word stays one fixed grey regardless of section, while the
-content beside it takes the section's own colour - and both want the panel's
-own outline rather than the base glow, which GTK cannot apply to only part of
-one label's text. So
-`onslaughtRow` carries `Label`/`Content`/`ContentClass` separately, and
-`onslaughtRowWidget` (widget_bosses.go) lays them out side by side, the label
-always `onslaught-label`. A single label with an inline `foreground=` span was
-tried first and looked right in isolation, but its shadow could not be split
-from the content's - two widgets is the only way to make good on the "no
-shadow, one grey label" requirement, not just the colour.
+**Each Onslaught row is three draws, not one mixed-colour string.** The
+"prev"/"now"/"next" word stays one fixed grey (`Line.label`) regardless of
+section, the name takes the section colour (`Line.text`), and the countdown
+is white (`Line.timer`). `push_lines` in `src/overlay/scene.rs` places those
+side by side so the caption, name, and timer do not share a colour.
 
 **A joined `special_enemy_type` on an Onslaught event is not a real nest.**
 Confirmed live: `"3 x Irradiated Giant Spider<br />3 x Mega Giant Spider"`
@@ -160,7 +154,7 @@ when their backend last synced with the game. `cf-cache-status` is `DYNAMIC`,
 so nothing in between is caching it; the lag is theirs.
 
 Everything therefore compares against the **local clock**, and there is no
-skew adjustment anywhere in `bossmap.go`. Two things justify that. The feed's
+skew adjustment anywhere in `src/data/bossmap.rs`. Two things justify that. The feed's
 timestamps are absolute unix seconds sitting on the game's own schedule -
 every Onslaught boundary is `unix % 300 == 2`, e.g. `19:25:02 → 19:30:02 →
 19:35:02` - so they are computed from the cycle, not observed on a wonky

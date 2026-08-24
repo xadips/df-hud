@@ -4,7 +4,7 @@
 //! - the listener binds loopback only
 //! - request bodies are never logged
 //! - the on-disk file is 0600 (re-verified after write)
-//! - Display / Debug / JSON all redact
+//! - Display and JSON redact (derived Debug does not; do not {:?} a secret)
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

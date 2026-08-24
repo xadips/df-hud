@@ -2,7 +2,12 @@
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-version=${1:-0.1.0-linux}
+if [ -n "${1:-}" ]; then
+  version=$1
+else
+  version=$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+  version=${version:-unknown}
+fi
 output_directory=${2:-"$repo_root/dist"}
 base="df-hud-$version-linux-amd64"
 stage="$output_directory/$base"

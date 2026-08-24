@@ -52,7 +52,7 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"
           else
-            version="0.1.0-dev+${GITHUB_SHA::12}"
+            version="$(git describe --tags --always --dirty | sed 's/^v//')"
           fi
           printf 'VERSION=%s\n' "$version" >> "$GITHUB_ENV"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
@@ -113,7 +113,7 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"
           else
-            version="0.1.0-dev+${GITHUB_SHA::12}"
+            version="$(git describe --tags --always --dirty | sed 's/^v//')"
           fi
           printf 'VERSION=%s\n' "$version" >> "$GITHUB_ENV"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
