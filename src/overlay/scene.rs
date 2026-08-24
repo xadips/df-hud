@@ -37,7 +37,8 @@ pub struct Line {
     pub chip: Option<[f32; 4]>,
     pub chip_ring: bool,
     pub strike: bool,
-    /// Map-key countdown. Dimmed so the boss / mission / bandit name stays the bright run.
+    /// Countdown for this row. Empty on nest continuations. Bosses draw it white
+    /// so it does not share the amber name colour; the map key dims it instead.
     pub timer: String,
     /// Onslaught prev/now/next caption. Empty on continuation and non-panel rows.
     pub label: String,
@@ -315,7 +316,7 @@ fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line
     ];
     label_color[3] *= hud_a;
 
-    let timer_gap = xf.size(6.0);
+    let timer_gap = 2.0 * mono_advance(" ", font_px);
     let group_w = rows
         .iter()
         .map(|row| {
@@ -386,7 +387,7 @@ fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line
             scene.texts.push(Text {
                 x: x + group_w - tw,
                 y,
-                color,
+                color: [1.0, 1.0, 1.0, hud_a],
                 text: row.timer.clone(),
                 font_px,
                 outline: true,
@@ -613,7 +614,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
             .map(|r| mono_advance(&r.timer, list_px))
             .fold(0.0_f32, f32::max);
         let timer_x = lx + chip_w + xf.size(4.0);
-        let name_x = timer_x + timer_col + xf.size(8.0);
+        let name_x = timer_x + timer_col + 2.0 * mono_advance(" ", list_px);
         for row in &view.map.list {
             if let Some(chip) = row.chip {
                 let glyph = row.text.split("  ").next().unwrap_or("");
@@ -1241,5 +1242,69 @@ mod tests {
             .find(|t| t.text == "Mother")
             .expect("next");
         assert!((next_row.color[2] - next[2]).abs() < 0.02);
+        assert!(
+            (timer.color[0] - 1.0).abs() < 0.02
+                && (timer.color[1] - 1.0).abs() < 0.02
+                && (timer.color[2] - 1.0).abs() < 0.02,
+            "onslaught header timer {:?}",
+            timer.color
+        );
+    }
+
+    #[test]
+    fn block_boss_timer_is_white_against_amber_names() {
+        let mut view = dummy_view();
+        view.map = MapView::default();
+        view.block.clear();
+        view.clock.clear();
+        view.xp.clear();
+        view.status.clear();
+        view.challenges.clear();
+        view.bosses = vec![
+            Line {
+                text: "3 x Evolved Longarms".into(),
+                timer: "55m".into(),
+                ..Line::default()
+            },
+            Line {
+                text: "1 x Irradiated Wraith".into(),
+                ..Line::default()
+            },
+        ];
+        let mut cfg = Config::default();
+        cfg.widget.session.enabled = false;
+        cfg.widget.xp.enabled = false;
+        cfg.widget.block.enabled = false;
+        cfg.widget.map.enabled = false;
+        cfg.widget.challenges.enabled = false;
+        let scene = build(&view, &cfg, vp_1440());
+        let name = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "3 x Evolved Longarms")
+            .expect("name");
+        let timer = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "55m")
+            .expect("timer");
+        let rest = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "1 x Irradiated Wraith")
+            .expect("rest");
+        assert!(
+            name.color[0] > 0.8 && name.color[1] > 0.7 && name.color[2] < 0.4,
+            "name stays HUD amber {:?}",
+            name.color
+        );
+        assert_eq!(name.color, rest.color);
+        assert!(
+            (timer.color[0] - 1.0).abs() < 0.02
+                && (timer.color[1] - 1.0).abs() < 0.02
+                && (timer.color[2] - 1.0).abs() < 0.02,
+            "timer {:?}",
+            timer.color
+        );
     }
 }

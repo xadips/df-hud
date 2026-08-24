@@ -267,9 +267,18 @@ fn boss_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
         return rows;
     }
     for e in v.block_events.iter().flatten() {
-        for text in with_time_left(event_rows(e, ""), e, v.now) {
+        // One countdown per event, on the first row. A nest shares one end time
+        // across every type; repeating it would print the same number down the
+        // group. A missing or already-passed end shows nothing, not a placeholder.
+        let timer = event_time_left(e, v.now);
+        for (i, text) in event_rows(e, "").into_iter().enumerate() {
             rows.push(Line {
                 text,
+                timer: if i == 0 {
+                    timer.clone()
+                } else {
+                    String::new()
+                },
                 ..Line::default()
             });
         }
@@ -402,19 +411,11 @@ fn event_rows(e: &CityEvent, prefix: &str) -> Vec<String> {
     rows
 }
 
-fn with_time_left(mut rows: Vec<String>, e: &CityEvent, now: DateTime<Utc>) -> Vec<String> {
-    if rows.is_empty() || e.end.timestamp() == 0 || now.timestamp() == 0 {
-        return rows;
+fn event_time_left(e: &CityEvent, now: DateTime<Utc>) -> String {
+    if e.end.timestamp() == 0 || now.timestamp() == 0 || e.end <= now {
+        return String::new();
     }
-    if e.end <= now {
-        return rows;
-    }
-    let left = format::countdown((e.end - now).to_std().unwrap_or_default());
-    if left.is_empty() {
-        return rows;
-    }
-    rows[0] = format!("{}  {left}", rows[0]);
-    rows
+    format::countdown((e.end - now).to_std().unwrap_or_default())
 }
 
 fn nearest_line(v: &ModelView) -> Option<String> {
@@ -1050,15 +1051,31 @@ fn map_list(marks: &[&CityMark], max_listed: i32, in_onslaught: bool) -> Vec<Lin
             });
             break;
         }
-        let qrf_name;
-        let names: Vec<&str> = if m.kind == CityEventKind::Qrf {
-            qrf_name = if m.label.is_empty() {
+        let heading = if m.kind == CityEventKind::Qrf {
+            if m.label.is_empty() {
                 bossmap::qrf_display_name(&m.event_type, "")
             } else {
                 m.label.clone()
-            };
-            let mut names = vec![qrf_name.as_str()];
-            names.extend(m.enemies.iter().map(String::as_str));
+            }
+        } else if m.kind == CityEventKind::Mission {
+            m.label.clone()
+        } else {
+            String::new()
+        };
+        let names: Vec<&str> = if m.kind == CityEventKind::Qrf || m.kind == CityEventKind::Mission {
+            let mut names = Vec::new();
+            if !heading.is_empty() {
+                names.push(heading.as_str());
+            }
+            names.extend(
+                m.enemies
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|s| m.kind != CityEventKind::Mission || bossmap::named_enemy(s)),
+            );
+            if names.is_empty() {
+                names.push("mission");
+            }
             names
         } else if m.enemies.is_empty() {
             vec![m.label.as_str()]
@@ -1251,6 +1268,38 @@ mod tests {
         assert!(s.map.cells.is_empty());
         assert!(s.map.markers.is_empty());
         assert!(s.map.list.is_empty());
+    }
+
+    #[test]
+    fn block_boss_countdown_sits_on_the_first_row_only() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        let mut nest = spawn(&["3 x Evolved Longarms", "1 x Irradiated Wraith"]);
+        nest.end = now + ChronoDuration::minutes(55);
+        let v = ModelView {
+            have_data: true,
+            now,
+            block_events: Some(vec![nest]),
+            ..ModelView::default()
+        };
+        let rows = boss_lines(&v, &Config::default());
+        assert_eq!(rows[0].text, "3 x Evolved Longarms");
+        assert_eq!(rows[0].timer, "55m");
+        assert_eq!(rows[1].text, "1 x Irradiated Wraith");
+        assert!(rows[1].timer.is_empty());
+        assert!(rows[0].color.is_none(), "name keeps the widget amber");
+
+        let mut over = spawn(&["1 x Titan"]);
+        over.end = now;
+        let none = boss_lines(
+            &ModelView {
+                have_data: true,
+                now,
+                block_events: Some(vec![over, spawn(&["6 x Bandits"])]),
+                ..ModelView::default()
+            },
+            &Config::default(),
+        );
+        assert!(none.iter().all(|r| r.timer.is_empty()));
     }
 
     #[test]
@@ -1772,6 +1821,46 @@ mod tests {
         let rows = map_list(&[&mission], 20, false);
         assert_eq!(rows.len(), 1);
         assert!(rows[0].text.contains("The Clue"));
+
+        let typed = CityMark {
+            marker: "M5".into(),
+            label: "Disarmed".into(),
+            kind: CityEventKind::Mission,
+            enemies: vec!["200 x 64".into()],
+            walk: Walk {
+                blocks: 2,
+                ..Walk::default()
+            },
+            reachable: true,
+            ..CityMark::default()
+        };
+        let rows = map_list(&[&typed], 20, false);
+        assert!(
+            rows[0].text.contains("Disarmed"),
+            "title first, got {:?}",
+            rows[0].text
+        );
+        assert!(
+            rows.iter().all(|r| !r.text.contains("200 x 64")),
+            "type id leaked: {:?}",
+            rows
+        );
+
+        let inferno = CityMark {
+            marker: "M2".into(),
+            label: "Red Inferno".into(),
+            kind: CityEventKind::Mission,
+            enemies: vec!["3 x Flaming Titan".into()],
+            walk: Walk {
+                blocks: 3,
+                ..Walk::default()
+            },
+            reachable: true,
+            ..CityMark::default()
+        };
+        let rows = map_list(&[&inferno], 20, false);
+        assert!(rows[0].text.contains("Red Inferno"));
+        assert!(rows.iter().any(|r| r.text.contains("Flaming Titan")));
 
         let dropped = [
             mark("1", 1, true, Duration::ZERO, &["a"]),

@@ -43,6 +43,7 @@ pub struct Handle {
     pub wake: Arc<Wake>,
     pub ui: Arc<Notify>,
     shutdown: Arc<Notify>,
+    bossmap_wake: Arc<Notify>,
     pub creds: Arc<Creds>,
     pub game: Arc<game::Watcher>,
     pub vis: Arc<visibility::Watcher>,
@@ -62,6 +63,13 @@ impl Handle {
         self.wake_ui();
         self.player.wake();
         self.challenges.wake();
+    }
+
+    /// Player record, challenge board, and city map. Not the allstats catalog
+    /// (that is a 24h table and already on disk after startup).
+    fn refresh_feeds(&self) {
+        self.ping();
+        self.bossmap_wake.ping();
     }
 
     fn wake_ui(&self) {
@@ -103,6 +111,7 @@ impl Handle {
         self.vis.poke();
         self.player.wake();
         self.challenges.wake();
+        self.bossmap_wake.ping();
         self.wake_ui();
     }
 
@@ -187,7 +196,11 @@ impl Handle {
         }
         self.game.poke();
         self.vis.poke();
-        self.ping();
+        if cfg.bossmap.enabled {
+            self.refresh_feeds();
+        } else {
+            self.ping();
+        }
         cfg
     }
 
@@ -376,6 +389,7 @@ pub fn start_with(
     let wake = Arc::new(Wake::new()?);
     let ui = Arc::new(Notify::new());
     let shutdown = Arc::new(Notify::new());
+    let bossmap_wake = Arc::new(Notify::new());
     let presence = if cfg.lock().unwrap().presence.enabled {
         Some(presence::Control::new())
     } else {
@@ -421,6 +435,7 @@ pub fn start_with(
         wake: wake.clone(),
         ui: ui.clone(),
         shutdown: shutdown.clone(),
+        bossmap_wake: bossmap_wake.clone(),
         creds: creds.clone(),
         game: game.clone(),
         vis: vis.clone(),
@@ -457,7 +472,11 @@ pub fn start_with(
             handle.store.set_game(st);
             handle.game_running.store(st.running, Ordering::SeqCst);
             handle.vis.poke();
-            handle.ping();
+            if st.running {
+                handle.refresh_feeds();
+            } else {
+                handle.ping();
+            }
         });
     }
     {
@@ -530,9 +549,10 @@ pub fn start_with(
         let cfg = cfg.clone();
         let stop = stop.clone();
         let shutdown = shutdown.clone();
+        let poke = bossmap_wake.clone();
         let wake = wake.clone();
         let gate = gate.clone();
-        move || bossmap_loop(store, cfg, stop, shutdown, wake, gate)
+        move || bossmap_loop(store, cfg, stop, shutdown, poke, wake, gate)
     });
 
     {
@@ -766,6 +786,7 @@ fn bossmap_loop(
     cfg: Arc<Mutex<Config>>,
     stop: Arc<AtomicBool>,
     shutdown: Arc<Notify>,
+    poke: Arc<Notify>,
     wake: Arc<Wake>,
     gate: Arc<Gate>,
 ) {
@@ -777,9 +798,7 @@ fn bossmap_loop(
         if !c.bossmap.enabled {
             store.clear_boss_map();
             wake.ping();
-            if sleep_cancellable(Duration::from_secs(2), &stop, &shutdown).is_err() {
-                return;
-            }
+            poke.wait_timeout(Duration::from_secs(2));
             continue;
         }
         if gate.wait(&stop, &shutdown).is_err() {
@@ -800,9 +819,7 @@ fn bossmap_loop(
         } else {
             c.bossmap.interval.0
         };
-        if sleep_cancellable(wait.max(Duration::from_secs(5)), &stop, &shutdown).is_err() {
-            return;
-        }
+        poke.wait_timeout(wait.max(Duration::from_secs(5)));
     }
 }
 
