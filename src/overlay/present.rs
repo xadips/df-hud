@@ -274,11 +274,7 @@ fn boss_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
         for (i, text) in event_rows(e, "").into_iter().enumerate() {
             rows.push(Line {
                 text,
-                timer: if i == 0 {
-                    timer.clone()
-                } else {
-                    String::new()
-                },
+                timer: if i == 0 { timer.clone() } else { String::new() },
                 ..Line::default()
             });
         }
