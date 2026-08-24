@@ -48,7 +48,7 @@ pub fn tooltip_with_version(view: Option<&View>, vis: Visibility, version: &str)
             format::clock(v.client_uptime.std())
         ),
     };
-    let mut lines = vec![format!("df-hud: {primary}")];
+    let mut lines = vec![primary.clone()];
     if let Some(v) = view {
         if v.have_data && v.xp_available {
             let rate = format::rate(v.xp_per_hour);
@@ -56,8 +56,8 @@ pub fn tooltip_with_version(view: Option<&View>, vis: Visibility, version: &str)
                 lines.push(format!("xp {rate}/hr"));
             }
         }
-        if !v.status.is_empty() {
-            lines.push(v.status.clone());
+        if let Some(status) = tooltip_status_line(&primary, &v.status) {
+            lines.push(status);
         }
         if v.game_running && !vis.visible && !vis.reason.is_empty() {
             lines.push(format!("overlay hidden: {}", vis.reason));
@@ -74,8 +74,13 @@ pub fn tooltip_with_presence(
     vis: Visibility,
     bind_failed: bool,
     ipc_missing: bool,
+    config_err: Option<&str>,
 ) -> String {
     let mut tip = tooltip_with_version(view, vis, env!("CARGO_PKG_VERSION"));
+    if let Some(line) = config_tray_line(config_err) {
+        tip.push('\n');
+        tip.push_str(&line);
+    }
     if bind_failed {
         tip.push_str("\nDiscord IPC unavailable - close Discord and retry the bind");
     } else if ipc_missing {
@@ -84,6 +89,93 @@ pub fn tooltip_with_presence(
         );
     }
     tip
+}
+
+/// One unclickable tray-menu line, or none when nothing is wrong.
+pub fn menu_alert(
+    view: Option<&View>,
+    config_err: Option<&str>,
+    bind_failed: bool,
+    ipc_missing: bool,
+) -> Option<String> {
+    if let Some(line) = config_tray_line(config_err) {
+        return Some(line);
+    }
+    if bind_failed {
+        return Some("Discord IPC unavailable".into());
+    }
+    if ipc_missing {
+        return Some("Discord IPC is not connected".into());
+    }
+    let status = view.map(|v| v.status.as_str()).unwrap_or("").trim();
+    if status.is_empty()
+        || status.contains("only_when_game_running")
+        || status == "waiting for the first poll"
+    {
+        return None;
+    }
+    Some(clip_menu_alert(status))
+}
+
+/// Short tray text. The journal already has the path and the full reason.
+fn config_tray_line(err: Option<&str>) -> Option<String> {
+    let err = err.map(str::trim).filter(|s| !s.is_empty())?;
+    let rest = match err.split_once(": ") {
+        Some((prefix, rest)) if prefix.contains('/') || prefix.contains('\\') => rest,
+        _ => err,
+    };
+    let brief = rest.split(" (").next().unwrap_or(rest).trim();
+    if !brief.is_empty() && brief.chars().count() <= 36 && !brief.contains('/') {
+        Some(format!("config: {brief}"))
+    } else {
+        Some("config error (see the log)".into())
+    }
+}
+
+fn clip_menu_alert(s: &str) -> String {
+    let line = s.lines().next().unwrap_or(s).trim();
+    let mut out = String::new();
+    for ch in line.chars() {
+        if out.chars().count() >= 72 {
+            out.push_str("...");
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn menu_alert_from(handle: &Handle) -> Option<String> {
+    let view = handle.store.derive(chrono::Utc::now());
+    let bind_failed = handle.presence_bind_failed();
+    let missing = ipc_unconnected(
+        Some(&view),
+        handle.has_presence(),
+        bind_failed,
+        handle.presence_client_connected(),
+        handle.vis.placement().launcher_only,
+    );
+    menu_alert(
+        Some(&view),
+        handle.config_error().as_deref(),
+        bind_failed,
+        missing,
+    )
+}
+
+/// Status that is not already the first line, and not a poller pause that
+/// restates "the game is not running" with a config key in parentheses.
+fn tooltip_status_line(primary: &str, status: &str) -> Option<String> {
+    let status = status.trim();
+    if status.is_empty() || status.contains("only_when_game_running") {
+        return None;
+    }
+    let p = primary.to_ascii_lowercase();
+    let s = status.to_ascii_lowercase();
+    if s == p || s.starts_with(&p) {
+        return None;
+    }
+    Some(status.to_string())
 }
 
 /// Game is in-world, we own the socket, but the client never connected
@@ -285,8 +377,25 @@ mod linux {
             let _ = self.handle.toggle_overlay();
         }
 
+        fn menu_about_to_show(&mut self) {
+            // Override so ksni rebuilds the menu on right-click. The default
+            // impl leaves the layout frozen from the last svc.update().
+        }
+
         fn menu(&self) -> Vec<MenuItem<Self>> {
-            let mut items = vec![
+            let mut items = Vec::new();
+            if let Some(alert) = menu_alert_from(&self.handle) {
+                items.push(
+                    StandardItem {
+                        label: alert,
+                        enabled: false,
+                        ..StandardItem::default()
+                    }
+                    .into(),
+                );
+                items.push(MenuItem::Separator);
+            }
+            items.extend([
                 CheckmarkItem {
                     label: "Show overlay".into(),
                     checked: self.handle.overlay_on.load(Ordering::SeqCst),
@@ -338,7 +447,7 @@ mod linux {
                     ..StandardItem::default()
                 }
                 .into(),
-            ];
+            ]);
             if self.handle.has_presence() {
                 items.push(
                     StandardItem {
@@ -440,9 +549,16 @@ mod linux {
             handle.presence_client_connected(),
             handle.vis.placement().launcher_only,
         );
+        let config_err = handle.config_error();
         (
             icon_kind(Some(&view), bind_failed, missing),
-            tooltip_with_presence(Some(&view), vis, bind_failed, missing),
+            tooltip_with_presence(
+                Some(&view),
+                vis,
+                bind_failed,
+                missing,
+                config_err.as_deref(),
+            ),
             handle.overlay_on.load(Ordering::SeqCst),
             handle.groups.shown("challenges"),
             handle.gamekeys.fps_display(),
@@ -632,7 +748,13 @@ mod windows {
             ctx.handle.vis.placement().launcher_only,
         );
         let kind = icon_kind(Some(&view), bind_failed, missing);
-        let tip = tooltip_with_presence(Some(&view), vis, bind_failed, missing);
+        let tip = tooltip_with_presence(
+            Some(&view),
+            vis,
+            bind_failed,
+            missing,
+            ctx.handle.config_error().as_deref(),
+        );
         if kind == ctx.kind && tip == ctx.tip {
             return;
         }
@@ -679,6 +801,16 @@ mod windows {
             return;
         };
         let menu = CreatePopupMenu();
+        if let Some(alert) = menu_alert_from(&ctx.handle) {
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING | MF_GRAYED | MF_DISABLED,
+                0,
+                wide(&alert).as_ptr(),
+            );
+            InsertMenuW(menu, u32::MAX, MF_SEPARATOR, 0, ptr::null());
+        }
         let overlay_on = ctx.handle.overlay_on.load(Ordering::SeqCst);
         InsertMenuW(
             menu,
@@ -869,7 +1001,7 @@ mod tests {
         );
         let lines: Vec<_> = got.split('\n').collect();
         assert_eq!(lines.len(), 2, "{lines:?}");
-        assert!(lines[0].starts_with("df-hud: in the city"), "{}", lines[0]);
+        assert!(lines[0].starts_with("in the city"), "{}", lines[0]);
         assert!(
             tooltip_with_version(Some(&playing), vis.clone(), "1.2.3").contains("version 1.2.3")
         );
@@ -877,7 +1009,7 @@ mod tests {
             version_label(),
             format!("df-hud {}", env!("CARGO_PKG_VERSION"))
         );
-        let live = tooltip_with_presence(Some(&playing), vis.clone(), false, false);
+        let live = tooltip_with_presence(Some(&playing), vis.clone(), false, false, None);
         assert!(
             live.contains(&format!("version {}", env!("CARGO_PKG_VERSION"))),
             "{live}"
@@ -924,6 +1056,76 @@ mod tests {
             },
         );
         assert_eq!(closed.matches("not running").count(), 1, "{closed}");
+        let paused = View {
+            status: "the game is not running (poll.only_when_game_running)".into(),
+            ..View::default()
+        };
+        let paused_tip = tooltip(Some(&paused), vis_closed());
+        assert_eq!(paused_tip.matches("not running").count(), 1, "{paused_tip}");
+        assert!(
+            !paused_tip.contains("only_when_game_running"),
+            "{paused_tip}"
+        );
+    }
+
+    fn vis_closed() -> Visibility {
+        Visibility {
+            visible: false,
+            reason: "the game is not running".into(),
+            ..Visibility::default()
+        }
+    }
+
+    #[test]
+    fn menu_alert_picks_the_urgent_line() {
+        let idle = View::default();
+        assert_eq!(menu_alert(Some(&idle), None, false, false), None);
+        assert_eq!(
+            menu_alert(
+                Some(&View {
+                    status: "the game is not running (poll.only_when_game_running)".into(),
+                    ..View::default()
+                }),
+                None,
+                false,
+                false,
+            ),
+            None
+        );
+        assert_eq!(
+            menu_alert(Some(&idle), Some("unknown key wibble"), false, false).as_deref(),
+            Some("config: unknown key wibble")
+        );
+        assert_eq!(
+            menu_alert(
+                Some(&idle),
+                Some("/home/me/.config/df-hud/config.toml: unknown key widget.bamamap (a typo here would otherwise be silently ignored; see df-hud.example.toml)"),
+                false,
+                false,
+            )
+            .as_deref(),
+            Some("config: unknown key widget.bamamap")
+        );
+        assert_eq!(
+            menu_alert(Some(&idle), None, true, true).as_deref(),
+            Some("Discord IPC unavailable")
+        );
+        assert_eq!(
+            menu_alert(Some(&idle), None, false, true).as_deref(),
+            Some("Discord IPC is not connected")
+        );
+        let expired = View {
+            status: "session expired - open any Dead Frontier page to refresh".into(),
+            ..View::default()
+        };
+        assert!(menu_alert(Some(&expired), None, false, false)
+            .unwrap()
+            .contains("session expired"));
+        let long = "x".repeat(80);
+        assert_eq!(
+            menu_alert(Some(&idle), Some(&long), false, false).as_deref(),
+            Some("config error (see the log)")
+        );
     }
 
     #[test]
@@ -1000,8 +1202,18 @@ mod tests {
         assert!(ipc_unconnected(Some(&playing), true, false, false, false));
         assert!(!ipc_unconnected(Some(&playing), true, false, true, false));
         assert!(!ipc_unconnected(Some(&playing), true, false, false, true));
-        let tip = tooltip_with_presence(Some(&playing), vis, false, true);
+        let tip = tooltip_with_presence(Some(&playing), vis.clone(), false, true, None);
         assert!(tip.contains("Discord IPC is not connected"), "{tip}");
+        let bad = tooltip_with_presence(
+            Some(&playing),
+            vis,
+            false,
+            false,
+            Some("/home/me/.config/df-hud/config.toml: unknown key widgext (a typo here would otherwise be silently ignored; see df-hud.example.toml)"),
+        );
+        assert!(bad.contains("config: unknown key widgext"), "{bad}");
+        assert!(!bad.contains("/home/me/"), "{bad}");
+        assert!(!bad.contains("silently ignored"), "{bad}");
     }
 
     #[test]

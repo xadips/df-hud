@@ -51,6 +51,7 @@ pub struct Handle {
     last_run_start: Mutex<Option<DateTime<Utc>>>,
     presence: Option<Arc<presence::Control>>,
     pub gamekeys: Arc<crate::game::gamekeys::Keys>,
+    config_err: Mutex<Option<String>>,
 }
 
 impl Handle {
@@ -116,7 +117,28 @@ impl Handle {
         self.wake.ping();
     }
 
+    pub fn config_error(&self) -> Option<String> {
+        self.config_err.lock().unwrap().clone()
+    }
+
+    pub fn set_config_error(&self, err: impl Into<String>) {
+        *self.config_err.lock().unwrap() = Some(err.into());
+    }
+
+    pub fn clear_config_error(&self) {
+        *self.config_err.lock().unwrap() = None;
+    }
+
+    pub fn note_config_watch(&self, watch: &crate::config::Watch, reloaded: bool) {
+        if reloaded {
+            self.clear_config_error();
+        } else if let Some(err) = watch.error() {
+            self.set_config_error(err);
+        }
+    }
+
     pub fn replace_config(&self, cfg: Config) {
+        self.clear_config_error();
         if !cfg.bossmap.enabled {
             self.store.clear_boss_map();
         }
@@ -174,9 +196,13 @@ impl Handle {
         match Config::load(&path) {
             Ok(cfg) => {
                 eprintln!("reloaded {}", path.display());
+                self.clear_config_error();
                 self.replace_config(cfg);
             }
-            Err(err) => eprintln!("config reload failed: {err}"),
+            Err(err) => {
+                eprintln!("config reload failed: {err}");
+                self.set_config_error(err.to_string());
+            }
         }
     }
 
@@ -367,6 +393,7 @@ pub fn start_with(
         last_run_start: Mutex::new(last_run_start),
         presence: presence.clone(),
         gamekeys: gamekeys.clone(),
+        config_err: Mutex::new(None),
     });
 
     {

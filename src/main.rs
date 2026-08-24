@@ -32,6 +32,8 @@ mod wake;
 fn main() {
     if let Err(err) = run() {
         eprintln!("{err}");
+        #[cfg(windows)]
+        overlay::win32::fatal_alert(&err.to_string());
         std::process::exit(1);
     }
 }
