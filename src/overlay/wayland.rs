@@ -174,6 +174,7 @@ struct App {
     outputs: Vec<OutputInfo>,
     gpu: Option<Gpu>,
     gl_window: Option<GlWindow>,
+    display_ptr: *mut c_void,
     handle: Option<Arc<app::Handle>>,
     logical_w: i32,
     logical_h: i32,
@@ -245,7 +246,11 @@ impl App {
     }
 
     fn present(&mut self) -> Result<(), Box<dyn Error>> {
-        if !self.mapped || !self.configured || self.gpu.is_none() || self.gl_window.is_none() {
+        if !self.mapped || !self.configured {
+            return Ok(());
+        }
+        if let Err(err) = self.ensure_gpu() {
+            eprintln!("EGL: {err}");
             return Ok(());
         }
         self.apply_passthrough();
@@ -278,12 +283,39 @@ impl App {
         Ok(())
     }
 
+    fn ensure_gpu(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.gpu.is_some() && self.gl_window.is_some() {
+            return Ok(());
+        }
+        let (buf_w, buf_h) = self.buffer_size();
+        let surface_id = self
+            .surface
+            .as_ref()
+            .ok_or("layer surface missing; cannot create EGL")?
+            .id();
+        let started = Instant::now();
+        let (gl_window, gl) = GlWindow::new(self.display_ptr, surface_id, buf_w, buf_h)?;
+        let gpu = Gpu::new(gl, buf_w, buf_h, &self.cfg.hud.font)?;
+        eprintln!(
+            "EGL context ready in {:.0}ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        self.gl_window = Some(gl_window);
+        self.gpu = Some(gpu);
+        Ok(())
+    }
+
     fn drop_gpu_before_window(&mut self) {
+        if let Some(window) = &self.gl_window {
+            let _ = window.make_current();
+        }
         self.gpu.take();
         self.gl_window.take();
     }
 
     fn unmap(&mut self) {
+        let had_gpu = self.gl_window.is_some();
+        self.drop_gpu_before_window();
         if let Some(surface) = &self.surface {
             surface.attach(None, 0, 0);
             surface.commit();
@@ -293,7 +325,9 @@ impl App {
         self.awaiting_remap = false;
         self.pending_serial = None;
         self.needs_present = false;
-        eprintln!("unmapped (EGL context kept)");
+        if had_gpu {
+            eprintln!("unmapped (EGL context dropped)");
+        }
     }
 
     fn vis_monitor(&self) -> String {
@@ -567,6 +601,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         outputs: Vec::new(),
         gpu: None,
         gl_window: None,
+        display_ptr,
         handle: None,
         logical_w: 0,
         logical_h: 0,
@@ -679,12 +714,15 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         return Err("layer surface never got a non-zero configure".into());
     }
 
-    let (buf_w, buf_h) = app.buffer_size();
     app.apply_viewport();
-    let surface_id = app.surface.as_ref().expect("surface").id();
-    let (gl_window, gl) = GlWindow::new(display_ptr, surface_id, buf_w, buf_h)?;
-    app.gpu = Some(Gpu::new(gl, buf_w, buf_h, &watch.cfg.hud.font)?);
-    app.gl_window = Some(gl_window);
+    let vis = app
+        .handle
+        .as_ref()
+        .map(|h| h.visible.load(Ordering::SeqCst))
+        .unwrap_or(true);
+    if vis {
+        app.ensure_gpu()?;
+    }
 
     eprintln!(
         "namespace={} layer=overlay exclusive=-1 keyboard=none output={} swap-interval=0",
@@ -722,8 +760,11 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
             app.needs_present = true;
             if let Some(cfg) = overlay::take_reload(&mut watch) {
                 app.cfg = cfg.clone();
-                if let (Some(h), Some(gpu)) = (app.handle.as_ref(), app.gpu.as_mut()) {
-                    overlay::push_config(h, gpu, &cfg);
+                if let Some(h) = app.handle.as_ref() {
+                    match app.gpu.as_mut() {
+                        Some(gpu) => overlay::push_config(h, gpu, &cfg),
+                        None => h.replace_config(cfg),
+                    }
                 }
             }
         }
@@ -732,10 +773,15 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
             .as_ref()
             .map(|h| h.visible.load(Ordering::SeqCst))
             .unwrap_or(true);
-        if app.mapped && !vis {
+        if vis {
+            if !app.mapped && !app.awaiting_remap {
+                app.request_remap();
+            }
+        } else if app.mapped {
             app.unmap();
-        } else if !app.mapped && vis && !app.awaiting_remap {
-            app.request_remap();
+        } else if app.gl_window.is_some() {
+            app.drop_gpu_before_window();
+            eprintln!("unmapped (EGL context dropped)");
         }
         if app.needs_present {
             app.present()?;

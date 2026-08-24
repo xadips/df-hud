@@ -376,7 +376,7 @@ impl OverlayWindow {
 
     fn hide(&self) {
         unsafe { ShowWindow(self.hwnd, SW_HIDE) };
-        eprintln!("unmapped (WGL context kept)");
+        eprintln!("unmapped (WGL context dropped)");
     }
 
     fn show(&self) -> Result<(), Box<dyn Error>> {
@@ -440,6 +440,24 @@ impl Drop for OverlayWindow {
     }
 }
 
+fn create_gpu(
+    instance: windows_sys::Win32::Foundation::HINSTANCE,
+    hwnd: HWND,
+    buf_w: i32,
+    buf_h: i32,
+    font: &str,
+) -> Result<(GlSurface, Gpu), Box<dyn Error>> {
+    let started = Instant::now();
+    let surface = GlSurface::create(instance, hwnd)?;
+    let gl = unsafe { Glow::from_loader_function(|name| surface.load_proc(name)) };
+    let gpu = Gpu::new(gl, buf_w, buf_h, font)?;
+    eprintln!(
+        "WGL context ready in {:.0}ms",
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    Ok((surface, gpu))
+}
+
 pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     CLOSED.store(false, Ordering::SeqCst);
     enable_per_monitor_v2();
@@ -497,9 +515,10 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut buf_h = monitor.height - 2 * WINDOW_INSET;
 
     let win = OverlayWindow::create(instance, monitor)?;
-    let surface = GlSurface::create(instance, win.hwnd)?;
-    let gl = unsafe { Glow::from_loader_function(|name| surface.load_proc(name)) };
-    let mut gpu = Gpu::new(gl, buf_w, buf_h, &watch.cfg.hud.font)?;
+    let (mut surface, mut gpu) = {
+        let (s, g) = create_gpu(instance, win.hwnd, buf_w, buf_h, &watch.cfg.hud.font)?;
+        (Some(s), Some(g))
+    };
     win.extend_dwm_frame()?;
     win.reassert_exstyle();
     win.show()?;
@@ -541,11 +560,19 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         if overlay::due(now, &mut next_tick) {
             needs_present = true;
             if let Some(cfg) = overlay::take_reload(&mut watch) {
-                overlay::push_config(&handle, &mut gpu, &cfg);
+                match gpu.as_mut() {
+                    Some(gpu) => overlay::push_config(&handle, gpu, &cfg),
+                    None => handle.replace_config(cfg),
+                }
             }
         }
         let vis = handle.visible.load(Ordering::SeqCst);
         if mapped && !vis {
+            if let Some(surface) = &surface {
+                let _ = surface.make_current();
+            }
+            gpu.take();
+            surface.take();
             win.hide();
             mapped = false;
             needs_present = false;
@@ -567,28 +594,32 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
             ) {
                 if m.name != current_monitor {
                     win.place(m)?;
-                    let next_w = m.width - 2 * WINDOW_INSET;
-                    let next_h = m.height - 2 * WINDOW_INSET;
-                    if next_w != buf_w || next_h != buf_h {
-                        buf_w = next_w;
-                        buf_h = next_h;
-                        gpu.resize(buf_w, buf_h);
-                    }
+                    buf_w = m.width - 2 * WINDOW_INSET;
+                    buf_h = m.height - 2 * WINDOW_INSET;
                     current_monitor = m.name.clone();
                     eprintln!("hud: pinned to {}", current_monitor);
                 }
             }
-            win.show()?;
-            mapped = true;
-            needs_present = true;
+            match create_gpu(instance, win.hwnd, buf_w, buf_h, &watch.cfg.hud.font) {
+                Ok((s, g)) => {
+                    surface = Some(s);
+                    gpu = Some(g);
+                    win.show()?;
+                    mapped = true;
+                    needs_present = true;
+                }
+                Err(err) => eprintln!("WGL: {err}"),
+            }
         }
         if mapped && needs_present {
-            win.reassert_exstyle();
-            surface.make_current()?;
-            let built = overlay::scene(&handle, &watch.cfg, buf_w as f32, buf_h as f32);
-            gpu.draw(buf_w, buf_h, buf_w, buf_h, &built)?;
-            surface.swap()?;
-            swaps += 1;
+            if let (Some(surface), Some(gpu)) = (surface.as_ref(), gpu.as_mut()) {
+                win.reassert_exstyle();
+                surface.make_current()?;
+                let built = overlay::scene(&handle, &watch.cfg, buf_w as f32, buf_h as f32);
+                gpu.draw(buf_w, buf_h, buf_w, buf_h, &built)?;
+                surface.swap()?;
+                swaps += 1;
+            }
         }
 
         let timeout_ms = overlay::wait_ms(now, started, args.duration, next_tick);
