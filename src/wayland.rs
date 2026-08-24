@@ -62,7 +62,6 @@ pub struct Args {
     list_outputs: bool,
     requested: bool,
     config: Option<PathBuf>,
-    print_view: bool,
     print_hud: bool,
 }
 
@@ -75,7 +74,6 @@ impl From<OverlayArgs> for Args {
             list_outputs: args.list_outputs,
             requested: args.requested,
             config: args.config,
-            print_view: args.print_view,
             print_hud: args.print_hud,
         }
     }
@@ -645,7 +643,6 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
     app.handle = Some(app::start_with(
         watch.cfg.clone(),
         app::PrintOpts {
-            view: args.print_view,
             hud: args.print_hud,
         },
     )?);

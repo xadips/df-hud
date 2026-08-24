@@ -6,7 +6,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(test)]
 use chrono::{DateTime, Utc};
+#[cfg(test)]
 use serde::Deserialize;
 
 use crate::catalog;
@@ -17,9 +19,7 @@ use crate::desktop;
 use crate::dfclient::{self, Client};
 use crate::format;
 use crate::game;
-use crate::groups::Groups;
-use crate::model::{self, GameState, Tick, View};
-use crate::present;
+use crate::model::{self, GameState, Tick};
 use crate::store::Store;
 
 const WITHHELD_FIELD: &[&str] = &["pass", "token", "cookie", "auth", "secretkey", "session"];
@@ -41,7 +41,6 @@ const LONG_ALIASES: &[&str] = &[
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OverlayArgs {
     pub config: Option<PathBuf>,
-    pub print_view: bool,
     pub print_hud: bool,
     pub duration: Duration,
     pub requested: bool,
@@ -56,7 +55,6 @@ impl Default for OverlayArgs {
     fn default() -> Self {
         Self {
             config: None,
-            print_view: false,
             print_hud: false,
             duration: Duration::ZERO,
             requested: false,
@@ -73,10 +71,6 @@ impl Default for OverlayArgs {
 pub enum Launch {
     Help,
     Version,
-    PrintView {
-        fixture: PathBuf,
-        print_hud: bool,
-    },
     CheckConfig {
         config: Option<PathBuf>,
     },
@@ -93,7 +87,6 @@ pub enum Launch {
     },
     Headless {
         config: Option<PathBuf>,
-        print_view: bool,
         print_hud: bool,
     },
     Overlay(OverlayArgs),
@@ -116,7 +109,6 @@ where
 
     let mut help = false;
     let mut version = false;
-    let mut print_view = false;
     let mut print_hud = false;
     let mut check_config = false;
     let mut check_game = false;
@@ -125,7 +117,6 @@ where
     let mut dump_challenges = false;
     let mut headless = false;
     let mut config = None;
-    let mut fixture = None;
     let mut duration = Duration::ZERO;
     let mut duration_set = false;
     let mut output = None;
@@ -141,10 +132,7 @@ where
         match arg {
             Short('h') | Long("help") => help = true,
             Long("version") => version = true,
-            Long("print-view") => {
-                print_view = true;
-                take_print_view_path(&mut parser, &mut fixture)?;
-            }
+            Long("print-view") => once = true,
             Long("print-hud") => print_hud = true,
             Long("check-config") => check_config = true,
             Long("check-game") => check_game = true,
@@ -193,20 +181,13 @@ where
     if dump_fields && !once && !dump_challenges {
         return Err("--dump-fields is for --once or --dump-challenges".into());
     }
-    let exclusive = [
-        version,
-        check_config,
-        check_game,
-        once,
-        dump_challenges,
-        fixture.is_some(),
-    ]
-    .iter()
-    .filter(|on| **on)
-    .count();
+    let exclusive = [version, check_config, check_game, once, dump_challenges]
+        .iter()
+        .filter(|on| **on)
+        .count();
     if exclusive > 1 {
         return Err(
-            "use only one of --version, --check-config, --check-game, --once, --dump-challenges, --print-view PATH"
+            "use only one of --version, --check-config, --check-game, --once, --dump-challenges"
                 .into(),
         );
     }
@@ -227,8 +208,6 @@ where
         Some("--once")
     } else if dump_challenges {
         Some("--dump-challenges")
-    } else if fixture.is_some() {
-        Some("--print-view PATH")
     } else if headless {
         Some("--headless")
     } else {
@@ -280,23 +259,12 @@ where
             dump_fields,
         });
     }
-    if let Some(fixture) = fixture {
-        return Ok(Launch::PrintView {
-            fixture,
-            print_hud,
-        });
-    }
     if headless {
-        return Ok(Launch::Headless {
-            config,
-            print_view,
-            print_hud,
-        });
+        return Ok(Launch::Headless { config, print_hud });
     }
     Ok(Launch::Overlay(OverlayArgs {
         requested: config.is_some() || overlay_only,
         config,
-        print_view,
         print_hud,
         duration,
         output,
@@ -318,30 +286,6 @@ fn normalize_arg(arg: OsString) -> OsString {
         return arg;
     }
     format!("--{name}").into()
-}
-
-fn take_print_view_path(
-    parser: &mut lexopt::Parser,
-    fixture: &mut Option<PathBuf>,
-) -> Result<(), lexopt::Error> {
-    if let Some(val) = parser.optional_value() {
-        *fixture = Some(PathBuf::from(val));
-        return Ok(());
-    }
-    let Some(mut raw) = parser.try_raw_args() else {
-        return Ok(());
-    };
-    let Some(next) = raw.peek() else {
-        return Ok(());
-    };
-    let Some(text) = next.to_str() else {
-        return Ok(());
-    };
-    if text.starts_with('-') {
-        return Ok(());
-    }
-    *fixture = Some(PathBuf::from(raw.next().unwrap()));
-    Ok(())
 }
 
 pub fn print_help() {
@@ -375,7 +319,7 @@ fn help_text() -> String {
 df-hud — overlay (live derive)
 
   --once                 poll once, print the view, and exit
-  --print-view [PATH]    fixture JSON (PATH) or live JSON each update
+  --print-view           alias of --once
   --print-hud            print HUD text lines each update
   --dump-fields          with --once / --dump-challenges, print the player record (secrets withheld)
   --dump-challenges      fetch the challenge board once and print it
@@ -399,21 +343,6 @@ pub fn run(launch: Launch) -> Result<(), Box<dyn Error>> {
             println!("df-hud {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        Launch::PrintView {
-            fixture,
-            print_hud,
-        } => {
-            let view = view_from_fixture(&fixture)?;
-            if print_hud {
-                print!(
-                    "{}",
-                    present::format_hud(&view, &Config::default(), &Groups::new())
-                );
-            } else {
-                print!("{}", model::marshal_indent(&view)?);
-            }
-            Ok(())
-        }
         Launch::CheckConfig { config } => {
             print!("{}", check_config_text(config.as_deref())?);
             Ok(())
@@ -427,20 +356,12 @@ pub fn run(launch: Launch) -> Result<(), Box<dyn Error>> {
             dump_fields,
         } => run_once(config.as_deref(), dump_fields),
         Launch::DumpChallenges { config, raw } => dump_challenges(config.as_deref(), raw),
-        Launch::Headless {
-            config,
-            print_view,
-            print_hud,
-        } => run_headless(config, print_view, print_hud),
+        Launch::Headless { config, print_hud } => run_headless(config, print_hud),
         Launch::Overlay(_) => Err("internal: overlay is started from main".into()),
     }
 }
 
-pub fn run_headless(
-    config: Option<PathBuf>,
-    print_view: bool,
-    print_hud: bool,
-) -> Result<(), Box<dyn Error>> {
+pub fn run_headless(config: Option<PathBuf>, print_hud: bool) -> Result<(), Box<dyn Error>> {
     let path = config.unwrap_or_else(config::default_path);
     let cfg = Config::load(&path)?;
     eprintln!(
@@ -448,19 +369,14 @@ pub fn run_headless(
         env!("CARGO_PKG_VERSION"),
         cfg.describe_source(&path)
     );
-    let handle = crate::app::start_with(
-        cfg,
-        crate::app::PrintOpts {
-            view: print_view,
-            hud: print_hud,
-        },
-    )?;
+    let handle = crate::app::start_with(cfg, crate::app::PrintOpts { hud: print_hud })?;
     while !handle.stopped() {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     Ok(())
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 struct PrintViewFixture {
     now: DateTime<Utc>,
@@ -470,6 +386,7 @@ struct PrintViewFixture {
     vars: HashMap<String, String>,
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 struct GameFixture {
     running: bool,
@@ -477,7 +394,8 @@ struct GameFixture {
     started_at: DateTime<Utc>,
 }
 
-pub fn view_from_fixture(path: &Path) -> Result<View, Box<dyn Error>> {
+#[cfg(test)]
+fn view_from_fixture(path: &Path) -> Result<model::View, Box<dyn Error>> {
     let raw = std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
     let fx: PrintViewFixture =
         serde_json::from_str(&raw).map_err(|err| format!("{}: {err}", path.display()))?;
@@ -828,27 +746,12 @@ fn format_challenge_board(
     out
 }
 
+#[cfg(test)]
 fn load_allstats_catalog(at: DateTime<Utc>) -> Result<catalog::Catalog, Box<dyn Error>> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/allstats.txt");
     let raw = std::fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
     let vars = dfclient::parse_flash(&raw)?;
     catalog::parse(&vars, at).map_err(|err| err.into())
-}
-
-#[cfg(test)]
-fn json_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
-    match (a, b) {
-        (serde_json::Value::Number(x), serde_json::Value::Number(y)) => x.as_f64() == y.as_f64(),
-        (serde_json::Value::Array(x), serde_json::Value::Array(y)) => {
-            x.len() == y.len() && x.iter().zip(y).all(|(l, r)| json_eq(l, r))
-        }
-        (serde_json::Value::Object(x), serde_json::Value::Object(y)) => {
-            x.len() == y.len()
-                && x.iter()
-                    .all(|(k, v)| y.get(k).map(|w| json_eq(v, w)).unwrap_or(false))
-        }
-        _ => a == b,
-    }
 }
 
 #[cfg(test)]
@@ -899,29 +802,23 @@ mod tests {
     }
 
     #[test]
-    fn print_view_path_is_fixture() {
+    fn print_view_is_once() {
+        let once = Launch::Once {
+            config: None,
+            dump_fields: false,
+        };
+        assert_eq!(parse(&["--print-view"]).unwrap(), once);
+        assert_eq!(parse(&["-print-view"]).unwrap(), once);
+        assert_eq!(parse(&["--once", "--print-view"]).unwrap(), once);
         assert_eq!(
-            parse(&["--print-view", "fx.json"]).unwrap(),
-            Launch::PrintView {
-                fixture: PathBuf::from("fx.json"),
-                print_hud: false
+            parse(&["--print-view", "--dump-fields"]).unwrap(),
+            Launch::Once {
+                config: None,
+                dump_fields: true
             }
         );
-        assert_eq!(
-            parse(&["--print-view=fx.json", "--print-hud"]).unwrap(),
-            Launch::PrintView {
-                fixture: PathBuf::from("fx.json"),
-                print_hud: true
-            }
-        );
-    }
-
-    #[test]
-    fn print_view_without_path_is_live_overlay() {
-        let args = overlay(&["--print-view", "--print-hud"]);
-        assert!(args.print_view);
-        assert!(args.print_hud);
-        assert!(!args.requested);
+        let err = parse(&["--print-view", "fx.json"]).unwrap_err();
+        assert!(err.contains("fx.json"), "{err}");
     }
 
     #[test]
@@ -943,13 +840,12 @@ mod tests {
     }
 
     #[test]
-    fn headless_live_print_view() {
+    fn headless_print_view_is_once() {
         assert_eq!(
             parse(&["--headless", "--print-view"]).unwrap(),
-            Launch::Headless {
+            Launch::Once {
                 config: None,
-                print_view: true,
-                print_hud: false
+                dump_fields: false
             }
         );
     }
@@ -996,22 +892,26 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/print-view.json")
     }
 
-    fn golden_path() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/print-view.golden.json")
-    }
-
     #[test]
-    fn print_view_matches_golden() {
+    fn fixture_derive_is_ground_zero() {
         let view = view_from_fixture(&fixture_path()).unwrap();
-        let got: serde_json::Value =
-            serde_json::from_str(&model::marshal_indent(&view).unwrap()).unwrap();
-        let want: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(golden_path()).unwrap()).unwrap();
-        assert!(
-            json_eq(&got, &want),
-            "print-view JSON drifted from testdata/print-view.golden.json\ngot:\n{}\nwant:\n{}",
-            serde_json::to_string_pretty(&got).unwrap(),
-            serde_json::to_string_pretty(&want).unwrap()
+        assert!(view.have_data);
+        assert!(view.game_running);
+        assert!(!view.has_session);
+        assert!(view.has_position);
+        assert!(view.in_outpost);
+        assert_eq!(view.outpost_name, "Ground Zero");
+        assert_eq!(view.zone_name, "Outpost");
+        assert_eq!(
+            (view.position_x, view.position_y, view.position_z),
+            (1058, 1019, 0)
+        );
+        assert!(!view.outpost_attack);
+        assert!(view.challenges.as_ref().map_or(true, Vec::is_empty));
+        assert!(view.status.is_empty());
+        assert_eq!(
+            crate::present::hud_lines(&view, &Config::default(), &crate::groups::Groups::new()),
+            ["Xp/Hr: --", "Ground Zero"]
         );
     }
 

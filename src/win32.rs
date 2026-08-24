@@ -67,7 +67,6 @@ pub struct Args {
     list_monitors: bool,
     requested: bool,
     config: Option<PathBuf>,
-    print_view: bool,
     print_hud: bool,
 }
 
@@ -79,7 +78,6 @@ impl From<OverlayArgs> for Args {
             list_monitors: args.list_monitors,
             requested: args.requested,
             config: args.config,
-            print_view: args.print_view,
             print_hud: args.print_hud,
         }
     }
@@ -518,7 +516,6 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let handle = app::start_with(
         watch.cfg.clone(),
         app::PrintOpts {
-            view: args.print_view,
             hud: args.print_hud,
         },
     )?;

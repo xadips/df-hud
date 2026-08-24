@@ -1,4 +1,4 @@
-//! Domain types for the derived view. JSON field names match testdata/print-view.golden.json.
+//! Domain types for the derived view.
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::ser::{SerializeStruct, Serializer};
@@ -24,8 +24,12 @@ impl Ns {
 
 impl Serialize for Ns {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_i64(self.0)
+        s.serialize_u64(self.std().as_secs())
     }
+}
+
+fn rfc3339_secs<S: Serializer>(t: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&t.to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -101,6 +105,7 @@ pub struct Snapshot {
     pub bank_cash: i64,
     pub nourishment: i32,
     pub has_hunger: bool,
+    /// Remaining XP boost. Copied onto View only when the overlay draws it.
     pub boost_exp: Deadline,
     pub session_3d: String,
     pub gold_member: bool,
@@ -294,7 +299,7 @@ pub struct Challenge {
     pub reward_points: i64,
     pub reward_items: String,
     pub reward_special: String,
-    /// Sticky completion for this cycle. Not in print-view JSON (`Challenge`
+    /// Sticky completion for this cycle. Not in `--once` JSON (`Challenge`
     /// has no such field); `complete()` consults it so a clan-size target
     /// recompute cannot un-finish a challenge already seen done.
     pub remembered: bool,
@@ -485,43 +490,32 @@ impl Serialize for CityMark {
     }
 }
 
-/// model.View. Not [`crate::scene::View`].
-#[derive(Clone, Debug)]
+/// model.View. Not [`crate::scene::View`]. Overlay and tray fields only;
+/// player record extras stay on [`Snapshot`].
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub struct View {
+    #[serde(serialize_with = "rfc3339_secs")]
     pub now: DateTime<Utc>,
     pub have_data: bool,
-    pub data_age: Ns,
     pub game_running: bool,
     pub client_loading: bool,
     pub has_session: bool,
     pub session_time: Ns,
     pub client_uptime: Ns,
-    pub level: i32,
-    pub exp_in_level: i64,
-    pub exp_needed: i64,
-    pub pending_levels: i32,
-    pub cumulative_xp: i64,
-    pub xp_source: String,
     pub has_position: bool,
     pub position_x: i32,
     pub position_y: i32,
     pub position_z: i32,
-    pub position_source: String,
-    pub trade_zone: i32,
     pub zone_name: String,
     pub in_outpost: bool,
     pub outpost_name: String,
-    pub has_danger: bool,
-    pub danger_level: i32,
     pub block_support: Ns,
     pub block_events: Option<Vec<CityEvent>>,
     pub block_events_past: Option<Vec<CityEvent>>,
     pub block_events_upcoming: Option<Vec<CityEvent>>,
-    pub has_onslaught_countdown: bool,
-    pub onslaught_countdown: Ns,
     pub outpost_attack: bool,
     pub has_nearest: bool,
-    pub nearest_label: String,
     pub nearest_dx: i32,
     pub nearest_dy: i32,
     pub nearest_x: i32,
@@ -529,30 +523,14 @@ pub struct View {
     pub nearest_distance_in_blocks: i32,
     pub nearest_detour: i32,
     pub city_marks: Option<Vec<CityMark>>,
-    pub boss_map_age: Ns,
-    pub has_boss_map: bool,
-    pub hp: i32,
-    pub hp_max: i32,
-    pub cash: i64,
-    pub nourishment: i32,
-    pub has_hunger: bool,
-    pub boost_exp_in: Ns,
-    pub boost_exp_forever: bool,
-    pub dead: bool,
     pub xp_per_hour: f64,
     pub xp_available: bool,
     pub xp_provisional: bool,
-    pub xp_why: String,
-    pub xp_span: Ns,
-    pub xp_samples: i32,
     pub xp_stability: XpStability,
     pub challenges: Option<Vec<Challenge>>,
     pub challenge_status: String,
-    pub challenges_done: i32,
-    pub challenges_total: i32,
     pub status: String,
     pub status_is_fix: bool,
-    pub missed_ticks: i32,
 }
 
 impl Default for View {
@@ -560,38 +538,24 @@ impl Default for View {
         Self {
             now: DateTime::<Utc>::UNIX_EPOCH,
             have_data: false,
-            data_age: Ns(0),
             game_running: false,
             client_loading: false,
             has_session: false,
             session_time: Ns(0),
             client_uptime: Ns(0),
-            level: 0,
-            exp_in_level: 0,
-            exp_needed: 0,
-            pending_levels: 0,
-            cumulative_xp: 0,
-            xp_source: String::new(),
             has_position: false,
             position_x: 0,
             position_y: 0,
             position_z: 0,
-            position_source: String::new(),
-            trade_zone: 0,
             zone_name: String::new(),
             in_outpost: false,
             outpost_name: String::new(),
-            has_danger: false,
-            danger_level: 0,
             block_support: Ns(0),
             block_events: None,
             block_events_past: None,
             block_events_upcoming: None,
-            has_onslaught_countdown: false,
-            onslaught_countdown: Ns(0),
             outpost_attack: false,
             has_nearest: false,
-            nearest_label: String::new(),
             nearest_dx: 0,
             nearest_dy: 0,
             nearest_x: 0,
@@ -599,103 +563,15 @@ impl Default for View {
             nearest_distance_in_blocks: 0,
             nearest_detour: 0,
             city_marks: None,
-            boss_map_age: Ns(0),
-            has_boss_map: false,
-            hp: 0,
-            hp_max: 0,
-            cash: 0,
-            nourishment: 0,
-            has_hunger: false,
-            boost_exp_in: Ns(0),
-            boost_exp_forever: false,
-            dead: false,
             xp_per_hour: 0.0,
             xp_available: false,
             xp_provisional: false,
-            xp_why: String::new(),
-            xp_span: Ns(0),
-            xp_samples: 0,
             xp_stability: XpStability::Steady,
             challenges: None,
             challenge_status: String::new(),
-            challenges_done: 0,
-            challenges_total: 0,
             status: String::new(),
             status_is_fix: false,
-            missed_ticks: 0,
         }
-    }
-}
-
-impl Serialize for View {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut st = s.serialize_struct("View", 64)?;
-        st.serialize_field("Now", &self.now.to_rfc3339_opts(SecondsFormat::Secs, true))?;
-        st.serialize_field("HaveData", &self.have_data)?;
-        st.serialize_field("DataAge", &self.data_age)?;
-        st.serialize_field("GameRunning", &self.game_running)?;
-        st.serialize_field("ClientLoading", &self.client_loading)?;
-        st.serialize_field("HasSession", &self.has_session)?;
-        st.serialize_field("SessionTime", &self.session_time)?;
-        st.serialize_field("ClientUptime", &self.client_uptime)?;
-        st.serialize_field("Level", &self.level)?;
-        st.serialize_field("ExpInLevel", &self.exp_in_level)?;
-        st.serialize_field("ExpNeeded", &self.exp_needed)?;
-        st.serialize_field("PendingLevels", &self.pending_levels)?;
-        st.serialize_field("CumulativeXP", &self.cumulative_xp)?;
-        st.serialize_field("XPSource", &self.xp_source)?;
-        st.serialize_field("HasPosition", &self.has_position)?;
-        st.serialize_field("PositionX", &self.position_x)?;
-        st.serialize_field("PositionY", &self.position_y)?;
-        st.serialize_field("PositionZ", &self.position_z)?;
-        st.serialize_field("PositionSource", &self.position_source)?;
-        st.serialize_field("TradeZone", &self.trade_zone)?;
-        st.serialize_field("ZoneName", &self.zone_name)?;
-        st.serialize_field("InOutpost", &self.in_outpost)?;
-        st.serialize_field("OutpostName", &self.outpost_name)?;
-        st.serialize_field("HasDanger", &self.has_danger)?;
-        st.serialize_field("DangerLevel", &self.danger_level)?;
-        st.serialize_field("BlockSupport", &self.block_support)?;
-        st.serialize_field("BlockEvents", &self.block_events)?;
-        st.serialize_field("BlockEventsPast", &self.block_events_past)?;
-        st.serialize_field("BlockEventsUpcoming", &self.block_events_upcoming)?;
-        st.serialize_field("HasOnslaughtCountdown", &self.has_onslaught_countdown)?;
-        st.serialize_field("OnslaughtCountdown", &self.onslaught_countdown)?;
-        st.serialize_field("OutpostAttack", &self.outpost_attack)?;
-        st.serialize_field("HasNearest", &self.has_nearest)?;
-        st.serialize_field("NearestLabel", &self.nearest_label)?;
-        st.serialize_field("NearestDX", &self.nearest_dx)?;
-        st.serialize_field("NearestDY", &self.nearest_dy)?;
-        st.serialize_field("NearestX", &self.nearest_x)?;
-        st.serialize_field("NearestY", &self.nearest_y)?;
-        st.serialize_field("NearestDistanceInBlocks", &self.nearest_distance_in_blocks)?;
-        st.serialize_field("NearestDetour", &self.nearest_detour)?;
-        st.serialize_field("CityMarks", &self.city_marks)?;
-        st.serialize_field("BossMapAge", &self.boss_map_age)?;
-        st.serialize_field("HasBossMap", &self.has_boss_map)?;
-        st.serialize_field("HP", &self.hp)?;
-        st.serialize_field("HPMax", &self.hp_max)?;
-        st.serialize_field("Cash", &self.cash)?;
-        st.serialize_field("Nourishment", &self.nourishment)?;
-        st.serialize_field("HasHunger", &self.has_hunger)?;
-        st.serialize_field("BoostExpIn", &self.boost_exp_in)?;
-        st.serialize_field("BoostExpForever", &self.boost_exp_forever)?;
-        st.serialize_field("Dead", &self.dead)?;
-        st.serialize_field("XPPerHour", &self.xp_per_hour)?;
-        st.serialize_field("XPAvailable", &self.xp_available)?;
-        st.serialize_field("XPProvisional", &self.xp_provisional)?;
-        st.serialize_field("XPWhy", &self.xp_why)?;
-        st.serialize_field("XPSpan", &self.xp_span)?;
-        st.serialize_field("XPSamples", &self.xp_samples)?;
-        st.serialize_field("XPStability", &self.xp_stability)?;
-        st.serialize_field("Challenges", &self.challenges)?;
-        st.serialize_field("ChallengeStatus", &self.challenge_status)?;
-        st.serialize_field("ChallengesDone", &self.challenges_done)?;
-        st.serialize_field("ChallengesTotal", &self.challenges_total)?;
-        st.serialize_field("Status", &self.status)?;
-        st.serialize_field("StatusIsFix", &self.status_is_fix)?;
-        st.serialize_field("MissedTicks", &self.missed_ticks)?;
-        st.end()
     }
 }
 

@@ -380,6 +380,11 @@ impl Store {
         }
     }
 
+    #[cfg(test)]
+    pub fn missed_ticks(&self) -> i32 {
+        self.inner.lock().unwrap().missed_ticks
+    }
+
     pub fn previous_snapshot(&self) -> Option<Snapshot> {
         let s = self.inner.lock().unwrap();
         if s.have_prev {
@@ -447,7 +452,6 @@ impl Store {
             game_running: s.game.running,
             client_loading: s.game.running && s.presence_connected && !s.have_presence,
             client_uptime: Ns::from_std(s.game.elapsed(now)),
-            missed_ticks: s.missed_ticks,
             ..View::default()
         };
         if s.game.running {
@@ -461,32 +465,14 @@ impl Store {
         if s.have_snap {
             let snap = &s.snapshot;
             v.have_data = true;
-            v.data_age = Ns::from_chrono(now - snap.at);
-            v.level = snap.level;
-            v.exp_in_level = snap.exp_in_level;
-            v.exp_needed = snap.exp_needed;
-            v.pending_levels = snap.pending_levels;
-            v.cumulative_xp = snap.cumulative_xp;
-            v.xp_source = snap.xp_source.as_str().to_string();
             v.has_position = snap.has_position;
             v.position_x = snap.position_x;
             v.position_y = snap.position_y;
             v.position_z = snap.position_z;
-            v.trade_zone = snap.trade_zone;
             v.zone_name = citymap::trade_zone_name(snap.trade_zone).to_string();
             v.in_outpost = snap.in_outpost;
             v.outpost_name = citymap::outpost_name(snap.position_x, snap.position_y).to_string();
-            v.has_danger = snap.has_danger;
-            v.danger_level = snap.danger_level;
             v.block_support = Ns::from_std(snap.block_support.remaining(now));
-            v.hp = snap.hp;
-            v.hp_max = snap.hp_max;
-            v.cash = snap.cash;
-            v.nourishment = snap.nourishment;
-            v.has_hunger = snap.has_hunger;
-            v.boost_exp_in = Ns::from_std(snap.boost_exp.remaining(now));
-            v.boost_exp_forever = snap.boost_exp.forever;
-            v.dead = snap.dead;
         }
         if let Some(p) = presence_position_locked(&s, now) {
             v.client_loading = p.loading;
@@ -494,7 +480,6 @@ impl Store {
                 v.has_position = true;
                 v.position_x = p.x;
                 v.position_y = p.y;
-                v.position_source = "presence".into();
                 v.in_outpost = false;
                 v.outpost_name.clear();
             } else if p.in_outpost {
@@ -502,7 +487,6 @@ impl Store {
                 // tile, so the ring can move now instead of waiting for the poll.
                 v.in_outpost = true;
                 v.outpost_name = p.outpost_name.clone();
-                v.position_source = "presence".into();
                 if let Some((x, y)) = citymap::outpost_coords(&p.outpost_name) {
                     v.has_position = true;
                     v.position_x = x;
@@ -511,8 +495,6 @@ impl Store {
             }
         }
         if let Some(boss) = &s.boss_map {
-            v.has_boss_map = true;
-            v.boss_map_age = Ns::from_std(boss.age(now));
             v.outpost_attack = boss.outpost_attack;
             if v.has_position {
                 let events = boss.at(v.position_x, v.position_y, now);
@@ -550,7 +532,6 @@ impl Store {
             if v.has_position && block_empty && !v.client_loading {
                 if let Some(m) = bossmap::nearest_mark(&marks) {
                     v.has_nearest = true;
-                    v.nearest_label = m.label;
                     v.nearest_dx = m.walk.dx;
                     v.nearest_dy = m.walk.dy;
                     v.nearest_x = m.x;
@@ -561,8 +542,6 @@ impl Store {
             }
         }
         if s.have_board {
-            v.challenges_total = s.board.len() as i32;
-            v.challenges_done = s.board.iter().filter(|c| c.complete()).count() as i32;
             v.challenges = Some(s.board.clone());
         }
         v.challenge_status = s.board_status.clone();
@@ -592,13 +571,13 @@ fn apply_rate(v: &mut View, rate: XpRate) {
     v.xp_available = rate.available;
     v.xp_provisional = rate.provisional;
     v.xp_per_hour = rate.per_hour;
-    v.xp_why = rate.why;
-    v.xp_span = Ns::from_std(rate.span);
-    v.xp_samples = rate.samples;
     v.xp_stability = rate.stability;
     // Window total is the per-hour numerator. Go's View has no Gained field;
     // the HUD shows the rate, tests assert the total.
     let _ = rate.gained;
+    let _ = rate.why;
+    let _ = rate.span;
+    let _ = rate.samples;
 }
 
 fn stability_locked(s: &Inner) -> XpStability {
@@ -934,14 +913,15 @@ mod tests {
         });
         let v = s.derive(now + chrono::Duration::seconds(3));
         assert!(v.have_data);
-        assert_eq!(v.data_age, Ns::from_std(Duration::from_secs(3)));
         assert_eq!(
             v.client_uptime,
             Ns::from_std(Duration::from_secs(42 * 60 + 3))
         );
         assert!(!v.has_session);
-        assert_eq!(v.level, 415);
-        assert_eq!(v.cumulative_xp, 10_000_000);
+        let snap = s.snapshot().unwrap();
+        assert_eq!(snap.at, now);
+        assert_eq!(snap.level, 415);
+        assert_eq!(snap.cumulative_xp, 10_000_000);
         assert_eq!(v.outpost_name, "Ground Zero");
         assert_eq!(v.zone_name, "Outpost");
         assert_eq!(v.status, "");
@@ -965,7 +945,7 @@ mod tests {
                 err: Some("boom".into()),
                 scheduled: true,
             }));
-            assert_eq!(s.derive(now).missed_ticks, i);
+            assert_eq!(s.missed_ticks(), i);
         }
         s.apply_tick(Tick {
             at: now,
@@ -973,14 +953,14 @@ mod tests {
             err: Some("boom".into()),
             scheduled: false,
         });
-        assert_eq!(s.derive(now).missed_ticks, 3);
+        assert_eq!(s.missed_ticks(), 3);
         s.apply_tick(Tick {
             at: now,
             vars: sample_player_record(),
             err: None,
             scheduled: true,
         });
-        assert_eq!(s.derive(now).missed_ticks, 0);
+        assert_eq!(s.missed_ticks(), 0);
         assert!(s.derive(now).have_data);
     }
 
@@ -1038,13 +1018,11 @@ mod tests {
         s.set_presence(presence::parse_details("Inner City 1055 x 985", now));
         let view = s.derive(now);
         assert_eq!((view.position_x, view.position_y), (1055, 985));
-        assert_eq!(view.position_source, "presence");
         let view = s.derive(
             now + chrono::Duration::from_std(PRESENCE_MAX_AGE).unwrap()
                 + chrono::Duration::seconds(1),
         );
         assert_eq!((view.position_x, view.position_y), (1054, 987));
-        assert_eq!(view.position_source, "");
     }
 
     #[test]
@@ -1111,7 +1089,6 @@ mod tests {
             assert!(view.has_position, "{}", o.name);
             assert!(view.in_outpost, "{}", o.name);
             assert_eq!(view.outpost_name, o.name);
-            assert_eq!(view.position_source, "presence");
         }
     }
 
@@ -1292,7 +1269,8 @@ mod tests {
             ..Challenge::default()
         }]);
         let view = s.derive(Utc::now());
-        assert_eq!(view.challenges_done, 1);
-        assert_eq!(view.challenges_total, 1);
+        let board = view.challenges.as_deref().unwrap();
+        assert_eq!(board.len(), 1);
+        assert_eq!(board.iter().filter(|c| c.complete()).count(), 1);
     }
 }
