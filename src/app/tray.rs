@@ -4,7 +4,7 @@
 //! Grey: game not running. Yellow: game up and IPC is fine (or unused).
 //! Orange: game is in-world but no Discord IPC client connected. Red: bind failed.
 
-#[cfg(any(test, windows))]
+#[cfg(test)]
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -15,6 +15,7 @@ use crate::app::{store::TrayHint, Handle};
 use crate::format;
 use crate::model::{Ns, View, Visibility};
 
+#[cfg(target_os = "linux")]
 const ICON_SIZE: i32 = 64;
 const ACTIVE: [u8; 4] = [0xe6, 0xcc, 0x4d, 0xff];
 const IDLE: [u8; 4] = [0x8a, 0x90, 0x99, 0xff];
@@ -263,7 +264,7 @@ pub fn icon_kind(view: Option<&dyn TrayState>, bind_failed: bool, ipc_missing: b
     }
 }
 
-#[cfg(any(test, windows))]
+#[cfg(test)]
 pub fn icon_png(kind: IconKind, size: i32) -> Vec<u8> {
     let size = size.max(8);
     let rgba = match kind {
@@ -273,11 +274,6 @@ pub fn icon_png(kind: IconKind, size: i32) -> Vec<u8> {
         IconKind::Error => ERROR,
     };
     encode_png(&raster(rgba, size), size)
-}
-
-#[cfg(windows)]
-pub fn icon_bytes(kind: IconKind, size: i32) -> Vec<u8> {
-    wrap_ico(&icon_png(kind, size), size)
 }
 
 fn raster(rgba: [u8; 4], size: i32) -> Vec<u8> {
@@ -328,7 +324,7 @@ fn covers(x: f64, y: f64) -> bool {
     false
 }
 
-#[cfg(any(test, windows))]
+#[cfg(test)]
 fn encode_png(rgba: &[u8], size: i32) -> Vec<u8> {
     let mut out = Vec::new();
     {
@@ -341,26 +337,18 @@ fn encode_png(rgba: &[u8], size: i32) -> Vec<u8> {
     out
 }
 
-#[cfg(windows)]
-fn wrap_ico(png: &[u8], size: i32) -> Vec<u8> {
-    let mut out = Vec::with_capacity(22 + png.len());
-    out.extend_from_slice(&0u16.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    if size >= 256 {
-        out.push(0);
-        out.push(0);
-    } else {
-        out.push(size as u8);
-        out.push(size as u8);
+/// Shell icons are BGRA with premultiplied alpha. A full `.ico` wrapper is
+/// the wrong payload for `CreateIconFromResourceEx` and yields a null HICON.
+#[cfg(any(test, windows))]
+fn premul_bgra(rgba: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(rgba.len());
+    for px in rgba.as_chunks::<4>().0 {
+        let a = u16::from(px[3]);
+        out.push((u16::from(px[2]) * a / 255) as u8);
+        out.push((u16::from(px[1]) * a / 255) as u8);
+        out.push((u16::from(px[0]) * a / 255) as u8);
+        out.push(px[3]);
     }
-    out.push(0);
-    out.push(0);
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&32u16.to_le_bytes());
-    out.extend_from_slice(&(png.len() as u32).to_le_bytes());
-    out.extend_from_slice(&22u32.to_le_bytes());
-    out.extend_from_slice(png);
     out
 }
 
@@ -749,8 +737,7 @@ mod windows {
             eprintln!("tray: CreateWindowExW failed");
             return;
         }
-        let png = icon_bytes(IconKind::Idle, ICON_SIZE);
-        let icon = create_icon(&png);
+        let icon = hicon(IconKind::Idle);
         let mut nid: NOTIFYICONDATAW = zeroed();
         nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
         nid.hWnd = hwnd;
@@ -819,8 +806,7 @@ mod windows {
         if !ctx.icon.is_null() {
             DestroyIcon(ctx.icon);
         }
-        let bytes = icon_bytes(kind, ICON_SIZE);
-        ctx.icon = create_icon(&bytes);
+        ctx.icon = hicon(kind);
         let mut nid: NOTIFYICONDATAW = zeroed();
         nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
         nid.hWnd = ctx.hwnd;
@@ -1008,21 +994,79 @@ mod windows {
         }
     }
 
-    fn create_icon(ico: &[u8]) -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
+    fn hicon(kind: IconKind) -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
+        use super::{premul_bgra, raster, ACTIVE, ERROR, IDLE, WARN};
+        use windows_sys::Win32::Graphics::Gdi::{
+            CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+            DIB_RGB_COLORS,
+        };
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            CreateIconFromResourceEx, LR_DEFAULTCOLOR,
+            CreateIconIndirect, GetSystemMetrics, ICONINFO, SM_CXSMICON,
+        };
+
+        let size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
+        let rgba = raster(
+            match kind {
+                IconKind::Active => ACTIVE,
+                IconKind::Idle => IDLE,
+                IconKind::Warn => WARN,
+                IconKind::Error => ERROR,
+            },
+            size,
+        );
+        let bgra = premul_bgra(&rgba);
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: size,
+                biHeight: -size,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                ..unsafe { zeroed() }
+            },
+            bmiColors: [unsafe { zeroed() }],
+        };
+        let mut bits = ptr::null_mut();
+        let color = unsafe {
+            CreateDIBSection(
+                ptr::null_mut(),
+                &info,
+                DIB_RGB_COLORS,
+                &mut bits,
+                ptr::null_mut(),
+                0,
+            )
+        };
+        if color.is_null() || bits.is_null() {
+            eprintln!("tray: CreateDIBSection failed");
+            return ptr::null_mut();
+        }
+        unsafe {
+            ptr::copy_nonoverlapping(bgra.as_ptr(), bits.cast::<u8>(), bgra.len());
+        }
+        let mask = unsafe { CreateBitmap(size, size, 1, 1, ptr::null()) };
+        let icon = unsafe {
+            CreateIconIndirect(&ICONINFO {
+                fIcon: 1,
+                xHotspot: 0,
+                yHotspot: 0,
+                hbmMask: mask,
+                hbmColor: color,
+            })
         };
         unsafe {
-            CreateIconFromResourceEx(
-                ico.as_ptr() as *mut u8,
-                ico.len() as u32,
-                1,
-                0x00030000,
-                0,
-                0,
-                LR_DEFAULTCOLOR,
-            )
+            if !color.is_null() {
+                DeleteObject(color);
+            }
+            if !mask.is_null() {
+                DeleteObject(mask);
+            }
         }
+        if icon.is_null() {
+            eprintln!("tray: CreateIconIndirect failed");
+        }
+        icon
     }
 }
 
@@ -1312,5 +1356,13 @@ mod tests {
         let data = icon_png(IconKind::Idle, 0);
         let reader = png::Decoder::new(Cursor::new(&data)).read_info().unwrap();
         assert!(reader.info().width >= 8);
+    }
+
+    #[test]
+    fn premul_bgra_keeps_opaque_ink_and_clears_holes() {
+        let out = premul_bgra(&[0xe6, 0xcc, 0x4d, 0xff, 0xe6, 0xcc, 0x4d, 0x00]);
+        assert_eq!(out, [0x4d, 0xcc, 0xe6, 0xff, 0, 0, 0, 0]);
+        let half = premul_bgra(&[0x10, 0x20, 0x40, 0x80]);
+        assert_eq!(half, [0x20, 0x10, 0x08, 0x80]);
     }
 }
