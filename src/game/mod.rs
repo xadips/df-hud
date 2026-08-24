@@ -1,6 +1,10 @@
 //! Process watch. Linux `/proc` argv0 basename; Windows Toolhelp.
 //! Existence and uptime only — not a window list.
 
+pub mod desktop;
+pub mod gamekeys;
+pub mod presence;
+
 use chrono::{DateTime, Utc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -8,7 +12,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::model::GameState;
-use crate::poller::Notify;
+use crate::wake::Notify;
 
 pub const DEFAULT_PROCESS: &str = "DeadFrontier.exe";
 
@@ -367,7 +371,11 @@ pub mod linux {
         let parent = std::os::unix::process::parent_id();
         let mut out = Vec::new();
         for entry in entries.flatten() {
-            let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|s| s.parse::<u32>().ok())
+            else {
                 continue;
             };
             if pid == self_pid || pid == parent {
@@ -521,9 +529,7 @@ pub mod windows {
         let self_pid = std::process::id();
         let mut out = Vec::new();
         for process in processes {
-            if process.pid == self_pid
-                || !process.exe.to_ascii_lowercase().contains(&needle)
-            {
+            if process.pid == self_pid || !process.exe.to_ascii_lowercase().contains(&needle) {
                 continue;
             }
             out.push(format!("pid {}: {}", process.pid, process.exe));

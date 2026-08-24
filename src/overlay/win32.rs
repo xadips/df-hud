@@ -15,8 +15,6 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
-
 use glow::Context as Glow;
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{
@@ -50,9 +48,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::app;
 use crate::cli::OverlayArgs;
 use crate::config;
-use crate::gpu::Gpu;
-use crate::present;
-use crate::wgl::GlSurface;
+use crate::overlay::{self, gpu::Gpu, wgl::GlSurface};
 
 pub const OVERLAY_CLASS: &str = "df-hud";
 pub const DUMMY_CLASS: &str = "df-hud-wgl-dummy";
@@ -524,7 +520,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut needs_present = true;
 
     let started = Instant::now();
-    let mut next_tick = started + Duration::from_secs(1);
+    let mut next_tick = overlay::start_tick(started);
 
     loop {
         OverlayWindow::pump();
@@ -536,18 +532,16 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
             eprintln!("clean shutdown after {swaps} swaps");
             return Ok(());
         }
-        if args.duration > Duration::ZERO && started.elapsed() >= args.duration {
+        if overlay::expired(started, args.duration) {
             eprintln!("clean shutdown after {swaps} swaps");
             return Ok(());
         }
 
         let now = Instant::now();
-        if now >= next_tick {
-            next_tick = now + Duration::from_secs(1);
+        if overlay::due(now, &mut next_tick) {
             needs_present = true;
-            if watch.poll() {
-                handle.replace_config(watch.cfg.clone());
-                gpu.set_font(&watch.cfg.hud.font);
+            if let Some(cfg) = overlay::take_reload(&mut watch) {
+                overlay::push_config(&handle, &mut gpu, &cfg);
             }
         }
         let vis = handle.visible.load(Ordering::SeqCst);
@@ -591,46 +585,15 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         if mapped && needs_present {
             win.reassert_exstyle();
             surface.make_current()?;
-            let built = present::overlay_scene(
-                &handle.store.derive(Utc::now()),
-                &watch.cfg,
-                &handle.groups,
-                buf_w as f32,
-                buf_h as f32,
-            );
+            let built = overlay::scene(&handle, &watch.cfg, buf_w as f32, buf_h as f32);
             gpu.draw(buf_w, buf_h, buf_w, buf_h, &built)?;
             surface.swap()?;
             swaps += 1;
         }
 
-        let timeout_ms = poll_timeout_ms(now, started, args.duration, next_tick);
+        let timeout_ms = overlay::wait_ms(now, started, args.duration, next_tick);
         OverlayWindow::wait(timeout_ms, Some(handle.wake.event_handle()));
         handle.wake.take();
         needs_present = true;
-    }
-}
-
-fn poll_timeout_ms(
-    now: Instant,
-    started: Instant,
-    duration: Duration,
-    next_tick: Instant,
-) -> u32 {
-    let mut deadline: Option<Instant> = Some(next_tick);
-    let consider = |acc: &mut Option<Instant>, at: Instant| {
-        *acc = Some(match *acc {
-            Some(prev) => prev.min(at),
-            None => at,
-        });
-    };
-    if duration > Duration::ZERO {
-        consider(&mut deadline, started + duration);
-    }
-    match deadline {
-        None => 1000,
-        Some(at) => at
-            .saturating_duration_since(now)
-            .as_millis()
-            .min(u32::MAX as u128) as u32,
     }
 }

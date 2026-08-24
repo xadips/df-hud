@@ -9,7 +9,7 @@
 //! `roundtrip` with no buffer. Swap first → `layerSurface was not configured, but
 //! a buffer was attached`.
 //!
-//! This module owns the EGL window and `eglSwapBuffers`. [`crate::gpu::Gpu`] is
+//! This module owns the EGL window and `eglSwapBuffers`. [`crate::overlay::gpu::Gpu`] is
 //! shader + atlas + draw list and must not see `WlSurface`.
 
 use std::collections::HashSet;
@@ -21,8 +21,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
-
 use glow::Context as Glow;
 use wayland_backend::client::ObjectId;
 use wayland_egl::WlEglSurface;
@@ -30,8 +28,7 @@ use wayland_egl::WlEglSurface;
 use crate::app;
 use crate::cli::OverlayArgs;
 use crate::config::{self, Config};
-use crate::egl::Egl;
-use crate::present;
+use crate::overlay::{self, egl::Egl, gpu::Gpu, present};
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::wl_compositor::WlCompositor;
@@ -52,8 +49,6 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{self, 
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
     self, ZwlrLayerSurfaceV1,
 };
-
-use crate::gpu::Gpu;
 
 pub struct Args {
     output: Option<String>,
@@ -83,9 +78,9 @@ impl From<OverlayArgs> for Args {
 /// surface-agnostic (WGL uses the same Gpu).
 struct GlWindow {
     egl: Egl,
-    display: crate::egl::Display,
-    context: crate::egl::Context,
-    surface: crate::egl::Surface,
+    display: crate::overlay::egl::Display,
+    context: crate::overlay::egl::Context,
+    surface: crate::overlay::egl::Surface,
     window: WlEglSurface,
 }
 
@@ -113,7 +108,7 @@ impl GlWindow {
         let config = egl.choose_es3_alpha_config(display)?;
         let context = egl.create_es3_context(display, config)?;
         let window = WlEglSurface::new(surface, buf_w, buf_h)?;
-        let native = window.ptr() as crate::egl::NativeWindow;
+        let native = window.ptr() as crate::overlay::egl::NativeWindow;
         let surface = egl.create_window_surface(display, config, native)?;
         egl.make_current(display, surface, surface, context)?;
         egl.swap_interval(display, 0)?;
@@ -121,8 +116,8 @@ impl GlWindow {
         let gl = unsafe { Glow::from_loader_function(|name| egl.get_proc_address(name)) };
         eprintln!(
             "EGL {major}.{minor} vendor={} version={}",
-            egl.query_string(display, crate::egl::VENDOR),
-            egl.query_string(display, crate::egl::VERSION)
+            egl.query_string(display, crate::overlay::egl::VENDOR),
+            egl.query_string(display, crate::overlay::egl::VERSION)
         );
 
         Ok((
@@ -261,13 +256,7 @@ impl App {
             }
         }
         let built = match &self.handle {
-            Some(h) => present::overlay_scene(
-                &h.store.derive(Utc::now()),
-                &self.cfg,
-                &h.groups,
-                self.logical_w as f32,
-                self.logical_h as f32,
-            ),
+            Some(h) => overlay::scene(h, &self.cfg, self.logical_w as f32, self.logical_h as f32),
             None => present::empty_overlay_scene(
                 &self.cfg,
                 self.logical_w as f32,
@@ -707,7 +696,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
     app.present()?;
 
     let started = Instant::now();
-    let mut next_tick = started + Duration::from_secs(1);
+    let mut next_tick = overlay::start_tick(started);
 
     loop {
         event_queue.dispatch_pending(&mut app)?;
@@ -715,7 +704,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
             app.drop_gpu_before_window();
             return Err("compositor closed the layer surface".into());
         }
-        if args.duration > Duration::ZERO && started.elapsed() >= args.duration {
+        if overlay::expired(started, args.duration) {
             eprintln!("clean shutdown after {} swaps", app.swaps);
             app.drop_gpu_before_window();
             return Ok(());
@@ -729,16 +718,12 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         }
 
         let now = Instant::now();
-        if now >= next_tick {
-            next_tick = now + Duration::from_secs(1);
+        if overlay::due(now, &mut next_tick) {
             app.needs_present = true;
-            if watch.poll() {
-                app.cfg = watch.cfg.clone();
-                if let Some(h) = &app.handle {
-                    h.replace_config(app.cfg.clone());
-                }
-                if let Some(gpu) = &mut app.gpu {
-                    gpu.set_font(&app.cfg.hud.font);
+            if let Some(cfg) = overlay::take_reload(&mut watch) {
+                app.cfg = cfg.clone();
+                if let (Some(h), Some(gpu)) = (app.handle.as_ref(), app.gpu.as_mut()) {
+                    overlay::push_config(h, gpu, &cfg);
                 }
             }
         }
@@ -757,7 +742,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         }
 
         event_queue.flush()?;
-        let timeout_ms = poll_timeout_ms(now, started, args.duration, next_tick);
+        let timeout_ms = overlay::wait_ms(now, started, args.duration, next_tick) as i32;
         match event_queue.prepare_read() {
             None => continue,
             Some(guard) => {
@@ -798,30 +783,5 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
                 }
             }
         }
-    }
-}
-
-fn poll_timeout_ms(
-    now: Instant,
-    started: Instant,
-    duration: Duration,
-    next_tick: Instant,
-) -> i32 {
-    let mut deadline: Option<Instant> = Some(next_tick);
-    let consider = |acc: &mut Option<Instant>, at: Instant| {
-        *acc = Some(match *acc {
-            Some(prev) => prev.min(at),
-            None => at,
-        });
-    };
-    if duration > Duration::ZERO {
-        consider(&mut deadline, started + duration);
-    }
-    match deadline {
-        None => -1,
-        Some(at) => at
-            .saturating_duration_since(now)
-            .as_millis()
-            .min(i32::MAX as u128) as i32,
     }
 }

@@ -29,8 +29,8 @@ impl Credentials {
         !self.user_id.is_empty() && !self.password.is_empty() && !self.sc.is_empty()
     }
 
-    pub fn to_df(&self) -> crate::dfclient::Credentials {
-        crate::dfclient::Credentials {
+    pub fn to_df(&self) -> crate::net::dfclient::Credentials {
+        crate::net::dfclient::Credentials {
             user_id: self.user_id.clone(),
             password: self.password.clone(),
             sc: self.sc.clone(),

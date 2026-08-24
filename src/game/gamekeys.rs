@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use crate::config::GameKeys as GameKeysCfg;
-use crate::desktop::{Client, Placement};
+use crate::game::desktop::{Client, Placement};
 use crate::model::GameState;
 
 pub struct Keys {
@@ -195,7 +195,7 @@ pub fn spawn(handle: Arc<crate::app::Handle>, stop: Arc<std::sync::atomic::Atomi
     std::thread::Builder::new()
         .name("df-hud-gamekeys".into())
         .spawn(move || {
-            let send = crate::desktop::new_client();
+            let send = crate::game::desktop::new_client();
             while !stop.load(Ordering::SeqCst) && !handle.stopped() {
                 let cfg = handle.cfg.lock().unwrap().game_keys.clone();
                 let game = handle.game.state();

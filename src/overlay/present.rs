@@ -2,14 +2,14 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::bossmap::{self, MarkCategory};
-use crate::citymap;
+use crate::app::groups::Groups;
 use crate::config::Config;
+use crate::data::bossmap::{self, MarkCategory};
+use crate::data::citymap;
 use crate::format;
-use crate::groups::Groups;
-use crate::layout::Viewport;
 use crate::model::{Challenge, CityEvent, CityEventKind, CityMark, View as ModelView, XpStability};
-use crate::scene::{self, Line, MapCell, MapMarker, MapView, View};
+use crate::overlay::layout::Viewport;
+use crate::overlay::scene::{self, Line, MapCell, MapMarker, MapView, View};
 
 const BOARD_GAP_PX: f32 = 6.0;
 const DONE_RGB: [f32; 4] = [
@@ -1563,11 +1563,23 @@ mod tests {
         let b4 = mv.markers.iter().find(|m| m.text == "B4").expect("B4");
         assert_eq!(i4.ink, [1.0, 1.0, 1.0, 1.0]);
         assert_eq!(b4.ink, [1.0, 1.0, 1.0, 1.0]);
-        assert!(i4.color[2] > 0.6, "boss chip/ring stays blue, not the letter");
-        assert!(b4.color[0] > 0.9 && b4.color[1] > 0.7, "bandit chip stays amber");
+        assert!(
+            i4.color[2] > 0.6,
+            "boss chip/ring stays blue, not the letter"
+        );
+        assert!(
+            b4.color[0] > 0.9 && b4.color[1] > 0.7,
+            "bandit chip stays amber"
+        );
         assert!(!i4.ring && !b4.ring);
         let rows = map_list(
-            &[&mark("I4", 1, true, Duration::from_secs(60), &["2 x Titan"])],
+            &[&mark(
+                "I4",
+                1,
+                true,
+                Duration::from_secs(60),
+                &["2 x Titan"],
+            )],
             20,
             false,
         );

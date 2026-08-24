@@ -3,11 +3,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::dfclient;
+use crate::net::dfclient;
 
 const SCHEMA_VERSION: i32 = 1;
 const MAX_BODY: u64 = 8 << 20;
@@ -112,20 +111,8 @@ fn fetch(
     timeout: Duration,
     fetched_at: DateTime<Utc>,
 ) -> Result<Catalog, String> {
-    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
-    let resp = agent
-        .get(url)
-        .set("User-Agent", user_agent)
-        .call()
+    let raw = crate::net::http::get_bytes(url, user_agent, timeout, MAX_BODY, &[])
         .map_err(|e| format!("catalog: {e}"))?;
-    if resp.status() != 200 {
-        return Err(format!("catalog: HTTP {}", resp.status()));
-    }
-    let mut raw = Vec::new();
-    resp.into_reader()
-        .take(MAX_BODY)
-        .read_to_end(&mut raw)
-        .map_err(|e| format!("catalog: reading body: {e}"))?;
     let body = String::from_utf8_lossy(&raw);
     if dfclient::looks_like_html(&body) {
         return Err(
@@ -208,7 +195,7 @@ pub fn ensure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dfclient::parse_flash;
+    use crate::net::dfclient::parse_flash;
 
     fn load_fixture() -> Catalog {
         let raw = std::fs::read_to_string(

@@ -43,7 +43,7 @@ df-hud already depends on their bossmap feed; credit is in the README.
    of Ground Zero, and there is no such place. The only way out of that outpost is
    west.
 
-Each of these is in `src/citymap.rs` tests, so a regenerated map that breaks one of them
+Each of these is in `src/data/citymap.rs` tests, so a regenerated map that breaks one of them
 fails the build rather than quietly changing where df-hud sends you.
 
 ## Orientation: `y` increases southwards

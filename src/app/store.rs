@@ -6,14 +6,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::bossmap::{self, BossMap};
-use crate::catalog::Catalog;
-use crate::citymap;
+use crate::data::bossmap::{self, BossMap};
+use crate::data::catalog::Catalog;
+use crate::data::citymap;
+use crate::data::xp;
+use crate::format;
 use crate::model::{
     Challenge, Deadline, GameState, Ns, PollerStatus, PresenceState, RunState, Snapshot, Tick,
     View, XpRate, XpSample, XpSource, XpStability,
 };
-use crate::xp;
 
 const DF_TIME_OFFSET: i64 = 1_200_000_000;
 const DF_FOREVER: i64 = (1 << 31) - 8;
@@ -293,7 +294,7 @@ impl Store {
                     let ago = Utc::now().signed_duration_since(seed.started_at);
                     eprintln!(
                         "session: resuming the run started {} ago",
-                        format_ago(ago.to_std().unwrap_or_default())
+                        format::ago(ago.to_std().unwrap_or_default())
                     );
                 }
             }
@@ -596,21 +597,6 @@ fn fire_run_change(on_change: Option<Arc<dyn Fn() + Send + Sync>>, changed: bool
     }
 }
 
-fn format_ago(d: Duration) -> String {
-    let secs = d.as_secs();
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    match (h, m, s) {
-        (0, 0, s) => format!("{s}s"),
-        (0, m, 0) => format!("{m}m"),
-        (0, m, s) => format!("{m}m{s}s"),
-        (h, 0, 0) => format!("{h}h"),
-        (h, m, 0) => format!("{h}h{m}m"),
-        (h, m, s) => format!("{h}h{m}m{s}s"),
-    }
-}
-
 fn end_run_locked(s: &mut Inner, at: DateTime<Utc>, why: &str) -> bool {
     let Some(start) = s.run_start.take() else {
         return false;
@@ -618,7 +604,7 @@ fn end_run_locked(s: &mut Inner, at: DateTime<Utc>, why: &str) -> bool {
     if at > start {
         eprintln!(
             "session: run ended after {} ({why})",
-            format_ago((at - start).to_std().unwrap_or_default())
+            format::ago((at - start).to_std().unwrap_or_default())
         );
     }
     true
@@ -691,8 +677,8 @@ fn update_run_locked(s: &mut Inner, snap: &Snapshot) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dfclient::parse_flash;
-    use crate::presence;
+    use crate::game::presence;
+    use crate::net::dfclient::parse_flash;
     use chrono::TimeZone;
     use std::path::Path;
 
@@ -706,7 +692,7 @@ mod tests {
         )
         .unwrap();
         let vars = parse_flash(&raw).unwrap();
-        crate::catalog::parse(&vars, Utc::now()).unwrap()
+        crate::data::catalog::parse(&vars, Utc::now()).unwrap()
     }
 
     fn sample_player_record() -> HashMap<String, String> {

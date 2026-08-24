@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-const RAW: &str = include_str!("../assets/citymap.txt");
+const RAW: &str = include_str!("../../assets/citymap.txt");
 const UNREACHABLE: i32 = -1;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -406,10 +406,7 @@ pub fn outpost_name(x: i32, y: i32) -> &'static str {
 }
 
 pub fn outpost_coords(name: &str) -> Option<(i32, i32)> {
-    OUTPOSTS
-        .iter()
-        .find(|o| o.name == name)
-        .map(|o| (o.x, o.y))
+    OUTPOSTS.iter().find(|o| o.name == name).map(|o| (o.x, o.y))
 }
 
 #[cfg(test)]

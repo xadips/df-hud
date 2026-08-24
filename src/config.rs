@@ -8,7 +8,7 @@ use std::time::{Duration as StdDuration, SystemTime};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::hotkeys;
+use crate::app::hotkeys;
 
 const DEFAULT_BASE_URL: &str = "https://fairview.deadfrontier.com/onlinezombiemmo";
 const DEFAULT_ALLSTATS_URL: &str =
@@ -544,13 +544,13 @@ fn canonicalize_hotkey(
 }
 
 impl Game {
-    pub fn window_match(&self) -> crate::desktop::Match {
+    pub fn window_match(&self) -> crate::game::desktop::Match {
         let class = if self.window_class.trim().is_empty() {
             self.process.clone()
         } else {
             self.window_class.clone()
         };
-        crate::desktop::Match {
+        crate::game::desktop::Match {
             class,
             ignore_titles: self.window_title_ignore.clone(),
             launcher_title: String::new(),
@@ -573,7 +573,7 @@ impl Config {
         Ok(cfg)
     }
 
-    pub fn launcher_window_match(&self) -> crate::desktop::Match {
+    pub fn launcher_window_match(&self) -> crate::game::desktop::Match {
         let mut m = self.game.window_match();
         m.launcher_title = self.game_keys.launcher_title.clone();
         m
@@ -1362,8 +1362,7 @@ mod tests {
 
     #[test]
     fn idle_faster_than_active_is_backwards() {
-        let err = Config::parse("[poll]\nactive_interval = 60\nidle_interval = 30\n")
-            .unwrap_err();
+        let err = Config::parse("[poll]\nactive_interval = 60\nidle_interval = 30\n").unwrap_err();
         assert!(err.to_string().contains("backwards"), "{}", err);
     }
 

@@ -3,7 +3,7 @@
 //! Widget x/y come from defaults (`df-hud.example.toml`).
 //! Map is a tiny fake city, not `citymap.txt`.
 
-use crate::scene::{Line, MapCell, MapMarker, MapView, View};
+use crate::overlay::scene::{Line, MapCell, MapMarker, MapView, View};
 
 #[cfg(target_os = "linux")]
 pub fn clock_hms() -> String {
