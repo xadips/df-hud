@@ -32,6 +32,7 @@ pub fn clock_hms() -> String {
 pub fn view(clock: &str) -> View {
     View {
         status: "df-hud overlay".into(),
+        status_color: None,
         clock: clock.to_string(),
         xp: "12,345,678".into(),
         xp_color: None,

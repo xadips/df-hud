@@ -18,6 +18,7 @@ const LINE_HEIGHT: f32 = 1.25;
 #[derive(Clone, Debug, Default)]
 pub struct View {
     pub status: String,
+    pub status_color: Option<[f32; 4]>,
     pub clock: String,
     pub xp: String,
     pub xp_color: Option<[f32; 4]>,
@@ -133,7 +134,7 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
             cfg.hud.margin_left + cfg.widget.status.x,
             cfg.hud.margin_top + cfg.widget.status.y,
             font_px(cfg, cfg.widget.status.font_size, xf),
-            hud_color,
+            view.status_color.unwrap_or(hud_color),
             &[view.status.as_str()],
         );
     }
@@ -638,6 +639,7 @@ mod tests {
     fn dummy_view() -> View {
         View {
             status: "df-hud overlay".into(),
+            status_color: None,
             clock: "12:00:00".into(),
             xp: "12,345,678".into(),
             xp_color: None,

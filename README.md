@@ -33,7 +33,7 @@ Working today:
   window is still something you can see and stop
 - A headless core with `-once`, `-print-view`, `-print-hud`, `-dump-fields`,
   `-dump-challenges`, `-check-config` and `-check-game` for looking at real data
-  with no GUI
+  with no GUI. `--print-view` is an alias of `--once`.
 
 ## Keybinds
 

@@ -220,7 +220,6 @@ impl Drop for Handle {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PrintOpts {
-    pub view: bool,
     pub hud: bool,
 }
 
@@ -507,21 +506,13 @@ pub fn start_with(
         }
     }
 
-    if print.view || print.hud {
+    if print.hud {
         let handle = handle.clone();
         poller::spawn("df-hud-print", stop.clone(), move || {
             while !handle.stopped() {
                 let view = handle.store.derive(Utc::now());
                 let cfg = handle.cfg.lock().unwrap().clone();
-                if print.view {
-                    match crate::model::marshal_indent(&view) {
-                        Ok(json) => println!("{json}"),
-                        Err(err) => eprintln!("view: {err}"),
-                    }
-                }
-                if print.hud {
-                    print!("{}", crate::present::format_hud(&view, &cfg, &handle.groups));
-                }
+                print!("{}", crate::present::format_hud(&view, &cfg, &handle.groups));
                 std::thread::sleep(Duration::from_secs(1));
             }
         });

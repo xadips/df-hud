@@ -28,6 +28,8 @@ pub enum MarkCategory {
 
 #[derive(Clone, Debug, Default)]
 pub struct BossMap {
+    /// Parse time. Overlay does not draw map age yet.
+    #[allow(dead_code)]
     pub fetched_at: DateTime<Utc>,
     pub server_time: DateTime<Utc>,
     pub hash: String,
@@ -60,6 +62,7 @@ impl BossMap {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub fn age(&self, now: DateTime<Utc>) -> Duration {
         if now > self.fetched_at {
             (now - self.fetched_at).to_std().unwrap_or(Duration::ZERO)
