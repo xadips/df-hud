@@ -79,7 +79,7 @@ impl Gpu {
             );
         }
 
-        let font = Font::load(Some(font_want))?;
+        let font = Font::load(Some(font_want));
         let atlas = Atlas::new();
         let program = unsafe { link_program(&gl)? };
         let u_resolution = unsafe {
@@ -147,7 +147,7 @@ impl Gpu {
             atlas,
             px: 0.0,
         };
-        gpu.upload_atlas()?;
+        gpu.upload_atlas();
         eprintln!(
             "font={} atlas={}x{} (hinted LCD, 1px outline)",
             gpu.font.name, gpu.atlas.width, gpu.atlas.height
@@ -207,7 +207,7 @@ impl Gpu {
             }
         }
         if self.atlas.dirty {
-            self.upload_atlas()?;
+            self.upload_atlas();
         }
 
         let mut verts = Vec::new();
@@ -350,7 +350,7 @@ impl Gpu {
         Ok(())
     }
 
-    fn upload_atlas(&mut self) -> Result<(), Box<dyn Error>> {
+    fn upload_atlas(&mut self) {
         unsafe {
             self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
             self.gl.bind_texture(glow::TEXTURE_2D, Some(self.atlas_tex));
@@ -367,7 +367,6 @@ impl Gpu {
             );
         }
         self.atlas.dirty = false;
-        Ok(())
     }
 }
 
