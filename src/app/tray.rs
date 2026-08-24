@@ -288,8 +288,10 @@ fn raster(rgba: [u8; 4], size: i32) -> Vec<u8> {
             let mut hits = 0;
             for sy in 0..SAMPLES {
                 for sx in 0..SAMPLES {
-                    let fx = (x as f64 + (sx as f64 + 0.5) / SAMPLES as f64) / size as f64;
-                    let fy = (y as f64 + (sy as f64 + 0.5) / SAMPLES as f64) / size as f64;
+                    let fx = (f64::from(x) + (f64::from(sx) + 0.5) / f64::from(SAMPLES))
+                        / f64::from(size);
+                    let fy = (f64::from(y) + (f64::from(sy) + 0.5) / f64::from(SAMPLES))
+                        / f64::from(size);
                     if covers(fx, fy) {
                         hits += 1;
                     }
@@ -298,7 +300,8 @@ fn raster(rgba: [u8; 4], size: i32) -> Vec<u8> {
             if hits == 0 {
                 continue;
             }
-            let a = (rgba[3] as f64 * hits as f64 / (SAMPLES * SAMPLES) as f64 + 0.5) as u8;
+            let a =
+                (f64::from(rgba[3]) * f64::from(hits) / f64::from(SAMPLES * SAMPLES) + 0.5) as u8;
             let i = ((y * size + x) * 4) as usize;
             out[i] = rgba[0];
             out[i + 1] = rgba[1];
@@ -384,7 +387,10 @@ fn run(handle: Arc<Handle>, stop: Arc<AtomicBool>) {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::*;
+    use super::{
+        icon_kind, ipc_unconnected, menu_alert_from, raster, tooltip_with_presence, version_label,
+        Arc, AtomicBool, Handle, IconKind, Ordering, ACTIVE, ERROR, ICON_SIZE, IDLE, WARN,
+    };
     use std::time::Duration;
 
     use ksni::blocking::TrayMethods;

@@ -270,7 +270,7 @@ impl Watcher {
             (true, false) => eprintln!("hud: showing"),
             (false, true) => eprintln!("hud: hiding - {}", next.reason),
             (false, false) if prev.reason != next.reason => {
-                eprintln!("hud: still hidden - {}", next.reason)
+                eprintln!("hud: still hidden - {}", next.reason);
             }
             _ => {}
         }

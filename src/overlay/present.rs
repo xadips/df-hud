@@ -1,4 +1,4 @@
-//! model.View → scene::View.
+//! model.View → `scene::View`.
 
 use chrono::{DateTime, Utc};
 
@@ -657,9 +657,7 @@ impl ChallengeRow {
 fn challenge_rows(c: &Challenge, now: DateTime<Utc>, cfg: &Config) -> Vec<ChallengeRow> {
     let remaining = c.remaining(now);
     let mut countdown = String::new();
-    if remaining > std::time::Duration::ZERO
-        && remaining < std::time::Duration::from_secs(24 * 3600)
-    {
+    if remaining > std::time::Duration::ZERO && remaining < std::time::Duration::from_hours(24) {
         countdown = format::countdown(remaining);
     }
     let urgent = !c.complete()
@@ -721,9 +719,9 @@ fn map_view(v: &ModelView, cfg: &Config) -> MapView {
                     x,
                     y,
                     fill: [
-                        s.r as f32 / 255.0,
-                        s.g as f32 / 255.0,
-                        s.b as f32 / 255.0,
+                        f32::from(s.r) / 255.0,
+                        f32::from(s.g) / 255.0,
+                        f32::from(s.b) / 255.0,
                         s.alpha as f32,
                     ],
                 });
@@ -812,7 +810,12 @@ fn outpost_letter(name: &str) -> Option<&'static str> {
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> [f32; 4] {
-    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+    [
+        f32::from(r) / 255.0,
+        f32::from(g) / 255.0,
+        f32::from(b) / 255.0,
+        1.0,
+    ]
 }
 
 fn mark_color(m: &CityMark) -> [f32; 4] {

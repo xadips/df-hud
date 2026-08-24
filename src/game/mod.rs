@@ -129,7 +129,7 @@ impl Watcher {
                     .unwrap_or_default()
             ),
             (false, true) => {
-                eprintln!("game: closed after {:?}", prev.elapsed(Utc::now()))
+                eprintln!("game: closed after {:?}", prev.elapsed(Utc::now()));
             }
             (true, true) => eprintln!("game: relaunched (pid {})", next.pid),
             _ => {}
@@ -268,7 +268,7 @@ pub fn oldest_matching<'a>(procs: &'a [Proc], exe: &str, self_pid: u32) -> Optio
 
 #[cfg(target_os = "linux")]
 pub mod linux {
-    use super::*;
+    use super::{base_name, DateTime, GameState, Scanner, Utc, DEFAULT_PROCESS};
     use std::fs;
     use std::path::{Path, PathBuf};
 

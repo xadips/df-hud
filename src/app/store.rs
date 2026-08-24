@@ -18,8 +18,8 @@ use crate::model::{
 
 const DF_TIME_OFFSET: i64 = 1_200_000_000;
 const DF_FOREVER: i64 = (1 << 31) - 8;
-const DF_PLAUSIBLE_WINDOW: Duration = Duration::from_secs(365 * 24 * 3600);
-const PRESENCE_MAX_AGE: Duration = Duration::from_secs(2 * 60);
+const DF_PLAUSIBLE_WINDOW: Duration = Duration::from_hours(8760);
+const PRESENCE_MAX_AGE: Duration = Duration::from_mins(2);
 
 pub fn parse_snapshot(
     vars: &HashMap<String, String>,

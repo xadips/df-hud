@@ -180,7 +180,10 @@ fn focus_matches(
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::*;
+    use super::{
+        fire, game_focused, slots_from_cfg, Arc, AtomicBool, Binding, Ordering, Slot, MOD_ALT,
+        MOD_CONTROL, MOD_SHIFT, MOD_WIN,
+    };
     use std::fs::{self, OpenOptions};
     use std::io::Read;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -344,7 +347,8 @@ mod linux {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
+        use super::hypr_lua_keys;
+        use crate::app::hotkeys::parse_binding;
 
         #[test]
         fn lua_keys_match_hl_bind() {

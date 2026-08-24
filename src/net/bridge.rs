@@ -166,12 +166,11 @@ impl Inner {
         if !ctype.is_empty() && !ctype.starts_with("application/json") {
             return (415, "text/plain", b"expected application/json".to_vec());
         }
-        let parsed: Value = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(_) => {
-                eprintln!("bridge: rejected a payload: malformed JSON");
-                return (400, "text/plain", b"malformed JSON".to_vec());
-            }
+        let parsed: Value = if let Ok(v) = serde_json::from_slice(body) {
+            v
+        } else {
+            eprintln!("bridge: rejected a payload: malformed JSON");
+            return (400, "text/plain", b"malformed JSON".to_vec());
         };
         let vars = parsed.get("userVars").and_then(Value::as_object);
         let Some(vars) = vars else {
@@ -215,25 +214,22 @@ impl Inner {
             );
         }
         let salt = parsed.get("skeygen").map(coerce).unwrap_or_default();
-        match self.creds.set(cr, &salt) {
-            Ok(changed) => {
-                if changed {
-                    let extra = if salt.is_empty() {
-                        ""
-                    } else {
-                        ", signing salt reported"
-                    };
-                    eprintln!("bridge: credentials updated from browser{extra}");
-                    if let Some(fn_) = self.hooks.lock().unwrap().on_credentials.clone() {
-                        fn_();
-                    }
+        if let Ok(changed) = self.creds.set(cr, &salt) {
+            if changed {
+                let extra = if salt.is_empty() {
+                    ""
+                } else {
+                    ", signing salt reported"
+                };
+                eprintln!("bridge: credentials updated from browser{extra}");
+                if let Some(fn_) = self.hooks.lock().unwrap().on_credentials.clone() {
+                    fn_();
                 }
-                (200, "application/json", b"{\"ok\":true}".to_vec())
             }
-            Err(_) => {
-                eprintln!("bridge: could not store credentials");
-                (500, "text/plain", b"could not store credentials".to_vec())
-            }
+            (200, "application/json", b"{\"ok\":true}".to_vec())
+        } else {
+            eprintln!("bridge: could not store credentials");
+            (500, "text/plain", b"could not store credentials".to_vec())
         }
     }
 

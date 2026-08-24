@@ -325,7 +325,7 @@ impl Default for Config {
                 active_interval: Duration::from_secs(10),
                 idle_interval: Duration(StdDuration::from_secs(120)),
                 challenge_interval: Duration::from_secs(30),
-                catalog_interval: Duration(StdDuration::from_secs(24 * 3600)),
+                catalog_interval: Duration(StdDuration::from_hours(24)),
                 jitter: 0.10,
                 only_when_game_running: true,
                 backoff_max: Duration(StdDuration::from_secs(300)),
@@ -466,7 +466,7 @@ impl Default for Widget {
                 show_completed: true,
                 show_sections: true,
                 max_shown: 0,
-                urgent_within: Duration(StdDuration::from_secs(2 * 3600)),
+                urgent_within: Duration(StdDuration::from_hours(2)),
             },
         }
     }
@@ -669,10 +669,10 @@ impl Config {
 
     pub fn signing_salt(&self, reported: impl Fn() -> String) -> String {
         let got = reported();
-        if !got.is_empty() {
-            got
-        } else {
+        if got.is_empty() {
             self.df.skeygen.clone()
+        } else {
+            got
         }
     }
 
@@ -799,7 +799,7 @@ impl Config {
             "game.scan_interval",
             self.game.scan_interval.0,
             StdDuration::from_secs(1),
-            StdDuration::from_secs(5 * 60),
+            StdDuration::from_mins(5),
         );
         self.game_keys.fps_key = self.game_keys.fps_key.trim().to_string();
         if self.game_keys.fps_display && self.game_keys.fps_key.is_empty() {
@@ -1235,7 +1235,7 @@ fn set_toml_bool(src: &str, table: &str, key: &str, enabled: bool) -> String {
     let mut lines: Vec<String> = if src.is_empty() {
         Vec::new()
     } else {
-        src.lines().map(|l| l.to_string()).collect()
+        src.lines().map(std::string::ToString::to_string).collect()
     };
     let mut current = String::new();
     let mut found_table = false;

@@ -415,9 +415,7 @@ fn view_from_fixture(path: &Path) -> Result<model::View, Box<dyn Error>> {
 }
 
 pub fn check_config_text(config: Option<&Path>) -> Result<String, Box<dyn Error>> {
-    let path = config
-        .map(Path::to_path_buf)
-        .unwrap_or_else(config::default_path);
+    let path = config.map_or_else(config::default_path, Path::to_path_buf);
     let cfg = Config::load(&path)?;
     Ok(format!(
         "config ok ({})\nrequest budget: about {:.0}/hour while playing, {:.0}/hour idle\n",
@@ -428,9 +426,7 @@ pub fn check_config_text(config: Option<&Path>) -> Result<String, Box<dyn Error>
 }
 
 pub fn check_game_text(config: Option<&Path>) -> Result<String, Box<dyn Error>> {
-    let path = config
-        .map(Path::to_path_buf)
-        .unwrap_or_else(config::default_path);
+    let path = config.map_or_else(config::default_path, Path::to_path_buf);
     let cfg = Config::load(&path)?;
     Ok(game_report(&cfg))
 }
@@ -479,14 +475,14 @@ fn game_report(cfg: &Config) -> String {
 }
 
 fn format_found(state: GameState) -> String {
-    let launched = state
-        .started_at
-        .map(|t| {
+    let launched = state.started_at.map_or_else(
+        || "unknown".into(),
+        |t| {
             t.with_timezone(&chrono::Local)
                 .format("%Y-%m-%d %H:%M:%S")
                 .to_string()
-        })
-        .unwrap_or_else(|| "unknown".into());
+        },
+    );
     format!(
         "FOUND: pid {}, launched {} ({} ago)\n",
         state.pid,
@@ -583,9 +579,7 @@ pub fn dump_record_fields(vars: &std::collections::HashMap<String, String>) -> S
 type OneshotContext = (Config, std::sync::Arc<Creds>, Client, Store);
 
 fn oneshot_setup(config: Option<&Path>) -> Result<OneshotContext, Box<dyn Error>> {
-    let path = config
-        .map(Path::to_path_buf)
-        .unwrap_or_else(config::default_path);
+    let path = config.map_or_else(config::default_path, Path::to_path_buf);
     let cfg = Config::load(&path)?;
     let (creds, catalog) = crate::app::load_creds_and_catalog(&cfg)?;
     let store = Store::new(catalog);
@@ -661,8 +655,7 @@ Load the Outpost home page with the bridge userscript or the the bridge userscri
     }
     let (level, gold) = store
         .snapshot()
-        .map(|s| (s.level, s.gold_member))
-        .unwrap_or((0, false));
+        .map_or((0, false), |s| (s.level, s.gold_member));
     print!(
         "{}",
         format_challenge_board(&vars, level, gold, chrono::Utc::now())

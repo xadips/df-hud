@@ -320,15 +320,9 @@ fn apply_activity(server: &Server, args: Option<Value>) {
         && !state.has_position
         && !state.in_outpost
         && !state.loading
-        && last
-            .as_ref()
-            .map(|p| p.details != state.details)
-            .unwrap_or(true);
+        && last.as_ref().is_none_or(|p| p.details != state.details);
     let kind = presence_kind(&state);
-    let kind_changed = last
-        .as_ref()
-        .map(|p| presence_kind(p) != kind)
-        .unwrap_or(true);
+    let kind_changed = last.as_ref().is_none_or(|p| presence_kind(p) != kind);
     *last = Some(state.clone());
     drop(last);
 

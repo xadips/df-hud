@@ -108,7 +108,7 @@ impl GlWindow {
         let config = egl.choose_es3_alpha_config(display)?;
         let context = egl.create_es3_context(display, config)?;
         let window = WlEglSurface::new(surface, buf_w, buf_h)?;
-        let native = window.ptr() as crate::overlay::egl::NativeWindow;
+        let native = window.ptr().cast_mut();
         let surface = egl.create_window_surface(display, config, native)?;
         egl.make_current(display, surface, surface, context)?;
         egl.swap_interval(display, 0)?;
@@ -198,8 +198,7 @@ impl App {
     fn current_cfg(&self) -> Config {
         self.handle
             .as_ref()
-            .map(|h| h.cfg.lock().unwrap().clone())
-            .unwrap_or_else(|| self.cfg.clone())
+            .map_or_else(|| self.cfg.clone(), |h| h.cfg.lock().unwrap().clone())
     }
 
     fn sync_config(&mut self) {
@@ -215,8 +214,8 @@ impl App {
     }
 
     fn buffer_size(&self) -> (i32, i32) {
-        let w = ((self.logical_w as u64 * self.frac_scale as u64 + 60) / 120).max(1) as i32;
-        let h = ((self.logical_h as u64 * self.frac_scale as u64 + 60) / 120).max(1) as i32;
+        let w = ((self.logical_w as u64 * u64::from(self.frac_scale) + 60) / 120).max(1) as i32;
+        let h = ((self.logical_h as u64 * u64::from(self.frac_scale) + 60) / 120).max(1) as i32;
         (w, h)
     }
 
@@ -731,8 +730,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
     let vis = app
         .handle
         .as_ref()
-        .map(|h| h.visible.load(Ordering::SeqCst))
-        .unwrap_or(true);
+        .is_none_or(|h| h.visible.load(Ordering::SeqCst));
     if vis {
         app.ensure_gpu()?;
     }
@@ -792,8 +790,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         let vis = app
             .handle
             .as_ref()
-            .map(|h| h.visible.load(Ordering::SeqCst))
-            .unwrap_or(true);
+            .is_none_or(|h| h.visible.load(Ordering::SeqCst));
         if vis {
             if !app.mapped && !app.awaiting_remap {
                 app.request_remap();
@@ -812,7 +809,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         let timeout_ms = overlay::wait_ms(now, started, args.duration, next_tick) as i32;
         if let Some(guard) = event_queue.prepare_read() {
             let fd = event_queue.as_fd().as_raw_fd();
-            let wake_fd = app.handle.as_ref().map(|h| h.wake.read_fd()).unwrap_or(-1);
+            let wake_fd = app.handle.as_ref().map_or(-1, |h| h.wake.read_fd());
             let mut pfds = [
                 libc::pollfd {
                     fd,
