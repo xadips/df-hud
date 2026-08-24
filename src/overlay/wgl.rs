@@ -15,8 +15,9 @@ use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::{GetDC, ReleaseDC, HDC};
 use windows_sys::Win32::Graphics::OpenGL::{
     wglCreateContext, wglDeleteContext, wglGetProcAddress, wglMakeCurrent, ChoosePixelFormat,
-    DescribePixelFormat, SetPixelFormat, SwapBuffers, HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW,
-    PFD_SUPPORT_COMPOSITION, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR,
+    DescribePixelFormat, GetPixelFormat, SetPixelFormat, SwapBuffers, HGLRC, PFD_DOUBLEBUFFER,
+    PFD_DRAW_TO_WINDOW, PFD_SUPPORT_COMPOSITION, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA,
+    PIXELFORMATDESCRIPTOR,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, WS_OVERLAPPEDWINDOW,
@@ -68,54 +69,67 @@ impl GlSurface {
         let (choose_fmt, create_ctx, get_attr, swap_interval_fn, opengl32) =
             load_wgl_extensions(instance)?;
 
-        let attribs = [
-            WGL_DRAW_TO_WINDOW_ARB,
-            1,
-            WGL_SUPPORT_OPENGL_ARB,
-            1,
-            WGL_DOUBLE_BUFFER_ARB,
-            1,
-            WGL_PIXEL_TYPE_ARB,
-            WGL_TYPE_RGBA_ARB,
-            WGL_COLOR_BITS_ARB,
-            32,
-            WGL_ALPHA_BITS_ARB,
-            8,
-            WGL_ACCELERATION_ARB,
-            WGL_FULL_ACCELERATION_ARB,
-            WGL_DEPTH_BITS_ARB,
-            0,
-            WGL_STENCIL_BITS_ARB,
-            0,
-            WGL_SAMPLE_BUFFERS_ARB,
-            0,
-            0,
-        ];
-        let mut format = 0i32;
-        let mut count = 0u32;
-        let ok = unsafe {
-            choose_fmt(
-                hdc,
-                attribs.as_ptr(),
-                ptr::null(),
+        let existing = unsafe { GetPixelFormat(hdc) };
+        let format = if existing != 0 {
+            existing
+        } else {
+            let attribs = [
+                WGL_DRAW_TO_WINDOW_ARB,
                 1,
-                &mut format,
-                &mut count,
-            )
+                WGL_SUPPORT_OPENGL_ARB,
+                1,
+                WGL_DOUBLE_BUFFER_ARB,
+                1,
+                WGL_PIXEL_TYPE_ARB,
+                WGL_TYPE_RGBA_ARB,
+                WGL_COLOR_BITS_ARB,
+                32,
+                WGL_ALPHA_BITS_ARB,
+                8,
+                WGL_ACCELERATION_ARB,
+                WGL_FULL_ACCELERATION_ARB,
+                WGL_DEPTH_BITS_ARB,
+                0,
+                WGL_STENCIL_BITS_ARB,
+                0,
+                WGL_SAMPLE_BUFFERS_ARB,
+                0,
+                0,
+            ];
+            let mut format = 0i32;
+            let mut count = 0u32;
+            let ok = unsafe {
+                choose_fmt(
+                    hdc,
+                    attribs.as_ptr(),
+                    ptr::null(),
+                    1,
+                    &mut format,
+                    &mut count,
+                )
+            };
+            if ok == 0 || count == 0 || format == 0 {
+                unsafe { ReleaseDC(hwnd, hdc) };
+                return Err(
+                    "wglChoosePixelFormatARB found no 32-bit RGBA + 8-bit alpha format".into(),
+                );
+            }
+
+            let mut pfd: PIXELFORMATDESCRIPTOR = unsafe { zeroed() };
+            pfd.nSize = size_of::<PIXELFORMATDESCRIPTOR>() as u16;
+            pfd.nVersion = 1;
+            unsafe { DescribePixelFormat(hdc, format, pfd.nSize as u32, &mut pfd) };
+            if unsafe { SetPixelFormat(hdc, format, &pfd) } == 0 {
+                unsafe { ReleaseDC(hwnd, hdc) };
+                return Err(last_err("SetPixelFormat"));
+            }
+            format
         };
-        if ok == 0 || count == 0 || format == 0 {
-            unsafe { ReleaseDC(hwnd, hdc) };
-            return Err("wglChoosePixelFormatARB found no 32-bit RGBA + 8-bit alpha format".into());
-        }
 
         let mut pfd: PIXELFORMATDESCRIPTOR = unsafe { zeroed() };
         pfd.nSize = size_of::<PIXELFORMATDESCRIPTOR>() as u16;
         pfd.nVersion = 1;
         unsafe { DescribePixelFormat(hdc, format, pfd.nSize as u32, &mut pfd) };
-        if unsafe { SetPixelFormat(hdc, format, &pfd) } == 0 {
-            unsafe { ReleaseDC(hwnd, hdc) };
-            return Err(last_err("SetPixelFormat"));
-        }
 
         let mut alpha = 0i32;
         let alpha_attr = WGL_ALPHA_BITS_ARB;
