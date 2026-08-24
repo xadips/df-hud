@@ -43,10 +43,6 @@ const XP_PENDING: &str = "--";
 const XP_ROUGH: &str = "~";
 const ONSLAUGHT: i32 = 3000;
 
-pub fn blank() -> View {
-    View::default()
-}
-
 pub fn hud_lines(v: &ModelView, cfg: &Config, groups: &Groups) -> Vec<String> {
     let scene = from_view(v, cfg, groups);
     let mut lines = Vec::new();

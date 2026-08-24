@@ -471,8 +471,8 @@ mod windows {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow,
-        DispatchMessageW, GetCursorPos, GetMessageW, InsertMenuW, LoadCursorW, PeekMessageW,
-        PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetMenuDefaultItem, TrackPopupMenu,
+        DispatchMessageW, GetCursorPos, InsertMenuW, LoadCursorW, PeekMessageW, PostQuitMessage,
+        RegisterClassExW, SetForegroundWindow, TrackPopupMenu,
         TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MF_CHECKED,
         MF_SEPARATOR, MF_STRING, MF_UNCHECKED, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY,
         WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSEXW, WS_OVERLAPPED,
