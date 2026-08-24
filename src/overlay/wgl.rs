@@ -2,7 +2,7 @@
 //!
 //! `wglCreateContext` + `ChoosePixelFormat` cannot request a core profile or
 //! guarantee alpha. The dummy-context dance loads `wglChoosePixelFormatARB` and
-//! `wglCreateContextAttribsARB`. Dummy HWND uses [`crate::win32::DUMMY_CLASS`],
+//! `wglCreateContextAttribsARB`. Dummy HWND uses [`crate::overlay::win32::DUMMY_CLASS`],
 //! not the overlay class — `WM_DESTROY` on a shared class ended the WGL spike.
 
 use std::error::Error;
@@ -22,7 +22,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, WS_OVERLAPPEDWINDOW,
 };
 
-use crate::win32::{last_err, wide, DUMMY_CLASS};
+use crate::overlay::win32::{last_err, wide, DUMMY_CLASS};
 
 const WGL_DRAW_TO_WINDOW_ARB: i32 = 0x2001;
 const WGL_ACCELERATION_ARB: i32 = 0x2003;

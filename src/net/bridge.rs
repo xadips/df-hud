@@ -2,17 +2,17 @@
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
 #[cfg(test)]
 use std::net::SocketAddr;
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
+use crate::app::groups;
 use crate::config;
-use crate::creds::{Credentials, Store as Creds};
-use crate::groups;
+use crate::net::creds::{Credentials, Store as Creds};
 
 const MAX_BODY: usize = 1 << 20;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

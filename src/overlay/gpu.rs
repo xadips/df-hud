@@ -9,8 +9,8 @@ use std::error::Error;
 
 use glow::{Context as Glow, HasContext, PixelUnpackData};
 
-use crate::font::{Atlas, Font};
-use crate::scene::{Scene, Text};
+use crate::overlay::font::{Atlas, Font};
+use crate::overlay::scene::{Scene, Text};
 
 /// `hud.font_size` is CSS points. Convert with `size * 4/3` to pixels;
 /// 12pt → 16px at the 2560×1440 authoring size.
@@ -164,7 +164,7 @@ impl Gpu {
         if want == self.font_want {
             return;
         }
-        match crate::font::try_load(Some(want)) {
+        match crate::overlay::font::try_load(Some(want)) {
             Ok(font) => {
                 self.font = font;
                 self.font_want = want.to_string();
@@ -283,7 +283,7 @@ impl Gpu {
         let mut pen = x0;
         let mut ink_top = f32::MAX;
         let mut ink_bot = f32::MIN;
-        let mut runs: Vec<(f32, f32, crate::font::Glyph)> = Vec::new();
+        let mut runs: Vec<(f32, f32, crate::overlay::font::Glyph)> = Vec::new();
         for ch in text.text.chars() {
             let glyph = self
                 .atlas

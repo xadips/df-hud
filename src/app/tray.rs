@@ -461,7 +461,7 @@ mod linux {
 #[cfg(windows)]
 mod windows {
     use super::*;
-    use crate::win32::wide;
+    use crate::overlay::win32::wide;
     use std::mem::{size_of, zeroed};
     use std::ptr;
     use std::time::Duration;
@@ -473,10 +473,10 @@ mod windows {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow,
         DispatchMessageW, GetCursorPos, InsertMenuW, LoadCursorW, PeekMessageW, PostQuitMessage,
-        RegisterClassExW, SetForegroundWindow, TrackPopupMenu,
-        TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MF_CHECKED,
-        MF_SEPARATOR, MF_STRING, MF_UNCHECKED, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY,
-        WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSEXW, WS_OVERLAPPED,
+        RegisterClassExW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
+        CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
+        TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSEXW,
+        WS_OVERLAPPED,
     };
 
     const WM_TRAY: u32 = WM_APP + 1;
@@ -871,7 +871,10 @@ mod tests {
     #[test]
     fn icon_kind_follows_the_game() {
         assert_eq!(icon_kind(None, false, false), IconKind::Idle);
-        assert_eq!(icon_kind(Some(&View::default()), false, false), IconKind::Idle);
+        assert_eq!(
+            icon_kind(Some(&View::default()), false, false),
+            IconKind::Idle
+        );
         assert_eq!(
             icon_kind(
                 Some(&View {
@@ -919,37 +922,21 @@ mod tests {
             have_data: true,
             ..View::default()
         };
-        assert!(ipc_unconnected(
-            Some(&playing),
-            true,
-            false,
-            false,
-            false
-        ));
-        assert!(!ipc_unconnected(
-            Some(&playing),
-            true,
-            false,
-            true,
-            false
-        ));
-        assert!(!ipc_unconnected(
-            Some(&playing),
-            true,
-            false,
-            false,
-            true
-        ));
+        assert!(ipc_unconnected(Some(&playing), true, false, false, false));
+        assert!(!ipc_unconnected(Some(&playing), true, false, true, false));
+        assert!(!ipc_unconnected(Some(&playing), true, false, false, true));
         let tip = tooltip_with_presence(Some(&playing), vis, false, true);
-        assert!(
-            tip.contains("Discord IPC is not connected"),
-            "{tip}"
-        );
+        assert!(tip.contains("Discord IPC is not connected"), "{tip}");
     }
 
     #[test]
     fn icon_png_is_a_reticle() {
-        for kind in [IconKind::Active, IconKind::Idle, IconKind::Warn, IconKind::Error] {
+        for kind in [
+            IconKind::Active,
+            IconKind::Idle,
+            IconKind::Warn,
+            IconKind::Error,
+        ] {
             for size in [16, 64] {
                 let data = icon_png(kind, size);
                 let dec = png::Decoder::new(Cursor::new(&data));

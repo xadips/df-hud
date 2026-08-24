@@ -78,6 +78,22 @@ pub fn position(x: i32, y: i32, z: i32) -> String {
     }
 }
 
+/// Compact elapsed time for logs (`1m2s`), not the spaced HUD countdown.
+pub fn ago(d: Duration) -> String {
+    let secs = d.as_secs();
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    match (h, m, s) {
+        (0, 0, s) => format!("{s}s"),
+        (0, m, 0) => format!("{m}m"),
+        (0, m, s) => format!("{m}m{s}s"),
+        (h, 0, 0) => format!("{h}h"),
+        (h, m, 0) => format!("{h}h{m}m"),
+        (h, m, s) => format!("{h}h{m}m{s}s"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +156,9 @@ mod tests {
         assert_eq!(rate(-1.0), "");
         assert_eq!(position(1058, 1019, 2), "1058, 1019 (floor 2)");
         assert_eq!(position(1058, 1019, 0), "1058, 1019");
+        assert_eq!(ago(Duration::from_secs(7)), "7s");
+        assert_eq!(ago(Duration::from_secs(60)), "1m");
+        assert_eq!(ago(Duration::from_secs(62)), "1m2s");
+        assert_eq!(ago(Duration::from_secs(3600 + 60 + 2)), "1h1m2s");
     }
 }

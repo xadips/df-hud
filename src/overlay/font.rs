@@ -18,7 +18,7 @@ use swash::zeno::Format;
 use swash::FontRef;
 
 /// Go Mono Bold. License: `assets/fonts/Go-fonts-LICENSE` (BSD, Bigelow & Holmes / Go project).
-const BUNDLED_TTF: &[u8] = include_bytes!("../assets/fonts/Go-Mono-Bold.ttf");
+const BUNDLED_TTF: &[u8] = include_bytes!("../../assets/fonts/Go-Mono-Bold.ttf");
 const BUNDLED_NAME: &str = "Go Mono Bold";
 
 /// System monospace bold faces, in the order we prefer. Filenames only — no Fontconfig.
@@ -184,11 +184,7 @@ fn rasterize_ref(
     let advance = font.glyph_metrics(&[]).scale(px).advance_width(id);
     let mut ctx = ctx.borrow_mut();
     let mut scaler = ctx.builder(font).size(px).hint(true).build();
-    let format = if lcd {
-        Format::Subpixel
-    } else {
-        Format::Alpha
-    };
+    let format = if lcd { Format::Subpixel } else { Format::Alpha };
     let Some(image) = Render::new(&[Source::Outline])
         .format(format)
         .render(&mut scaler, id)
@@ -252,12 +248,9 @@ fn image_to_rgb(image: &swash::scale::image::Image) -> Vec<u8> {
             .flat_map(|p| [p[0], p[1], p[2]])
             .collect(),
         Content::SubpixelMask if image.data.len() >= n * 3 => image.data[..n * 3].to_vec(),
-        Content::Mask if image.data.len() >= n => image
-            .data
-            .iter()
-            .take(n)
-            .flat_map(|&a| [a, a, a])
-            .collect(),
+        Content::Mask if image.data.len() >= n => {
+            image.data.iter().take(n).flat_map(|&a| [a, a, a]).collect()
+        }
         _ => vec![0u8; n * 3],
     }
 }

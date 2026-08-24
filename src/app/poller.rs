@@ -2,56 +2,22 @@
 
 use chrono::Utc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::challenges;
+use crate::app::rategate::{Cancelled, Gate};
+use crate::app::state;
+use crate::app::store::Store;
 use crate::config::Config;
-use crate::creds::Store as Creds;
-use crate::dfclient::{self, Client};
+use crate::data::challenges;
 use crate::model::{PollerStatus, Tick};
-use crate::rategate::{Cancelled, Gate};
-use crate::state;
-use crate::store::Store;
+use crate::net::creds::Store as Creds;
+use crate::net::dfclient::{self, Client};
+use crate::wake::Notify;
 
 pub const MIN_REQUEST_GAP: Duration = Duration::from_secs(1);
 const PAUSE_RECHECK: Duration = Duration::from_secs(2);
-
-pub struct Notify {
-    flag: Mutex<bool>,
-    cvar: Condvar,
-}
-
-impl Notify {
-    pub fn new() -> Self {
-        Self {
-            flag: Mutex::new(false),
-            cvar: Condvar::new(),
-        }
-    }
-
-    pub fn ping(&self) {
-        *self.flag.lock().unwrap() = true;
-        self.cvar.notify_all();
-    }
-
-    pub fn wait_timeout(&self, d: Duration) {
-        let mut g = self.flag.lock().unwrap();
-        if *g {
-            *g = false;
-            return;
-        }
-        let (mut g, _) = self.cvar.wait_timeout(g, d).unwrap();
-        *g = false;
-    }
-}
-
-impl Default for Notify {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 fn jitter_unit() -> f64 {
     static N: AtomicU64 = AtomicU64::new(1);
@@ -574,8 +540,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::creds::Credentials;
-    use crate::dfclient::Client;
+    use crate::net::creds::Credentials;
+    use crate::net::dfclient::Client;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
     use std::sync::Mutex as StdMutex;

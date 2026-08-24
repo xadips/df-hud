@@ -164,7 +164,10 @@ fn game_focused(handle: &crate::app::Handle) -> bool {
     if !place.known || place.address.is_empty() {
         return false;
     }
-    crate::desktop::new_client().active_address().as_deref() == Some(place.address.as_str())
+    crate::game::desktop::new_client()
+        .active_address()
+        .as_deref()
+        == Some(place.address.as_str())
 }
 
 #[cfg(target_os = "linux")]
@@ -299,7 +302,7 @@ mod linux {
         for slot in slots {
             let lhs = hypr_lhs(&slot.binding);
             let cmd = format!("keyword bind {lhs},exec,{script} {}", slot.action);
-            crate::desktop::hypr_command(&cmd)?;
+            crate::game::desktop::hypr_command(&cmd)?;
             bound.push(lhs);
         }
         Ok(())
@@ -307,7 +310,7 @@ mod linux {
 
     fn unbind_all(bound: &mut Vec<String>) {
         for lhs in bound.drain(..) {
-            let _ = crate::desktop::hypr_command(&format!("keyword unbind {lhs}"));
+            let _ = crate::game::desktop::hypr_command(&format!("keyword unbind {lhs}"));
         }
     }
 }

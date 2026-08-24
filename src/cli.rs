@@ -1,6 +1,5 @@
 //! One argv walk. Overlay draws `store.derive` through `present`; GPU skipped here.
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -10,17 +9,20 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 #[cfg(test)]
 use serde::Deserialize;
+#[cfg(test)]
+use std::collections::HashMap;
 
-use crate::catalog;
-use crate::challenges;
+use crate::app::store::Store;
 use crate::config::{self, Config};
-use crate::creds::Store as Creds;
-use crate::desktop;
-use crate::dfclient::{self, Client};
+#[cfg(test)]
+use crate::data::catalog;
+use crate::data::challenges;
 use crate::format;
 use crate::game;
+use crate::game::desktop;
 use crate::model::{self, GameState, Tick};
-use crate::store::Store;
+use crate::net::creds::Store as Creds;
+use crate::net::dfclient::Client;
 
 const WITHHELD_FIELD: &[&str] = &["pass", "token", "cookie", "auth", "secretkey", "session"];
 
@@ -192,12 +194,8 @@ where
         );
     }
 
-    let overlay_only = duration_set
-        || output_set
-        || namespace_set
-        || list_outputs
-        || monitor_set
-        || list_monitors;
+    let overlay_only =
+        duration_set || output_set || namespace_set || list_outputs || monitor_set || list_monitors;
     let mode = if version {
         Some("--version")
     } else if check_config {
@@ -458,7 +456,9 @@ fn game_report(cfg: &Config) -> String {
             out.push_str("NOT FOUND - the game does not appear to be running.\n");
             let similar = game::similar_processes("frontier");
             if similar.is_empty() {
-                out.push_str("Nothing similar is running either. Start the game and run this again.\n");
+                out.push_str(
+                    "Nothing similar is running either. Start the game and run this again.\n",
+                );
             } else {
                 out.push_str(
                     "\nProcesses with a similar name, in case the executable is named differently:\n",
@@ -491,23 +491,8 @@ fn format_found(state: GameState) -> String {
         "FOUND: pid {}, launched {} ({} ago)\n",
         state.pid,
         launched,
-        format_ago(state.elapsed(chrono::Utc::now()))
+        format::ago(state.elapsed(chrono::Utc::now()))
     )
-}
-
-fn format_ago(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    match (h, m, s) {
-        (0, 0, s) => format!("{s}s"),
-        (0, m, 0) => format!("{m}m"),
-        (0, m, s) => format!("{m}m{s}s"),
-        (h, 0, 0) => format!("{h}h"),
-        (h, m, 0) => format!("{h}h{m}m"),
-        (h, m, s) => format!("{h}h{m}m{s}s"),
-    }
 }
 
 fn window_report(cfg: &Config, state: GameState) -> String {
@@ -563,7 +548,9 @@ The HUD will still work; window-following visibility is disabled.\n"
                         window.class, window.pid, title
                     ));
                 }
-                out.push_str("\nIf one of those is the game, set game.window_class to its class.\n");
+                out.push_str(
+                    "\nIf one of those is the game, set game.window_class to its class.\n",
+                );
             }
             out.push_str(
                 "\nUntil then the HUD cannot follow the game window, and monitor = \"auto\" leaves placement to the desktop.\n",
@@ -600,31 +587,9 @@ fn oneshot_setup(
         .map(Path::to_path_buf)
         .unwrap_or_else(config::default_path);
     let cfg = Config::load(&path)?;
-    cfg.ensure_data_dir()?;
-    let creds = std::sync::Arc::new(Creds::new(cfg.credentials_path()));
-    if let Err(err) = creds.load() {
-        eprintln!("credentials: {err}");
-    }
-    let catalog = match catalog::ensure(
-        &cfg.catalog_path(),
-        &cfg.df.allstats_url,
-        &cfg.df.user_agent,
-        cfg.poll.catalog_interval.0,
-        cfg.df.timeout.0,
-        chrono::Utc::now(),
-    ) {
-        Ok(c) => Some(c),
-        Err(err) => {
-            eprintln!("catalog: unavailable ({err}); level thresholds will be missing");
-            None
-        }
-    };
+    let (creds, catalog) = crate::app::load_creds_and_catalog(&cfg)?;
     let store = Store::new(catalog);
-    let agent = ureq::AgentBuilder::new()
-        .timeout(cfg.df.timeout.0)
-        .user_agent(&cfg.df.user_agent)
-        .build();
-    let client = Client::with_agent(agent, &cfg.df.base_url, &cfg.df.user_agent);
+    let client = crate::app::df_client(&cfg);
     Ok((cfg, creds, client, store))
 }
 
@@ -651,7 +616,10 @@ fn run_once(config: Option<&Path>, dump_fields: bool) -> Result<(), Box<dyn Erro
     if let Ok(state) = game::scan(game_process(&cfg)) {
         store.set_game(state);
     }
-    print!("{}", model::marshal_indent(&store.derive(chrono::Utc::now()))?);
+    print!(
+        "{}",
+        model::marshal_indent(&store.derive(chrono::Utc::now()))?
+    );
     Ok(())
 }
 
@@ -695,7 +663,10 @@ Load the Outpost home page with the bridge userscript or the the bridge userscri
         .snapshot()
         .map(|s| (s.level, s.gold_member))
         .unwrap_or((0, false));
-    print!("{}", format_challenge_board(&vars, level, gold, chrono::Utc::now()));
+    print!(
+        "{}",
+        format_challenge_board(&vars, level, gold, chrono::Utc::now())
+    );
     Ok(())
 }
 
@@ -713,7 +684,10 @@ fn format_challenge_board(
         out.push_str(&format!("\n[{status}] {kind:<8} {}\n", challenge.name));
         let remaining = challenge.remaining(now);
         if !remaining.is_zero() {
-            out.push_str(&format!("        ends in {}\n", format::countdown(remaining)));
+            out.push_str(&format!(
+                "        ends in {}\n",
+                format::countdown(remaining)
+            ));
         }
         for objective in &challenge.objectives {
             let frac = if objective.target <= 0 {
@@ -750,7 +724,7 @@ fn format_challenge_board(
 fn load_allstats_catalog(at: DateTime<Utc>) -> Result<catalog::Catalog, Box<dyn Error>> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/allstats.txt");
     let raw = std::fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
-    let vars = dfclient::parse_flash(&raw)?;
+    let vars = crate::net::dfclient::parse_flash(&raw)?;
     catalog::parse(&vars, at).map_err(|err| err.into())
 }
 
@@ -910,7 +884,11 @@ mod tests {
         assert!(view.challenges.as_ref().map_or(true, Vec::is_empty));
         assert!(view.status.is_empty());
         assert_eq!(
-            crate::present::hud_lines(&view, &Config::default(), &crate::groups::Groups::new()),
+            crate::overlay::present::hud_lines(
+                &view,
+                &Config::default(),
+                &crate::app::groups::Groups::new()
+            ),
             ["Xp/Hr: --", "Ground Zero"]
         );
     }
@@ -986,11 +964,9 @@ mod tests {
         vars.insert("challenge_0_objectives_1_target".into(), "100".into());
         vars.insert("challenge_0_objective_1_player_score".into(), "55".into());
         vars.insert("challenge_0_reward_exp".into(), "2500".into());
-        let now = chrono::DateTime::<chrono::Utc>::from_timestamp(
-            1_200_000_000 + 584_880_000 + 60,
-            0,
-        )
-        .unwrap();
+        let now =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(1_200_000_000 + 584_880_000 + 60, 0)
+                .unwrap();
         let text = format_challenge_board(&vars, 100, false, now);
         assert!(text.starts_with("1 challenges (level 100)\n"), "{text}");
         assert!(text.contains("[ ] personal Summer Death"), "{text}");

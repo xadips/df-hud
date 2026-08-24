@@ -490,7 +490,7 @@ impl Serialize for CityMark {
     }
 }
 
-/// model.View. Not [`crate::scene::View`]. Overlay and tray fields only;
+/// model.View. Not [`crate::overlay::scene::View`]. Overlay and tray fields only;
 /// player record extras stay on [`Snapshot`].
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::desktop::{Client, Match, Placement};
 use crate::game;
+use crate::game::desktop::{Client, Match, Placement};
 use crate::model::{GameState, Visibility};
-use crate::poller::Notify;
+use crate::wake::Notify;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rules {
@@ -264,7 +264,7 @@ pub fn spawn(watcher: Arc<Watcher>, stop: Arc<AtomicBool>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::desktop::Placement;
+    use crate::game::desktop::Placement;
     use chrono::Utc;
     use std::sync::mpsc;
 

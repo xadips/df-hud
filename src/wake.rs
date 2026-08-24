@@ -1,8 +1,9 @@
 //! Cross-thread overlay wakeup: Linux pipe fd, Windows event HANDLE.
+//! [`Notify`] is the condvar used by process and visibility watchers.
 
 use std::io;
-#[cfg(unix)]
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::fd::RawFd;
@@ -110,5 +111,40 @@ impl Drop for Wake {
                 unsafe { CloseHandle(self.event) };
             }
         }
+    }
+}
+
+pub struct Notify {
+    flag: Mutex<bool>,
+    cvar: Condvar,
+}
+
+impl Notify {
+    pub fn new() -> Self {
+        Self {
+            flag: Mutex::new(false),
+            cvar: Condvar::new(),
+        }
+    }
+
+    pub fn ping(&self) {
+        *self.flag.lock().unwrap() = true;
+        self.cvar.notify_all();
+    }
+
+    pub fn wait_timeout(&self, d: Duration) {
+        let mut g = self.flag.lock().unwrap();
+        if *g {
+            *g = false;
+            return;
+        }
+        let (mut g, _) = self.cvar.wait_timeout(g, d).unwrap();
+        *g = false;
+    }
+}
+
+impl Default for Notify {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::citymap;
+use crate::data::citymap;
 use crate::model::PresenceState;
 
 const INNER_CITY: &str = "Inner City";
@@ -589,8 +589,8 @@ fn create_pipe(path: &str, first: bool) -> io::Result<windows_sys::Win32::Founda
     const SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;GRGW;;;AU)";
     const SDDL_REVISION_1: u32 = 1;
 
-    let name = crate::win32::wide(path);
-    let sddl = crate::win32::wide(SDDL);
+    let name = crate::overlay::win32::wide(path);
+    let sddl = crate::overlay::win32::wide(SDDL);
     let mut sd = std::ptr::null_mut();
     let ok = unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -745,7 +745,7 @@ impl Drop for WindowsListener {
         if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             return;
         }
-        let name = crate::win32::wide(&self.path);
+        let name = crate::overlay::win32::wide(&self.path);
         let wake = unsafe {
             CreateFileW(
                 name.as_ptr(),
@@ -773,7 +773,7 @@ impl Drop for WindowsListener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::citymap;
+    use crate::data::citymap;
     use std::io::Cursor;
 
     #[test]

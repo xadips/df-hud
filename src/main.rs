@@ -18,47 +18,16 @@
 //!   does not end the process.
 
 mod app;
-mod bossmap;
-mod bridge;
-mod catalog;
-mod challenges;
-mod citymap;
 mod cli;
 mod config;
-mod creds;
-mod desktop;
-mod dfclient;
-#[cfg(test)]
-mod dummy;
-#[cfg(target_os = "linux")]
-mod egl;
-mod font;
+mod data;
 mod format;
 mod game;
-mod gamekeys;
-#[cfg(any(target_os = "linux", windows))]
-mod gpu;
-mod groups;
-mod hotkeys;
-mod layout;
 mod model;
-mod poller;
-mod presence;
-mod present;
-mod rategate;
-mod scene;
-mod state;
-mod store;
-mod tray;
-mod visibility;
+mod net;
+#[cfg(any(target_os = "linux", windows))]
+mod overlay;
 mod wake;
-#[cfg(target_os = "linux")]
-mod wayland;
-#[cfg(windows)]
-mod wgl;
-#[cfg(windows)]
-mod win32;
-mod xp;
 
 fn main() {
     if let Err(err) = run() {
@@ -73,11 +42,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("df-hud {}", env!("CARGO_PKG_VERSION"));
             #[cfg(target_os = "linux")]
             {
-                wayland::run(args.into())
+                overlay::wayland::run(args.into())
             }
             #[cfg(windows)]
             {
-                win32::run(args.into())
+                overlay::win32::run(args.into())
             }
             #[cfg(not(any(target_os = "linux", windows)))]
             {

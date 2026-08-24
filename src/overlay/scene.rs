@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use crate::config::{parse_color, Config};
-use crate::layout::{Transform, Viewport};
+use crate::overlay::layout::{Transform, Viewport};
 
 const PT_TO_PX: f32 = 4.0 / 3.0;
 const MAP_MIN_CELL: i32 = 6;
@@ -635,35 +635,10 @@ fn stroke_rect(scene: &mut Scene, x: f32, y: f32, w: f32, h: f32, width: f32, co
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::overlay::dummy;
 
     fn dummy_view() -> View {
-        View {
-            status: "df-hud overlay".into(),
-            status_color: None,
-            clock: "12:00:00".into(),
-            xp: "12,345,678".into(),
-            xp_color: None,
-            block: "Nastya's Holdout".into(),
-            block_sub: String::new(),
-            challenges: vec![],
-            bosses: vec![],
-            map: MapView {
-                player_x: 1008,
-                player_y: 1008,
-                cells: vec![MapCell {
-                    x: 1008,
-                    y: 1008,
-                    fill: [0.2, 0.4, 0.2, 1.0],
-                }],
-                markers: vec![],
-                dividers_x: vec![1008],
-                dividers_y: vec![],
-                list: vec![Line {
-                    text: "N  Nastya's Holdout".into(),
-                    ..Line::default()
-                }],
-            },
-        }
+        dummy::view("12:00:00")
     }
 
     fn vp_1440() -> Viewport {
@@ -752,11 +727,7 @@ mod tests {
         );
         assert!(
             scene.labels.iter().any(|t| {
-                t.text == "DH"
-                    && !t.outline
-                    && !t.lcd
-                    && t.center_h.is_some()
-                    && t.color[0] < 0.1
+                t.text == "DH" && !t.outline && !t.lcd && t.center_h.is_some() && t.color[0] < 0.1
             }),
             "chip letter is hinted grayscale ink, no outline"
         );
@@ -921,12 +892,7 @@ mod tests {
             .iter()
             .find(|t| t.text == "1h55m")
             .expect("short timer");
-        assert!(
-            (t0.x - t1.x).abs() < 0.05,
-            "timers {} vs {}",
-            t0.x,
-            t1.x
-        );
+        assert!((t0.x - t1.x).abs() < 0.05, "timers {} vs {}", t0.x, t1.x);
         let n0 = scene
             .labels
             .iter()
@@ -959,7 +925,12 @@ mod tests {
             .iter()
             .find(|f| (f.color[2] - 1.0).abs() < 0.02 && f.color[0] < 0.4)
             .expect("I5 chip");
-        assert!((green.w - blue.w).abs() < 0.05, "chip widths {} vs {}", green.w, blue.w);
+        assert!(
+            (green.w - blue.w).abs() < 0.05,
+            "chip widths {} vs {}",
+            green.w,
+            blue.w
+        );
     }
 
     #[test]

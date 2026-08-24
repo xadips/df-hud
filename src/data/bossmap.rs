@@ -3,7 +3,6 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::io::Read;
 use std::time::Duration;
 
 use crate::model::{CityEvent, CityEventKind, CityMark, Walk};
@@ -92,8 +91,8 @@ impl BossMap {
                 let mut reachable = false;
                 let off_map = loc[0] == ONSLAUGHT_COORD && loc[1] == ONSLAUGHT_COORD;
                 if !off_map {
-                    if let Some(w) =
-                        crate::citymap::default().route_from(dist, from[0], from[1], loc[0], loc[1])
+                    if let Some(w) = crate::data::citymap::default()
+                        .route_from(dist, from[0], from[1], loc[0], loc[1])
                     {
                         walk = crate::model::Walk {
                             blocks: w.blocks,
@@ -141,22 +140,17 @@ pub fn fetch(
     timeout: Duration,
     now: DateTime<Utc>,
 ) -> Result<BossMap, String> {
-    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
-    let resp = agent
-        .get(url)
-        .set("User-Agent", user_agent)
-        .set("Accept", "application/json")
-        .set("X-Requested-With", "XMLHttpRequest")
-        .call()
-        .map_err(|e| format!("bossmap: {e}"))?;
-    if resp.status() != 200 {
-        return Err(format!("bossmap: HTTP {}", resp.status()));
-    }
-    let mut body = Vec::new();
-    resp.into_reader()
-        .take(4 << 20)
-        .read_to_end(&mut body)
-        .map_err(|e| format!("bossmap: {e}"))?;
+    let body = crate::net::http::get_bytes(
+        url,
+        user_agent,
+        timeout,
+        4 << 20,
+        &[
+            ("Accept", "application/json"),
+            ("X-Requested-With", "XMLHttpRequest"),
+        ],
+    )
+    .map_err(|e| format!("bossmap: {e}"))?;
     parse(&body, now)
 }
 
@@ -529,10 +523,7 @@ mod tests {
             qrf_display_name("qrf", "QRF Extermination Mission"),
             "QRF Wasteland"
         );
-        assert_eq!(
-            qrf_display_name("qrfdr", "QRF Death Row"),
-            "QRF Death Row"
-        );
+        assert_eq!(qrf_display_name("qrfdr", "QRF Death Row"), "QRF Death Row");
         assert_eq!(qrf_marker("qrf", ""), QRF_MARKER);
         assert_eq!(qrf_marker("qrfdr", ""), QRF_DEATH_ROW_MARKER);
         assert_ne!(QRF_MARKER, QRF_DEATH_ROW_MARKER);

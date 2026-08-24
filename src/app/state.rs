@@ -72,11 +72,7 @@ impl Store {
                 Ok(())
             }
             _ => {
-                let aside = format!(
-                    "{}.corrupt-{}",
-                    self.path.display(),
-                    Utc::now().timestamp()
-                );
+                let aside = format!("{}.corrupt-{}", self.path.display(), Utc::now().timestamp());
                 fs::rename(&self.path, &aside).map_err(|e| {
                     format!("state file unusable and could not be moved aside: {e}")
                 })?;
@@ -106,7 +102,10 @@ impl Store {
                 return Ok(());
             }
             if let Some(last) = g.last_save {
-                if now.signed_duration_since(last).to_std().unwrap_or(Duration::ZERO)
+                if now
+                    .signed_duration_since(last)
+                    .to_std()
+                    .unwrap_or(Duration::ZERO)
                     < SAVE_INTERVAL
                 {
                     return Ok(());
@@ -174,7 +173,7 @@ impl Store {
         mut board: Vec<crate::model::Challenge>,
     ) -> Vec<crate::model::Challenge> {
         let done = self.get().challenge_done;
-        let newly = crate::challenges::apply_sticky(&mut board, &done);
+        let newly = crate::data::challenges::apply_sticky(&mut board, &done);
         if !newly.is_empty() {
             self.update(|st| {
                 for key in newly {
@@ -308,7 +307,11 @@ mod tests {
             .collect();
         assert_eq!(matches.len(), 1);
 
-        fs::write(&path, r#"{"schema_version":0,"challenge_done":{"x|1":true}}"#).unwrap();
+        fs::write(
+            &path,
+            r#"{"schema_version":0,"challenge_done":{"x|1":true}}"#,
+        )
+        .unwrap();
         let s2 = Store::new(&path);
         s2.load().unwrap();
         assert!(s2.get().challenge_done.is_empty());
@@ -466,7 +469,7 @@ mod tests {
         };
         let board = s.remember_challenge_board(vec![live.clone()]);
         assert!(board[0].complete());
-        assert!(s.get().challenge_done[&crate::challenges::cycle_key(&live)]);
+        assert!(s.get().challenge_done[&crate::data::challenges::cycle_key(&live)]);
 
         let uncompleted = Challenge {
             name: "Travel".into(),

@@ -1,31 +1,33 @@
 //! Composition root: catalog, creds, pollers, bridge, presence, overlay handle.
 
+pub mod groups;
+pub mod hotkeys;
+pub mod poller;
+pub mod rategate;
+pub mod state;
+pub mod store;
+pub mod tray;
+pub mod visibility;
+
 use chrono::{DateTime, Utc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::bossmap;
-use crate::bridge::{self, Hooks};
-use crate::catalog;
 use crate::config::Config;
-use crate::creds::Store as Creds;
-use crate::desktop;
-use crate::dfclient::Client;
-use crate::game;
-use crate::groups::Groups;
-use crate::hotkeys;
+use crate::data::{bossmap, catalog, xp};
+use crate::game::{self, desktop, presence};
 use crate::model::{RunState, Tick, XpSample, XpSource};
-use crate::poller::{self, ChallengePoller, PlayerPoller, MIN_REQUEST_GAP};
-use crate::presence;
-use crate::rategate::Gate;
-use crate::state;
-use crate::store::Store;
-use crate::tray;
-use crate::visibility;
+use crate::net::bridge::{self, Hooks};
+use crate::net::creds::Store as Creds;
+use crate::net::dfclient::Client;
 use crate::wake::Wake;
-use crate::xp;
+
+use groups::Groups;
+use poller::{ChallengePoller, PlayerPoller, MIN_REQUEST_GAP};
+use rategate::Gate;
+use store::Store;
 
 #[cfg(target_os = "linux")]
 static HUP: AtomicBool = AtomicBool::new(false);
@@ -47,7 +49,7 @@ pub struct Handle {
     challenges: Arc<ChallengePoller>,
     last_run_start: Mutex<Option<DateTime<Utc>>>,
     presence: Option<Arc<presence::Control>>,
-    pub gamekeys: Arc<crate::gamekeys::Keys>,
+    pub gamekeys: Arc<crate::game::gamekeys::Keys>,
 }
 
 impl Handle {
@@ -223,10 +225,9 @@ pub struct PrintOpts {
     pub hud: bool,
 }
 
-pub fn start_with(
-    cfg: Config,
-    print: PrintOpts,
-) -> Result<Arc<Handle>, Box<dyn std::error::Error>> {
+pub fn load_creds_and_catalog(
+    cfg: &Config,
+) -> Result<(Arc<Creds>, Option<catalog::Catalog>), Box<dyn std::error::Error>> {
     cfg.ensure_data_dir()?;
     let creds = Arc::new(Creds::new(cfg.credentials_path()));
     if let Err(err) = creds.load() {
@@ -240,15 +241,34 @@ pub fn start_with(
         cfg.df.timeout.0,
         Utc::now(),
     ) {
-        Ok(c) => {
-            eprintln!("catalog: {}", c.summary());
-            Some(c)
-        }
+        Ok(c) => Some(c),
         Err(err) => {
             eprintln!("catalog: unavailable ({err}); level thresholds will be missing");
             None
         }
     };
+    Ok((creds, catalog))
+}
+
+pub fn df_client(cfg: &Config) -> Client {
+    Client::with_agent(
+        ureq::AgentBuilder::new()
+            .timeout(cfg.df.timeout.0)
+            .user_agent(&cfg.df.user_agent)
+            .build(),
+        &cfg.df.base_url,
+        &cfg.df.user_agent,
+    )
+}
+
+pub fn start_with(
+    cfg: Config,
+    print: PrintOpts,
+) -> Result<Arc<Handle>, Box<dyn std::error::Error>> {
+    let (creds, catalog) = load_creds_and_catalog(&cfg)?;
+    if let Some(c) = &catalog {
+        eprintln!("catalog: {}", c.summary());
+    }
     let store = Arc::new(Store::new(catalog));
     if let Some(at) = creds.updated_at() {
         store.set_credentials_at(at);
@@ -275,15 +295,7 @@ pub fn start_with(
         store.set_on_run_change(move || persist_run(&hud, &persist));
     }
 
-    let agent = ureq::AgentBuilder::new()
-        .timeout(cfg.df.timeout.0)
-        .user_agent(&cfg.df.user_agent)
-        .build();
-    let client = Arc::new(Mutex::new(Client::with_agent(
-        agent,
-        &cfg.df.base_url,
-        &cfg.df.user_agent,
-    )));
+    let client = Arc::new(Mutex::new(df_client(&cfg)));
     let cfg = Arc::new(Mutex::new(cfg));
     let stop = Arc::new(AtomicBool::new(false));
     let game_running = Arc::new(AtomicBool::new(false));
@@ -297,7 +309,7 @@ pub fn start_with(
     } else {
         None
     };
-    let gamekeys = crate::gamekeys::Keys::new(&cfg.lock().unwrap().game_keys);
+    let gamekeys = crate::game::gamekeys::Keys::new(&cfg.lock().unwrap().game_keys);
 
     let (process, scan) = {
         let c = cfg.lock().unwrap();
@@ -400,7 +412,7 @@ pub fn start_with(
     });
     tray::spawn(handle.clone(), stop.clone());
     hotkeys::spawn(handle.clone(), stop.clone());
-    crate::gamekeys::spawn(handle.clone(), stop.clone());
+    crate::game::gamekeys::spawn(handle.clone(), stop.clone());
 
     poller::spawn("df-hud-poller", stop.clone(), {
         let player = player.clone();
@@ -512,7 +524,10 @@ pub fn start_with(
             while !handle.stopped() {
                 let view = handle.store.derive(Utc::now());
                 let cfg = handle.cfg.lock().unwrap().clone();
-                print!("{}", crate::present::format_hud(&view, &cfg, &handle.groups));
+                print!(
+                    "{}",
+                    crate::overlay::present::format_hud(&view, &cfg, &handle.groups)
+                );
                 std::thread::sleep(Duration::from_secs(1));
             }
         });
