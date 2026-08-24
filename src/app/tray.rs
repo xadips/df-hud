@@ -628,9 +628,8 @@ mod windows {
         DispatchMessageW, GetCursorPos, InsertMenuW, LoadCursorW, PeekMessageW, PostQuitMessage,
         RegisterClassExW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
         CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_SEPARATOR,
-        MF_STRING, MF_UNCHECKED,
-        TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSEXW,
-        WS_OVERLAPPED,
+        MF_STRING, MF_UNCHECKED, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
+        WM_RBUTTONUP, WNDCLASSEXW, WS_OVERLAPPED,
     };
 
     const WM_TRAY: u32 = WM_APP + 1;

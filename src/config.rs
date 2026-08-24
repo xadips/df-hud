@@ -559,6 +559,45 @@ impl Game {
 }
 
 impl Config {
+    /// Keep resources that are constructed only at startup on their running
+    /// values. Returns the edited keys that were ignored until restart.
+    pub fn reloadable_from(&mut self, running: &Self) -> Vec<&'static str> {
+        let mut ignored = Vec::new();
+        macro_rules! freeze {
+            ($field:expr, $running:expr, $name:literal) => {
+                if $field != $running {
+                    $field = $running.clone();
+                    ignored.push($name);
+                }
+            };
+        }
+
+        freeze!(
+            self.bridge.enabled,
+            running.bridge.enabled,
+            "bridge.enabled"
+        );
+        freeze!(self.bridge.listen, running.bridge.listen, "bridge.listen");
+        freeze!(
+            self.paths.data_dir,
+            running.paths.data_dir,
+            "paths.data_dir"
+        );
+        freeze!(
+            self.presence.enabled,
+            running.presence.enabled,
+            "presence.enabled"
+        );
+        freeze!(
+            self.presence.socket,
+            running.presence.socket,
+            "presence.socket"
+        );
+        freeze!(self.tray.enabled, running.tray.enabled, "tray.enabled");
+        freeze!(self.hud.layer, running.hud.layer, "hud.layer");
+        ignored
+    }
+
     pub fn parse(text: &str) -> Result<Self, Box<dyn Error>> {
         let overlay: toml::Value =
             toml::from_str(text).map_err(|err| format!("invalid TOML ({err})"))?;
@@ -1319,6 +1358,40 @@ mod tests {
         assert_eq!(cfg.widget.block.x, 2340);
         assert_eq!(cfg.hud.reference_width, 2560);
         assert_eq!(cfg.poll.active_interval, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn reload_keeps_restart_only_fields() {
+        let running = Config::default();
+        let mut edited = running.clone();
+        edited.bridge.enabled = !running.bridge.enabled;
+        edited.bridge.listen = "127.0.0.1:9999".into();
+        edited.paths.data_dir = "/tmp/elsewhere".into();
+        edited.presence.enabled = !running.presence.enabled;
+        edited.presence.socket = "/tmp/discord-ipc-9".into();
+        edited.tray.enabled = !running.tray.enabled;
+        edited.hud.layer = "top".into();
+        edited.df.base_url = "https://example.com/game".into();
+
+        let ignored = edited.reloadable_from(&running);
+        assert_eq!(
+            ignored,
+            [
+                "bridge.enabled",
+                "bridge.listen",
+                "paths.data_dir",
+                "presence.enabled",
+                "presence.socket",
+                "tray.enabled",
+                "hud.layer",
+            ]
+        );
+        assert_eq!(edited.bridge, running.bridge);
+        assert_eq!(edited.paths, running.paths);
+        assert_eq!(edited.presence, running.presence);
+        assert_eq!(edited.tray, running.tray);
+        assert_eq!(edited.hud.layer, running.hud.layer);
+        assert_eq!(edited.df.base_url, "https://example.com/game");
     }
 
     #[test]

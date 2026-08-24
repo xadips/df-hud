@@ -1,11 +1,11 @@
 //! Fail-open HUD visibility.
 //!
-//! Manual overlay wins; then `hud.only_when_game_running`; launcher titles;
-//! then `hud.follow_game_workspace`. Unknown placement shows.
+//! Config and manual overlay gates win; then `hud.only_when_game_running`;
+//! launcher titles; then `hud.follow_game_workspace`. Unknown placement shows.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::game;
@@ -13,15 +13,21 @@ use crate::game::desktop::{Client, Match, Placement};
 use crate::model::{GameState, Visibility};
 use crate::wake::Notify;
 
+const QUERY_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(30);
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rules {
     pub only_when_game_running: bool,
     pub follow_game_workspace: bool,
-    pub enabled: bool,
+    pub config_enabled: bool,
+    pub manual_enabled: bool,
 }
 
 pub fn decide(r: Rules, game: GameState, place: &Placement) -> (bool, String) {
-    if !r.enabled {
+    if !r.config_enabled {
+        return (false, "the HUD is disabled in config".into());
+    }
+    if !r.manual_enabled {
         return (false, "hidden by hand".into());
     }
     if r.only_when_game_running && !game.running {
@@ -80,7 +86,7 @@ pub struct Watcher {
     on_change: Mutex<Option<Arc<dyn Fn(Visibility) + Send + Sync>>>,
     window_session: Mutex<GameState>,
     window_seen: Mutex<bool>,
-    query_failed: Mutex<bool>,
+    last_query_error: Mutex<Option<Instant>>,
 }
 
 impl Watcher {
@@ -103,7 +109,7 @@ impl Watcher {
             on_change: Mutex::new(None),
             window_session: Mutex::new(GameState::default()),
             window_seen: Mutex::new(false),
-            query_failed: Mutex::new(false),
+            last_query_error: Mutex::new(None),
         })
     }
 
@@ -157,23 +163,31 @@ impl Watcher {
         let rules = Rules {
             only_when_game_running: cfg.hud.only_when_game_running,
             follow_game_workspace: cfg.hud.follow_game_workspace,
-            enabled: *self.enabled.lock().unwrap(),
+            config_enabled: cfg.hud.enabled,
+            manual_enabled: *self.enabled.lock().unwrap(),
         };
-        let failed = *self.query_failed.lock().unwrap();
-        {
+        let session_changed = {
             let mut session = self.window_session.lock().unwrap();
             let mut seen = self.window_seen.lock().unwrap();
             if !game.running {
+                let changed = session.running;
                 *session = GameState::default();
                 *seen = false;
+                changed
             } else if !game.same_session(*session) {
                 *session = game;
                 *seen = false;
+                true
+            } else {
+                false
             }
+        };
+        if session_changed {
+            *self.place.lock().unwrap() = Placement::default();
         }
         let mut window_seen = *self.window_seen.lock().unwrap();
-        let mut place = Placement::default();
-        let can_query = game.running && self.query.is_some() && !failed;
+        let mut place = self.place.lock().unwrap().clone();
+        let can_query = game.running && self.query.is_some();
         let mut query_failed_now = false;
         if can_query {
             if let Some(q) = &self.query {
@@ -181,13 +195,23 @@ impl Watcher {
                 match q.game_window(game.pid, &match_) {
                     Err(err) => {
                         query_failed_now = true;
-                        eprintln!(
-                            "hud: cannot ask the desktop where the game's window is ({err}); \
-                             window-following visibility is disabled"
-                        );
-                        *self.query_failed.lock().unwrap() = true;
+                        let now = Instant::now();
+                        let mut last = self.last_query_error.lock().unwrap();
+                        if last
+                            .map(|at| now.saturating_duration_since(at) >= QUERY_ERROR_LOG_INTERVAL)
+                            .unwrap_or(true)
+                        {
+                            eprintln!(
+                                "hud: cannot ask the desktop where the game's window is ({err}); \
+                                 keeping the last placement and retrying"
+                            );
+                            *last = Some(now);
+                        }
                     }
                     Ok(got) => {
+                        if self.last_query_error.lock().unwrap().take().is_some() {
+                            eprintln!("hud: desktop query recovered");
+                        }
                         place = got;
                         if place.known {
                             window_seen = true;
@@ -272,7 +296,8 @@ mod tests {
         Rules {
             only_when_game_running: true,
             follow_game_workspace: true,
-            enabled: true,
+            config_enabled: true,
+            manual_enabled: true,
         }
     }
 
@@ -338,7 +363,8 @@ mod tests {
     fn decide_respects_disabled_rules() {
         let (visible, reason) = decide(
             Rules {
-                enabled: true,
+                config_enabled: true,
+                manual_enabled: true,
                 ..Rules::default()
             },
             GameState::default(),
@@ -354,7 +380,7 @@ mod tests {
     #[test]
     fn decide_tray_override_wins() {
         let mut rules = all_rules();
-        rules.enabled = false;
+        rules.manual_enabled = false;
         let (visible, reason) = decide(
             rules,
             GameState {
@@ -369,6 +395,26 @@ mod tests {
         );
         assert!(!visible);
         assert!(reason.contains("by hand"), "{reason}");
+    }
+
+    #[test]
+    fn decide_config_switch_wins_over_manual_toggle() {
+        let mut rules = all_rules();
+        rules.config_enabled = false;
+        let (visible, reason) = decide(
+            rules,
+            GameState {
+                running: true,
+                ..GameState::default()
+            },
+            &Placement {
+                known: true,
+                on_active_workspace: true,
+                ..Placement::default()
+            },
+        );
+        assert!(!visible);
+        assert!(reason.contains("config"), "{reason}");
     }
 
     #[test]
@@ -537,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn watcher_stops_asking_after_a_failure() {
+    fn watcher_retries_after_a_transient_failure() {
         let q = FakeQuerier::new(Placement::default());
         q.set(Placement::default(), Some("no such socket".into()));
         let (w, game) = test_visibility(q.clone());
@@ -546,11 +592,59 @@ mod tests {
             pid: 42,
             started_at: Some(Utc::now()),
         });
-        for _ in 0..5 {
-            w.refresh();
-        }
-        assert_eq!(q.calls(), 1);
+        w.refresh();
+        w.refresh();
+        assert_eq!(q.calls(), 2);
         assert!(w.state().visible);
+        q.set(
+            Placement {
+                known: true,
+                on_active_workspace: true,
+                monitor: "DP-2".into(),
+                ..Placement::default()
+            },
+            None,
+        );
+        w.refresh();
+        assert_eq!(q.calls(), 3);
+        assert!(w.state().visible);
+        assert_eq!(w.state().monitor, "DP-2");
+        assert!(w.last_query_error.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn watcher_keeps_same_session_placement_on_query_error() {
+        let q = FakeQuerier::new(Placement {
+            known: true,
+            on_active_workspace: false,
+            workspace_name: "4".into(),
+            monitor: "DP-2".into(),
+            ..Placement::default()
+        });
+        let (w, game) = test_visibility(q.clone());
+        let session = GameState {
+            running: true,
+            pid: 42,
+            started_at: Some(Utc::now()),
+        };
+        game.set_state_for_testing(session);
+        w.refresh();
+        assert!(!w.state().visible);
+        assert_eq!(w.state().monitor, "DP-2");
+
+        q.set(Placement::default(), Some("socket reset".into()));
+        w.refresh();
+        assert!(!w.state().visible);
+        assert_eq!(w.state().monitor, "DP-2");
+
+        game.set_state_for_testing(GameState {
+            running: true,
+            pid: 43,
+            started_at: Some(session.started_at.unwrap() + chrono::Duration::seconds(1)),
+        });
+        w.refresh();
+        assert!(w.state().visible, "new session must fail open");
+        assert!(w.state().monitor.is_empty());
     }
 
     #[test]
@@ -575,5 +669,49 @@ mod tests {
         w.set_enabled(true);
         w.refresh();
         assert!(w.state().visible);
+    }
+
+    #[test]
+    fn watcher_config_switch_preserves_manual_preference() {
+        let q = FakeQuerier::new(Placement {
+            known: true,
+            on_active_workspace: true,
+            ..Placement::default()
+        });
+        let game = game::Watcher::new("DeadFrontier.exe", Duration::from_secs(3600));
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let w = Watcher::new(game.clone(), cfg.clone(), Some(q));
+        game.set_state_for_testing(GameState {
+            running: true,
+            pid: 42,
+            started_at: Some(Utc::now()),
+        });
+
+        w.refresh();
+        assert!(w.state().visible);
+        cfg.lock().unwrap().hud.enabled = false;
+        w.refresh();
+        let state = w.state();
+        assert!(
+            !state.visible && state.reason.contains("config"),
+            "{state:?}"
+        );
+        assert!(
+            w.enabled(),
+            "config must not overwrite the manual preference"
+        );
+
+        cfg.lock().unwrap().hud.enabled = true;
+        w.refresh();
+        assert!(w.state().visible);
+
+        w.set_enabled(false);
+        w.refresh();
+        cfg.lock().unwrap().hud.enabled = false;
+        w.refresh();
+        cfg.lock().unwrap().hud.enabled = true;
+        w.refresh();
+        assert!(!w.state().visible);
+        assert!(!w.enabled());
     }
 }

@@ -137,8 +137,24 @@ impl Handle {
         }
     }
 
-    pub fn replace_config(&self, cfg: Config) {
+    pub fn replace_config(&self, mut cfg: Config) -> Config {
         self.clear_config_error();
+        let (ignored, rebuild_clients, reconfigure_game) = {
+            let running = self.cfg.lock().unwrap();
+            let ignored = cfg.reloadable_from(&running);
+            let rebuild_clients = cfg.df.base_url != running.df.base_url
+                || cfg.df.user_agent != running.df.user_agent
+                || cfg.df.timeout != running.df.timeout;
+            let reconfigure_game = cfg.game.process != running.game.process
+                || cfg.game.scan_interval != running.game.scan_interval;
+            (ignored, rebuild_clients, reconfigure_game)
+        };
+        if !ignored.is_empty() {
+            eprintln!(
+                "config: {} need a restart; running values kept",
+                ignored.join(", ")
+            );
+        }
         if !cfg.bossmap.enabled {
             self.store.clear_boss_map();
         }
@@ -146,10 +162,20 @@ impl Handle {
             self.store.clear_challenges();
         }
         self.gamekeys.apply_config(&cfg.game_keys);
-        *self.cfg.lock().unwrap() = cfg;
+        self.store.set_xp_min_samples(cfg.widget.xp.min_samples);
+        *self.cfg.lock().unwrap() = cfg.clone();
+        if rebuild_clients {
+            self.player.replace_client(df_client(&cfg));
+            self.challenges.replace_client(df_client(&cfg));
+        }
+        if reconfigure_game {
+            self.game
+                .reconfigure(&cfg.game.process, cfg.game.scan_interval.0);
+        }
         self.game.poke();
         self.vis.poke();
         self.ping();
+        cfg
     }
 
     pub fn set_fps_display(&self, on: bool) {

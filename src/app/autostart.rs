@@ -186,16 +186,8 @@ mod win {
             return Err(win_err("RegCreateKeyExW", status));
         }
         let bytes = (value.len() * 2) as u32;
-        let set = unsafe {
-            RegSetValueExW(
-                key,
-                name.as_ptr(),
-                0,
-                REG_SZ,
-                value.as_ptr().cast(),
-                bytes,
-            )
-        };
+        let set =
+            unsafe { RegSetValueExW(key, name.as_ptr(), 0, REG_SZ, value.as_ptr().cast(), bytes) };
         unsafe {
             RegCloseKey(key);
         }
