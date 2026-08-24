@@ -229,10 +229,6 @@ margin_right = 0
 margin_bottom = 0
 margin_left = 0
 
-# Leave this on. The HUD sits on top of the game, so every pointer event it keeps
-# is one the game does not get.
-click_through = true
-
 font_family = "Courier New, monospace"
 font_size = 12
 text_color = "#e6cc4d"
@@ -241,9 +237,6 @@ opacity = 1.0
 # then uniformly scaled to the game content rectangle.
 reference_width = 2560
 reference_height = 1440
-
-# Optional extra stylesheet, loaded after the built-in one. Must exist if set.
-# css = "~/.config/df-hud/style.css"
 
 [bossmap]
 # What is standing on your block: bosses, bandit packs, missions, QRF events and
@@ -541,12 +534,3 @@ urgent_within = 7200
 # before you do: that fires on every left click, so it spawns a process per shot
 # fired, and the coordinates move with your resolution and any UI change the game
 # ships. A key you press as you press Start has neither problem.
-
-[console]
-# NOT BUILT YET. /api/console/toggle answers 503; these are read and validated so
-# the size is yours when it lands.
-#
-# An ordinary window, for what a HUD group cannot be: the full challenge list
-# with every objective, and diagnostics.
-width = 720
-height = 560

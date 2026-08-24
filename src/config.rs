@@ -67,7 +67,6 @@ pub struct Config {
     pub presence: Presence,
     pub tray: Tray,
     pub widget: Widget,
-    pub console: Console,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -141,14 +140,12 @@ pub struct Hud {
     pub margin_right: i32,
     pub margin_bottom: i32,
     pub margin_left: i32,
-    pub click_through: bool,
     pub font_family: String,
     pub font_size: f32,
     pub text_color: String,
     pub opacity: f32,
     pub reference_width: i32,
     pub reference_height: i32,
-    pub css: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -272,12 +269,6 @@ pub struct ChallengesWidget {
     pub urgent_within: Duration,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Console {
-    pub width: i32,
-    pub height: i32,
-}
-
 fn default_user_agent() -> String {
     format!(
         "df-hud/{} (+local overlay; contact via Dead Frontier forums)",
@@ -387,10 +378,6 @@ impl Default for Config {
             },
             tray: Tray { enabled: true },
             widget: Widget::default(),
-            console: Console {
-                width: 720,
-                height: 560,
-            },
         }
     }
 }
@@ -407,14 +394,12 @@ impl Default for Hud {
             margin_right: 0,
             margin_bottom: 0,
             margin_left: 0,
-            click_through: true,
             font_family: "Courier New, monospace".into(),
             font_size: 12.0,
             text_color: "#e6cc4d".into(),
             opacity: 1.0,
             reference_width: 2560,
             reference_height: 1440,
-            css: String::new(),
         }
     }
 }
@@ -885,12 +870,6 @@ impl Config {
                     self.widget.map.opacity
                 ));
             }
-        }
-        if self.console.width < 320 || self.console.height < 240 {
-            errs.push(format!(
-                "console size {}x{} is too small to be usable (min 320x240)",
-                self.console.width, self.console.height
-            ));
         }
         for (name, x, y, font, color) in [
             (
@@ -1567,7 +1546,9 @@ window = 120
                 "[widget.block]\ncolor = \"red; font-size: 90pt\"\n",
                 "widget.block.color",
             ),
-            ("[console]\nwidth = 100\nheight = 100\n", "too small"),
+            ("[hud]\nclick_through = true\n", "unknown key"),
+            ("[hud]\ncss = \"x\"\n", "unknown key"),
+            ("[console]\nwidth = 720\n", "unknown key"),
         ];
         for (body, want) in cases {
             let err = Config::parse(body).unwrap_err();

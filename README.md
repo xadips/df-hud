@@ -35,8 +35,6 @@ Working today:
   `-dump-challenges`, `-check-config` and `-check-game` for looking at real data
   with no GUI
 
-Planned: a console window for the full board with per-objective detail.
-
 ## Keybinds
 
 On both platforms df-hud registers the chords in `[hotkeys]` **only while the
@@ -55,7 +53,6 @@ portable test hatch:
 | `POST /api/xp/reset` | start the xp/hr average again from now |
 | `POST /api/overlay/toggle` | show or hide the overlay by hand |
 | `POST /api/widget/<group>/toggle` | show or hide one group: `block`, `bosses`, `session`, `xp`, `challenges`, `map` |
-| `POST /api/console/toggle` | the console window - **not built yet**, answers 503, and has no default bind |
 
 On Windows these are native `RegisterHotKey` chords, with no AutoHotkey helper
 required. The defaults and `[hotkeys]` rules are the same as Linux.
@@ -128,12 +125,9 @@ deeper than the per-group ones rather than merely appearing earlier in it.
 problem and amber when you can, and that is the whole message. It takes a position
 and a font like every other group.
 
-Two things to know. A group placed near the right edge is **clipped, not wrapped**,
-because a HUD line that reflows makes everything below it jump as values change
-width - so leave room for the longest string a group can produce. And
-`click_through = false`, which exists only for debugging, now makes a full-screen
-surface swallow every click; df-hud says so at startup rather than leaving you
-wondering why the game stopped responding.
+A group placed near the right edge is **clipped, not wrapped**, because a HUD
+line that reflows makes everything below it jump as values change width - so
+leave room for the longest string a group can produce.
 
 ## The challenge board, by category
 

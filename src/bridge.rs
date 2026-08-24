@@ -150,9 +150,6 @@ impl Inner {
             ("POST", "/api/run/start") => self.hook("run clock", |h| h.run_start.clone()),
             ("POST", "/api/xp/reset") => self.hook("xp rate", |h| h.xp_reset.clone()),
             ("POST", "/api/overlay/toggle") => self.hook("overlay", |h| h.overlay_toggle.clone()),
-            ("POST", "/api/console/toggle") => {
-                (503, "text/plain", b"console not available".to_vec())
-            }
             (m, p) if m == "POST" && p.starts_with("/api/widget/") && p.ends_with("/toggle") => {
                 let group = p
                     .trim_start_matches("/api/widget/")

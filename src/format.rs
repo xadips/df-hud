@@ -62,16 +62,6 @@ pub fn countdown(d: Duration) -> String {
     }
 }
 
-/// Stale-reading age; silent below 30 seconds.
-#[cfg(test)]
-pub fn age(d: Duration) -> String {
-    if d < Duration::from_secs(30) {
-        String::new()
-    } else {
-        format!("{} ago", countdown(d))
-    }
-}
-
 pub fn rate(per_hour: f64) -> String {
     if per_hour < 0.0 {
         String::new()
@@ -80,31 +70,12 @@ pub fn rate(per_hour: f64) -> String {
     }
 }
 
-#[cfg(test)]
-pub fn cash(n: i64) -> String {
-    format!("${}", int(n))
-}
-
 pub fn position(x: i32, y: i32, z: i32) -> String {
     if z != 0 {
         format!("{x}, {y} (floor {z})")
     } else {
         format!("{x}, {y}")
     }
-}
-
-#[cfg(test)]
-pub fn exp_progress(exp: i64, needed: i64) -> String {
-    if needed <= 0 {
-        int(exp)
-    } else {
-        format!("{} / {}", int(exp), int(needed))
-    }
-}
-
-#[cfg(test)]
-pub fn danger_level(level: i32) -> String {
-    level.to_string()
 }
 
 #[cfg(test)]
@@ -145,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    fn countdown_and_age() {
+    fn countdown_precision() {
         let cases: &[(Duration, &str)] = &[
             (Duration::ZERO, ""),
             (Duration::from_secs(45), "45s"),
@@ -159,8 +130,6 @@ mod tests {
         for &(in_, want) in cases {
             assert_eq!(countdown(in_), want, "countdown({in_:?})");
         }
-        assert_eq!(age(Duration::from_secs(2)), "");
-        assert_eq!(age(Duration::from_secs(5 * 60)), "5m ago");
     }
 
     #[test]
@@ -169,11 +138,7 @@ mod tests {
         assert_eq!(rate(58_143_000.0), "58,143,000");
         assert_eq!(rate(1_234_567.9), "1,234,567");
         assert_eq!(rate(-1.0), "");
-        assert_eq!(cash(1000), "$47,128");
         assert_eq!(position(1058, 1019, 2), "1058, 1019 (floor 2)");
         assert_eq!(position(1058, 1019, 0), "1058, 1019");
-        assert_eq!(exp_progress(1000, 5000), "1,000 / 5,000");
-        assert_eq!(exp_progress(1000, 0), "1,000");
-        assert_eq!(danger_level(42), "42");
     }
 }
