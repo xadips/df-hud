@@ -1,0 +1,95 @@
+# The city: which coordinates are blocks, and how the map is shaded.
+#
+# GENERATED from DFProfiler's bossmap stylesheet, which is the only published
+# thing that knows the city's shape. Do not edit by hand.
+# knowledge/city-map.md records where it comes from and what was checked.
+#
+# 1716 blocks in a 59x55 rectangle. Everything else is a gap: not a place, and not
+# somewhere you can walk through on the way to somewhere else.
+
+origin 1000 981
+size 59 55
+
+# A district boundary runs before this column or row. Nine districts on the
+# main map plus the southern strip, which is what df_tradezone counts.
+divider x 1020
+divider x 1041
+divider y 994
+divider y 1007
+divider y 1020
+
+# Shades, ordered dark to light. rrggbb then the alpha they are drawn with.
+shade a 000064 0.70
+shade b 320000 0.70
+shade c 2c0055 0.70
+shade d 640000 0.70
+shade e 55003b 0.70
+shade f af0000 0.70
+shade g 006400 0.70
+shade h 265959 0.70
+shade i 008000 1.00
+shade j 8c401a 0.70
+shade k 59660d 0.70
+shade l 646400 0.70
+shade m 5a5a5a 0.70
+shade n c86400 0.70
+shade o 99a6e6 0.70
+shade p c7c7c7 0.70
+
+# x increases to the right from 1000, y downwards from 981. '.' is a gap.
+map
+gllllllllllnnnnnnnnnnffff..hhhhhhh......dbbbbbbb.bbmmmmmmmm
+g..lllll.lllnnnnnnnnnnfff.hhhhhhhhoooo..ddbbbbbb.bbbmmmmm.m
+gggllllllll..nnnnnnnnnnff.hhhh.kh..ooo..d....b.b.bb..mm.m.m
+ggggllll.ll..lnnn..nnnnnffhhhhkkhoooooo.d....b.b.bb..bm.m.m
+g.gggill.ll.lllnnnnnn.n.n.hhhhhhiooohhh.d.dddbbbbbbbbbbmmmm
+ggggg.ll.lllll.l..n.n.nnn.hhj..jh..hkkkdddddddbbbbbbbbbbmmm
+g.g.g.gl.lllll.l..n...nnn.jjjjjjh..kkkk....ddddbbbbbbbibbmm
+ggg.g.ggllllll.l..nnn.nnn.jjjjjjjk.kk......ddd.dbbbb.bbbbbm
+ggggg.gg.ll.ll.l...n..nnn..jj..jjkkkk......dd..ddbbbbbbbbbb
+ggggggggggllllll.llln.nnn.......jkkk.......dd.ddddbbbbbbbbb
+ag..ggggggg.ll.l.llll.nnn..nn..ff......f...dd.dddddbbbbbbbb
+aaggggggggggllllllllllnnnnnnn..nffffffff...dd.ddddddbbbbbbb
+aaaggggggggg.l.l.llll.lnn.nnnnnnnfffff.f...ddddddddddbbbbbb
+aaaagggggggg.g.l.llllllln..nn.nnnn...f.f...f..d.ddddddbbb.b
+aaaaaggggggggggllllllllllnnnnnnnnnn..f.f.ffffddddddddddbbbb
+aa......gggg.g...l..llllllnnnnnnnnnnffffffffffd.ddddddddb.b
+aa......g.gggggggllllllllllnnnnnnnnnnffffffffffddddddddddbb
+aa......g.gg.ggg.g..llllllllnnnnnnnnnnff....ffffddddddddddb
+aa...aaaaggggggggggllllllllllnnn.nn...nffffffffffddd.dddddd
+iaaaaaaaaagggggggggglllllllllln.......nnffffffffffddddddddd
+aa...a..a.ggggggggglll.llll.lnn.......nffffffffffd.ddddd..d
+aa...a..gggggggggglllllllll.nnn.......ff....f.f.d..dddddd.b
+aaaaaaagg.g...gggl...l.llll.nin.......fffffff.f.d..d.ddd..b
+aa...a..ggg...ggll...lllll..nnn........fffffffddd..d.d....b
+aa...g.gggggggglll...l.lln...nn...nfffffff.ff.d.d..dddd...b
+aaaaggggggggggl.llllll.lnn...n....ffffffffffdddddddddd...bb
+aa..g...gggggllllllllllnnnnnnnnnnfffffff.ffdd...dd.d.....b.
+aa..g...ggggl.l.ll..llnnnn........ffffff........dd.d.....b.
+ag..g...gggll.lllllllnnnnnnnnnnfffffffff........dd.......b.
+gg..g...g..ll.llllllnnnnnn........ffffff........dd.......b.
+gg..g...g..ll.llll..n.nnnnn.........fffd.......ddb.......b.
+gg..g...l..ll.llll..n.nnnnn...ffffffffdd.......dbb.......b.
+ggggg...l..ll.llln..n.n.nn....f..f..fd.d..d.dddbbb.......c.
+gg..g...llllllllnnnnnnnnnnffffff.f..dddd..d.d..bbb.......cc
+g...g......l....nnn.n.n.nffffff..f..d.dd..d.d..bbb.......ce
+....l......l....nnn.n.n.ffffffffff..dddd..ddbbbbbbbbbbcccee
+....l......l...nnnn.n.n.ff.f.ff..ddddddd..d.bbbbbb..bc.cee.
+g...l......l...nnnn.nnffffffffffddd.dddd..bbbbbbbb..cccee..
+gllll......ninnnnnnnnffffffffffddddddddddbbbbbbbbb...ceeeei
+................p...p......................................
+.............pppp..pp......................................
+.............pppppppp......................................
+.............p..ppppp......................................
+.............ppp.ppppppp...................................
+.............p.pppppp..p...................................
+.............ppppppppp.p...................................
+...............ppppppp.p...p...............................
+.............ppp..pppppppppp...............................
+.............ppp....pppppppp...............................
+.............pppppppp....p.p...............................
+.............ppp.........p.p...............................
+.............ppp.........p.p...............................
+.............p.p.........ppp...............................
+.............pppp........p.................................
+.............p...........p.................................

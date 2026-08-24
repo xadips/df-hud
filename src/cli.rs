@@ -1,0 +1,717 @@
+//! Headless flags. Overlay draws `store.derive` through `present`; GPU skipped here.
+
+use std::collections::HashMap;
+use std::error::Error;
+use std::path::{Path, PathBuf};
+
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+
+use crate::catalog;
+use crate::challenges;
+use crate::config::{self, Config};
+use crate::creds::Store as Creds;
+use crate::desktop;
+use crate::dfclient::{self, Client};
+use crate::format;
+use crate::game;
+use crate::groups::Groups;
+use crate::model::{self, GameState, Tick, View};
+use crate::present;
+use crate::store::Store;
+
+const WITHHELD_FIELD: &[&str] = &["pass", "token", "cookie", "auth", "secretkey", "session"];
+
+pub enum Command {
+    Version,
+    PrintView {
+        fixture: PathBuf,
+        print_hud: bool,
+    },
+    CheckConfig {
+        config: Option<PathBuf>,
+    },
+    CheckGame {
+        config: Option<PathBuf>,
+    },
+    Once {
+        config: Option<PathBuf>,
+        dump_fields: bool,
+    },
+    DumpChallenges {
+        config: Option<PathBuf>,
+        raw: bool,
+    },
+    Headless {
+        config: Option<PathBuf>,
+        print_view: bool,
+        print_hud: bool,
+    },
+}
+
+pub fn take() -> Result<Option<Command>, Box<dyn Error>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut print_view = false;
+    let mut print_hud = false;
+    let mut check_config = false;
+    let mut check_game = false;
+    let mut once = false;
+    let mut dump_fields = false;
+    let mut dump_challenges = false;
+    let mut headless = false;
+    let mut version = false;
+    let mut config = None;
+    let mut fixture = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" | "--help" => {}
+            "-version" | "--version" => version = true,
+            "-print-view" | "--print-view" => {
+                print_view = true;
+                if let Some(path) = args.get(i + 1).filter(|a| !a.starts_with('-')) {
+                    fixture = Some(PathBuf::from(path));
+                    i += 1;
+                }
+            }
+            "-print-hud" | "--print-hud" => print_hud = true,
+            "-check-config" | "--check-config" => check_config = true,
+            "-check-game" | "--check-game" => check_game = true,
+            "-once" | "--once" => once = true,
+            "-dump-fields" | "--dump-fields" => dump_fields = true,
+            "-dump-challenges" | "--dump-challenges" => dump_challenges = true,
+            "-headless" | "--headless" => headless = true,
+            "-config" | "--config" => {
+                i += 1;
+                let path = args.get(i).ok_or("-config needs a path")?;
+                config = Some(PathBuf::from(path));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if dump_fields && !once && !dump_challenges {
+        return Err("-dump-fields is for -once or -dump-challenges".into());
+    }
+    let exclusive = [
+        version,
+        check_config,
+        check_game,
+        once,
+        dump_challenges,
+        fixture.is_some(),
+    ]
+    .iter()
+    .filter(|on| **on)
+    .count();
+    if exclusive > 1 {
+        return Err(
+            "use only one of -version, -check-config, -check-game, -once, -dump-challenges, -print-view PATH"
+                .into(),
+        );
+    }
+    if version {
+        return Ok(Some(Command::Version));
+    }
+    if check_config {
+        return Ok(Some(Command::CheckConfig { config }));
+    }
+    if check_game {
+        return Ok(Some(Command::CheckGame { config }));
+    }
+    if dump_challenges {
+        return Ok(Some(Command::DumpChallenges {
+            config,
+            raw: dump_fields,
+        }));
+    }
+    if once {
+        return Ok(Some(Command::Once {
+            config,
+            dump_fields,
+        }));
+    }
+    if let Some(fixture) = fixture {
+        return Ok(Some(Command::PrintView {
+            fixture,
+            print_hud,
+        }));
+    }
+    if headless {
+        return Ok(Some(Command::Headless {
+            config,
+            print_view,
+            print_hud,
+        }));
+    }
+    Ok(None)
+}
+
+pub fn run(cmd: Command) -> Result<(), Box<dyn Error>> {
+    match cmd {
+        Command::Version => {
+            println!("df-hud {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Command::PrintView {
+            fixture,
+            print_hud,
+        } => {
+            let view = view_from_fixture(&fixture)?;
+            if print_hud {
+                print!(
+                    "{}",
+                    present::format_hud(&view, &Config::default(), &Groups::new())
+                );
+            } else {
+                print!("{}", model::marshal_indent(&view)?);
+            }
+            Ok(())
+        }
+        Command::CheckConfig { config } => {
+            print!("{}", check_config_text(config.as_deref())?);
+            Ok(())
+        }
+        Command::CheckGame { config } => {
+            print!("{}", check_game_text(config.as_deref())?);
+            Ok(())
+        }
+        Command::Once {
+            config,
+            dump_fields,
+        } => run_once(config.as_deref(), dump_fields),
+        Command::DumpChallenges { config, raw } => dump_challenges(config.as_deref(), raw),
+        Command::Headless {
+            config,
+            print_view,
+            print_hud,
+        } => run_headless(config, print_view, print_hud),
+    }
+}
+
+pub fn run_headless(
+    config: Option<PathBuf>,
+    print_view: bool,
+    print_hud: bool,
+) -> Result<(), Box<dyn Error>> {
+    let path = config.unwrap_or_else(config::default_path);
+    let cfg = Config::load(&path)?;
+    eprintln!(
+        "df-hud {} starting ({})",
+        env!("CARGO_PKG_VERSION"),
+        cfg.describe_source(&path)
+    );
+    let handle = crate::app::start_with(
+        cfg,
+        crate::app::PrintOpts {
+            view: print_view,
+            hud: print_hud,
+        },
+    )?;
+    while !handle.stopped() {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct PrintViewFixture {
+    now: DateTime<Utc>,
+    tick_at: DateTime<Utc>,
+    credentials_at: DateTime<Utc>,
+    game: GameFixture,
+    vars: HashMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct GameFixture {
+    running: bool,
+    pid: i32,
+    started_at: DateTime<Utc>,
+}
+
+pub fn view_from_fixture(path: &Path) -> Result<View, Box<dyn Error>> {
+    let raw = std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
+    let fx: PrintViewFixture =
+        serde_json::from_str(&raw).map_err(|err| format!("{}: {err}", path.display()))?;
+    let catalog = load_allstats_catalog(fx.now)?;
+    let store = Store::new(Some(catalog));
+    store.apply_tick(Tick {
+        at: fx.tick_at,
+        vars: fx.vars,
+        err: None,
+        scheduled: true,
+    });
+    store.set_credentials_at(fx.credentials_at);
+    store.set_game(GameState {
+        running: fx.game.running,
+        pid: fx.game.pid,
+        started_at: Some(fx.game.started_at),
+    });
+    Ok(store.derive(fx.now))
+}
+
+pub fn check_config_text(config: Option<&Path>) -> Result<String, Box<dyn Error>> {
+    let path = config
+        .map(Path::to_path_buf)
+        .unwrap_or_else(config::default_path);
+    let cfg = Config::load(&path)?;
+    Ok(format!(
+        "config ok ({})\nrequest budget: about {:.0}/hour while playing, {:.0}/hour idle\n",
+        cfg.describe_source(&path),
+        cfg.requests_per_hour(1.0),
+        cfg.requests_per_hour(0.0)
+    ))
+}
+
+pub fn check_game_text(config: Option<&Path>) -> Result<String, Box<dyn Error>> {
+    let path = config
+        .map(Path::to_path_buf)
+        .unwrap_or_else(config::default_path);
+    let cfg = Config::load(&path)?;
+    Ok(game_report(&cfg))
+}
+
+fn game_process(cfg: &Config) -> &str {
+    if cfg.game.process.trim().is_empty() {
+        game::DEFAULT_PROCESS
+    } else {
+        &cfg.game.process
+    }
+}
+
+fn game_report(cfg: &Config) -> String {
+    let exe = game_process(cfg);
+    let mut out = format!("{}\n", game::scan_description(exe));
+    match game::scan(exe) {
+        Err(err) => out.push_str(&format!("{}\n", game::scan_error(&err))),
+        Ok(state) if state.running => {
+            out.push_str(&format_found(state));
+            out.push_str(&window_report(cfg, state));
+        }
+        Ok(_) => {
+            out.push_str("NOT FOUND - the game does not appear to be running.\n");
+            let similar = game::similar_processes("frontier");
+            if similar.is_empty() {
+                out.push_str("Nothing similar is running either. Start the game and run this again.\n");
+            } else {
+                out.push_str(
+                    "\nProcesses with a similar name, in case the executable is named differently:\n",
+                );
+                for line in similar {
+                    out.push_str(&format!("  {line}\n"));
+                }
+                out.push_str("\nIf one of those is the game, set game.process to its basename.\n");
+            }
+            if cfg.poll.only_when_game_running {
+                out.push_str(
+                    "\nNote: poll.only_when_game_running is on, so df-hud will not poll at all until the game is detected.\n",
+                );
+            }
+        }
+    }
+    out
+}
+
+fn format_found(state: GameState) -> String {
+    let launched = state
+        .started_at
+        .map(|t| {
+            t.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(|| "unknown".into());
+    format!(
+        "FOUND: pid {}, launched {} ({} ago)\n",
+        state.pid,
+        launched,
+        format_ago(state.elapsed(chrono::Utc::now()))
+    )
+}
+
+fn format_ago(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    match (h, m, s) {
+        (0, 0, s) => format!("{s}s"),
+        (0, m, 0) => format!("{m}m"),
+        (0, m, s) => format!("{m}m{s}s"),
+        (h, 0, 0) => format!("{h}h"),
+        (h, m, 0) => format!("{h}h{m}m"),
+        (h, m, s) => format!("{h}h{m}m{s}s"),
+    }
+}
+
+fn window_report(cfg: &Config, state: GameState) -> String {
+    let client = desktop::new_client();
+    let want = cfg.launcher_window_match();
+    match client.game_window(state.pid, &want) {
+        Err(err) => format!(
+            "\nThe desktop could not be asked where the window is ({err}).\n\
+The HUD will still work; window-following visibility is disabled.\n"
+        ),
+        Ok(place) if place.known => {
+            let shown = if place.on_active_workspace {
+                "yes"
+            } else {
+                "no - the HUD will be hidden while it stays there"
+            };
+            if place.foreground_rule {
+                format!(
+                    "\nWINDOW: class {:?} on monitor {} (matched by {})\n\
+        that window is visible and not minimized: {shown}\n\
+        that window is in the foreground: {}\n",
+                    place.class, place.monitor, place.matched_by, place.foreground
+                )
+            } else {
+                format!(
+                    "\nWINDOW: class {:?} on monitor {}, workspace {} (matched by {})\n\
+        that workspace is being shown: {shown}\n",
+                    place.class, place.monitor, place.workspace_name, place.matched_by
+                )
+            }
+        }
+        Ok(_) => {
+            let mut out = format!(
+                "\nWINDOW NOT MATCHED: no window with pid {}, and none whose class looks like {:?}.\n",
+                state.pid, want.class
+            );
+            if !cfg.game.window_title_ignore.is_empty() {
+                out.push_str(&format!(
+                    "        (a title containing {:?} is skipped as the launcher: game.window_title_ignore)\n",
+                    cfg.game.window_title_ignore.join(", ")
+                ));
+            }
+            if let Ok(windows) = desktop::listed_windows() {
+                out.push_str("\nTop-level windows the desktop knows about:\n");
+                for window in windows {
+                    let mut title = window.title;
+                    if title.len() > 40 {
+                        title.truncate(40);
+                        title.push_str("...");
+                    }
+                    out.push_str(&format!(
+                        "  class {:<32} pid {:<8} {}\n",
+                        window.class, window.pid, title
+                    ));
+                }
+                out.push_str("\nIf one of those is the game, set game.window_class to its class.\n");
+            }
+            out.push_str(
+                "\nUntil then the HUD cannot follow the game window, and monitor = \"auto\" leaves placement to the desktop.\n",
+            );
+            out
+        }
+    }
+}
+
+fn withheld_field(name: &str) -> bool {
+    let low = name.to_ascii_lowercase();
+    low == "sc" || WITHHELD_FIELD.iter().any(|n| low.contains(n))
+}
+
+pub fn dump_record_fields(vars: &std::collections::HashMap<String, String>) -> String {
+    let mut names: Vec<&String> = vars.keys().collect();
+    names.sort();
+    let mut out = format!("{} fields returned:\n", names.len());
+    for name in names {
+        let value = if withheld_field(name) {
+            "[withheld]"
+        } else {
+            vars[name].as_str()
+        };
+        out.push_str(&format!("  {name} = {value}\n"));
+    }
+    out
+}
+
+fn oneshot_setup(
+    config: Option<&Path>,
+) -> Result<(Config, std::sync::Arc<Creds>, Client, Store), Box<dyn Error>> {
+    let path = config
+        .map(Path::to_path_buf)
+        .unwrap_or_else(config::default_path);
+    let cfg = Config::load(&path)?;
+    cfg.ensure_data_dir()?;
+    let creds = std::sync::Arc::new(Creds::new(cfg.credentials_path()));
+    if let Err(err) = creds.load() {
+        eprintln!("credentials: {err}");
+    }
+    let catalog = match catalog::ensure(
+        &cfg.catalog_path(),
+        &cfg.df.allstats_url,
+        &cfg.df.user_agent,
+        cfg.poll.catalog_interval.0,
+        cfg.df.timeout.0,
+        chrono::Utc::now(),
+    ) {
+        Ok(c) => Some(c),
+        Err(err) => {
+            eprintln!("catalog: unavailable ({err}); level thresholds will be missing");
+            None
+        }
+    };
+    let store = Store::new(catalog);
+    let agent = ureq::AgentBuilder::new()
+        .timeout(cfg.df.timeout.0)
+        .user_agent(&cfg.df.user_agent)
+        .build();
+    let client = Client::with_agent(agent, &cfg.df.base_url, &cfg.df.user_agent);
+    Ok((cfg, creds, client, store))
+}
+
+fn run_once(config: Option<&Path>, dump_fields: bool) -> Result<(), Box<dyn Error>> {
+    let (cfg, creds, mut client, store) = oneshot_setup(config)?;
+    let Some((cr, _)) = creds.get() else {
+        return Err(
+            "no credentials yet: load a Dead Frontier page with the bridge userscript".into(),
+        );
+    };
+    client.cookie = cr.cookie.clone();
+    let vars = client
+        .get_values(&cr.to_df())
+        .map_err(|e| format!("poll failed: {e}"))?;
+    if dump_fields {
+        print!("{}", dump_record_fields(&vars));
+    }
+    store.apply_tick(Tick {
+        at: chrono::Utc::now(),
+        vars,
+        err: None,
+        scheduled: false,
+    });
+    if let Ok(state) = game::scan(game_process(&cfg)) {
+        store.set_game(state);
+    }
+    print!("{}", model::marshal_indent(&store.derive(chrono::Utc::now()))?);
+    Ok(())
+}
+
+fn dump_challenges(config: Option<&Path>, raw: bool) -> Result<(), Box<dyn Error>> {
+    let (cfg, creds, mut client, store) = oneshot_setup(config)?;
+    let Some((cr, salt_stored)) = creds.get() else {
+        return Err(
+            "no credentials yet: load a Dead Frontier page with the bridge userscript".into(),
+        );
+    };
+    client.cookie = cr.cookie.clone();
+    let salt = cfg.signing_salt(|| salt_stored.clone());
+    if salt.is_empty() {
+        return Err(
+            "no signing salt: the bridge has not reported one, and df.skeygen is empty. \
+Load the Outpost home page with the bridge userscript or the the bridge userscript installed."
+                .into(),
+        );
+    }
+    let vars = client
+        .load_challenge(&cr.to_df(), &salt)
+        .map_err(|e| format!("load_challenge failed: {e}"))?;
+    if raw {
+        print!("{}", dump_record_fields(&vars));
+        return Ok(());
+    }
+    if store.snapshot().is_none() {
+        match client.get_values(&cr.to_df()) {
+            Ok(player) => {
+                store.apply_tick(Tick {
+                    at: chrono::Utc::now(),
+                    vars: player,
+                    err: None,
+                    scheduled: false,
+                });
+            }
+            Err(err) => eprintln!("could not read your level ({err}); reward XP will be omitted"),
+        }
+    }
+    let (level, gold) = store
+        .snapshot()
+        .map(|s| (s.level, s.gold_member))
+        .unwrap_or((0, false));
+    print!("{}", format_challenge_board(&vars, level, gold, chrono::Utc::now()));
+    Ok(())
+}
+
+fn format_challenge_board(
+    vars: &std::collections::HashMap<String, String>,
+    level: i32,
+    gold: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    let board = challenges::parse(vars, level, gold);
+    let mut out = format!("{} challenges (level {level})\n", board.len());
+    for challenge in board {
+        let kind = if challenge.clan { "clan" } else { "personal" };
+        let status = if challenge.complete() { "x" } else { " " };
+        out.push_str(&format!("\n[{status}] {kind:<8} {}\n", challenge.name));
+        let remaining = challenge.remaining(now);
+        if !remaining.is_zero() {
+            out.push_str(&format!("        ends in {}\n", format::countdown(remaining)));
+        }
+        for objective in &challenge.objectives {
+            let frac = if objective.target <= 0 {
+                0.0
+            } else {
+                objective.score as f64 / objective.target as f64 * 100.0
+            };
+            out.push_str(&format!(
+                "        {:<28} {} / {}  ({frac:.0}%)\n",
+                objective.name,
+                format::int(objective.score),
+                format::int(objective.target)
+            ));
+        }
+        if challenge.reward_points > 0 {
+            out.push_str(&format!(
+                "        reward: {} clan points\n",
+                challenge.reward_points
+            ));
+        } else if challenge.reward_exp > 0 {
+            out.push_str(&format!(
+                "        reward: {} xp\n",
+                format::int(challenge.reward_exp)
+            ));
+        }
+        if !challenge.reward_special.is_empty() {
+            out.push_str(&format!("        reward: {}\n", challenge.reward_special));
+        }
+    }
+    out
+}
+
+fn load_allstats_catalog(at: DateTime<Utc>) -> Result<catalog::Catalog, Box<dyn Error>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/allstats.txt");
+    let raw = std::fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+    let vars = dfclient::parse_flash(&raw)?;
+    catalog::parse(&vars, at).map_err(|err| err.into())
+}
+
+#[cfg(test)]
+fn json_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    match (a, b) {
+        (serde_json::Value::Number(x), serde_json::Value::Number(y)) => x.as_f64() == y.as_f64(),
+        (serde_json::Value::Array(x), serde_json::Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(l, r)| json_eq(l, r))
+        }
+        (serde_json::Value::Object(x), serde_json::Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, v)| y.get(k).map(|w| json_eq(v, w)).unwrap_or(false))
+        }
+        _ => a == b,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/print-view.json")
+    }
+
+    fn golden_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/print-view.golden.json")
+    }
+
+    #[test]
+    fn print_view_matches_golden() {
+        let view = view_from_fixture(&fixture_path()).unwrap();
+        let got: serde_json::Value =
+            serde_json::from_str(&model::marshal_indent(&view).unwrap()).unwrap();
+        let want: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(golden_path()).unwrap()).unwrap();
+        assert!(
+            json_eq(&got, &want),
+            "print-view JSON drifted from testdata/print-view.golden.json\ngot:\n{}\nwant:\n{}",
+            serde_json::to_string_pretty(&got).unwrap(),
+            serde_json::to_string_pretty(&want).unwrap()
+        );
+    }
+
+    #[test]
+    fn check_config_example_mentions_budget() {
+        let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("df-hud.example.toml");
+        let text = check_config_text(Some(&example)).unwrap();
+        assert!(text.starts_with("config ok (config "), "{text}");
+        assert!(text.contains("request budget: about "), "{text}");
+        assert!(text.contains("/hour while playing"), "{text}");
+        assert!(text.contains("/hour idle"), "{text}");
+        let playing = Config::default().requests_per_hour(1.0);
+        let idle = Config::default().requests_per_hour(0.0);
+        assert!(
+            text.contains(&format!("{playing:.0}/hour while playing")),
+            "{text}"
+        );
+        assert!(text.contains(&format!("{idle:.0}/hour idle")), "{text}");
+    }
+
+    #[test]
+    fn check_config_missing_file_is_defaults() {
+        let path = Path::new("/no/such/df-hud-config.toml");
+        let text = check_config_text(Some(path)).unwrap();
+        assert!(
+            text.contains("built-in defaults, no config file at /no/such/df-hud-config.toml"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn dump_fields_withholds_secrets() {
+        let mut vars = HashMap::new();
+        vars.insert("df_level".into(), "50".into());
+        vars.insert("password".into(), "hunter2".into());
+        vars.insert("sc".into(), "abc".into());
+        vars.insert("df_session3d".into(), "secret".into());
+        vars.insert("auth_token".into(), "tok".into());
+        let text = dump_record_fields(&vars);
+        assert!(text.starts_with("5 fields returned:\n"), "{text}");
+        assert!(text.contains("df_level = 50"), "{text}");
+        assert!(text.contains("password = [withheld]"), "{text}");
+        assert!(text.contains("sc = [withheld]"), "{text}");
+        assert!(text.contains("df_session3d = [withheld]"), "{text}");
+        assert!(text.contains("auth_token = [withheld]"), "{text}");
+        assert!(!text.contains("hunter2"), "{text}");
+    }
+
+    #[test]
+    fn check_game_starts_with_the_matching_rule() {
+        let text = check_game_text(None).unwrap();
+        let want = game::scan_description(game::DEFAULT_PROCESS);
+        assert!(text.starts_with(&want), "{text}");
+        assert!(
+            text.contains("FOUND:") || text.contains("NOT FOUND"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn dump_challenges_prints_the_board() {
+        let mut vars = HashMap::new();
+        vars.insert("challenge_0_challenge_id".into(), "8017".into());
+        vars.insert("challenge_0_name".into(), "Summer Death".into());
+        vars.insert("challenge_0_min_level".into(), "1".into());
+        vars.insert("challenge_0_max_level".into(), "415".into());
+        vars.insert("challenge_0_objectives".into(), "1".into());
+        vars.insert(
+            "challenge_0_objectives_1_name".into(),
+            "Kill Regular Infected".into(),
+        );
+        vars.insert("challenge_0_objectives_1_target".into(), "100".into());
+        vars.insert("challenge_0_objective_1_player_score".into(), "55".into());
+        vars.insert("challenge_0_reward_exp".into(), "2500".into());
+        let now = chrono::DateTime::<chrono::Utc>::from_timestamp(
+            1_200_000_000 + 584_880_000 + 60,
+            0,
+        )
+        .unwrap();
+        let text = format_challenge_board(&vars, 100, false, now);
+        assert!(text.starts_with("1 challenges (level 100)\n"), "{text}");
+        assert!(text.contains("[ ] personal Summer Death"), "{text}");
+        assert!(text.contains("Kill Regular Infected"), "{text}");
+        assert!(text.contains("55 / 100"), "{text}");
+        assert!(text.contains("reward: 250,000 xp"), "{text}");
+    }
+}

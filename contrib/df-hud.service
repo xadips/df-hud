@@ -1,0 +1,34 @@
+[Unit]
+Description=Dead Frontier HUD overlay for Hyprland
+Documentation=https://github.com/xadips/df-hud
+
+# The HUD is a Wayland client and cannot exist without a compositor, so its
+# lifetime is the graphical session's. PartOf means it stops when the session
+# does; without it a leftover df-hud would sit there logging that it cannot find
+# a compositor, once a second, until you noticed.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+# Five failures in a minute is a broken config or a missing library, not a blip,
+# and a restart loop is worse than an absent HUD: it buries the reason in a
+# thousand identical journal entries.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/df-hud
+Restart=on-failure
+RestartSec=5s
+
+# A reload rather than a restart, so the run clock and the XP window survive
+# editing the config. df-hud watches the file itself as well; this is for when
+# you would rather be explicit.
+ExecReload=/bin/kill -HUP $MAINPID
+
+# The overlay redraws once a second and talks to two servers on a timer. Neither
+# wants the CPU ahead of the game, and being nice about it costs nothing.
+Nice=5
+
+[Install]
+WantedBy=graphical-session.target
