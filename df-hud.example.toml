@@ -5,9 +5,9 @@
 # need to keep the lines you change.
 #
 # Unknown keys are a startup ERROR, not a warning - a typo would otherwise look
-# like a bug in df-hud. Intervals below their minimum are errors too, rather than
-# being quietly raised, because they decide how often df-hud talks to somebody
-# else's server.
+# like a bug in df-hud. Intervals are integer seconds. Values below their
+# minimum are errors too, rather than being quietly raised, because they decide
+# how often df-hud talks to somebody else's server.
 #
 # Editing this file while df-hud is running reloads it. Three keys need a restart
 # and are noted where they appear.
@@ -25,8 +25,8 @@ allstats_url = "https://fairview.deadfrontier.com/onlinezombiemmo/dfdata/get_all
 # banning you. Left commented so it stays version-stamped.
 # user_agent = "df-hud/dev (+local overlay; contact via Dead Frontier forums)"
 
-# Per-request timeout. Allowed range 2s..60s.
-timeout = "10s"
+# Per-request timeout. Allowed range 2..60 seconds.
+timeout = 10
 
 # Signing salt for hashed calls (challenges). Normally leave empty: the bridge
 # userscript reports the live value and a reported salt always wins, so the game
@@ -51,18 +51,18 @@ listen = "127.0.0.1:9275"
 # from the previous poll, so it would always be one poll stale, and it would
 # delay noticing the outpost-to-city transition by a whole idle interval.
 #
-# Minimums: active 5s, idle 30s, challenges 30s, catalog 1h. Regardless of these,
-# two requests are never sent less than 5s apart, so nothing that wakes df-hud
-# can turn into a burst.
-active_interval = "10s"
-idle_interval = "2m"
+# Minimums: active 5, idle 30, challenges 30, catalog 3600 seconds. Regardless of
+# these, two requests are never sent less than 5s apart, so nothing that wakes
+# df-hud can turn into a burst.
+active_interval = 10
+idle_interval = 120
 
 # The challenge board's cadence WHILE PLAYING. With the game closed it stretches
 # to idle_interval, so a short value chosen for play cannot become an all-night
 # poll if you turn only_when_game_running off.
-challenge_interval = "30s"
+challenge_interval = 30
 
-catalog_interval = "24h"
+catalog_interval = 86400
 
 # Fraction of the interval to randomise by, 0..0.5. Stops a restart loop from
 # lining requests up and keeps the traffic from looking metronomic.
@@ -75,7 +75,7 @@ only_when_game_running = true
 # credential is not backed off from at all: polling stops until the bridge
 # delivers a fresh session, because retrying a rejected login is precisely the
 # pattern that earns a temp ban.
-backoff_max = "5m"
+backoff_max = 300
 
 [game]
 # The client executable, matched against the first command-line argument's
@@ -109,9 +109,9 @@ window_class = ""
 window_title_ignore = ["configuration"]
 
 # How often the local process list is scanned. This is not a network request, so
-# there is no politeness floor - only sanity limits of 250ms..5m. Desktop window
-# events also trigger an immediate rescan.
-scan_interval = "500ms"
+# there is no politeness floor - only sanity limits of 1..300 seconds. Desktop
+# window events also trigger an immediate rescan.
+scan_interval = 1
 
 [game_keys]
 # Press a key in the game's own window at launch.
@@ -133,7 +133,7 @@ fps_key = "y"
 
 # How long to wait after the game's own window appears - NOT after the process
 # starts, which is when the launcher opens and can sit there indefinitely.
-fps_delay = "5s"
+fps_delay = 5
 
 # Press the launcher dialog's Play button as soon as it appears, so it flashes up
 # instead of waiting for you.
@@ -160,8 +160,8 @@ launcher_title = "Dead Frontier Configuration"
 
 # How long to leave the dialog on screen first, so it has focus of its own
 # default button before the key arrives. This is the floor on how long the dialog
-# is visible, so it is deliberately short; SilverOverlays uses the same 0.5s.
-launcher_delay = "500ms"
+# is visible, so it is deliberately short.
+launcher_delay = 1
 
 [hotkeys]
 # Native Windows hotkeys. They are registered only while the real game window is
@@ -269,10 +269,10 @@ reference_height = 1440
 # which is the rate worth staying near.
 enabled = true
 url = "https://www.dfprofiler.com/bossmap/json/"
-interval = "1m"
-max_interval = "5m"
-onslaught_interval = "30s"
-onslaught_max_interval = "1m"
+interval = 60
+max_interval = 300
+onslaught_interval = 30
+onslaught_max_interval = 60
 
 [presence]
 # Where you are, from the game CLIENT instead of the game server.
@@ -409,7 +409,7 @@ prefix = "Xp/Hr: "
 # The window is reset, not averaged across, whenever the samples either side stop
 # being comparable: a new run, a death, an XP boost starting or ending, a clock
 # jump, or a long gap.
-window = "5m"
+window = 300
 min_samples = 3
 
 [widget.map]
@@ -523,7 +523,7 @@ max_shown = 0
 # A display threshold rather than a request interval, so it has no minimum - but
 # a key because "soon" depends on how you play: two hours is plenty for a daily
 # kill count and nowhere near enough for a weekly you have not started.
-urgent_within = "2h"
+urgent_within = 7200
 
 # The listener also exposes the two corrections the tray menu offers, so a key
 # can do them without taking a hand off the mouse:
