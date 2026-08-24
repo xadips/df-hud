@@ -1283,11 +1283,7 @@ mod tests {
             .iter()
             .find(|t| t.text == "3 x Evolved Longarms")
             .expect("name");
-        let timer = scene
-            .texts
-            .iter()
-            .find(|t| t.text == "55m")
-            .expect("timer");
+        let timer = scene.texts.iter().find(|t| t.text == "55m").expect("timer");
         let rest = scene
             .texts
             .iter()
