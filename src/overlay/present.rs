@@ -9,7 +9,7 @@ use crate::data::citymap;
 use crate::format;
 use crate::model::{Challenge, CityEvent, CityEventKind, CityMark, View as ModelView, XpStability};
 use crate::overlay::layout::Viewport;
-use crate::overlay::scene::{self, Line, MapCell, MapMarker, MapView, View};
+use crate::overlay::scene::{self, Line, MapCell, MapMarker, MapView, TextRun, View};
 
 const BOARD_GAP_PX: f32 = 6.0;
 const DONE_RGB: [f32; 4] = [
@@ -37,7 +37,10 @@ const DAILY_RGB: [f32; 4] = [
     0x00 as f32 / 255.0,
     1.0,
 ];
-const HEADING_RGB: [f32; 4] = [0.55, 0.55, 0.55, 1.0];
+const HEADING_ALPHA: f32 = 0.50;
+const DONE_ALPHA: f32 = 0.60;
+const OBJECTIVE_ALPHA: f32 = 0.78;
+const COUNTDOWN_ALPHA: f32 = 0.70;
 
 const NEAREST_RANGE: i32 = 12;
 const XP_PENDING: &str = "--";
@@ -561,9 +564,7 @@ fn challenge_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
         .iter()
         .map(|r| Line {
             text: r.overlay_text(),
-            color: if r.heading {
-                Some(HEADING_RGB)
-            } else if r.done {
+            color: if r.done {
                 Some(DONE_RGB)
             } else if r.urgent {
                 Some(EXPIRING_RGB)
@@ -571,11 +572,9 @@ fn challenge_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
                 None
             },
             extra_ascent_px: if r.gap { BOARD_GAP_PX } else { 0.0 },
-            chip: None,
-            chip_ring: false,
             strike: r.done,
-            timer: String::new(),
-            label: String::new(),
+            runs: r.runs(),
+            ..Line::default()
         })
         .collect();
     if !v.challenge_status.is_empty() {
@@ -731,6 +730,47 @@ impl ChallengeRow {
             text = text.strip_suffix(" done").unwrap_or(&text).to_string();
         }
         text
+    }
+
+    fn runs(&self) -> Vec<TextRun> {
+        let row = if self.done { DONE_ALPHA } else { 1.0 };
+        let run = |text: String, part: f32| TextRun {
+            text,
+            alpha: row * part,
+        };
+        if self.heading {
+            return vec![run(self.heading_text(), HEADING_ALPHA)];
+        }
+
+        let mut out = Vec::new();
+        let mut name = self.name.clone();
+        if self.sub {
+            name.insert_str(0, "  ");
+        }
+        if !self.objective.is_empty() {
+            if !self.name.is_empty() {
+                name.push_str(": ");
+            }
+            if !name.is_empty() {
+                out.push(run(name, 1.0));
+            }
+            out.push(run(self.objective.clone(), OBJECTIVE_ALPHA));
+        } else if !name.is_empty() {
+            out.push(run(name, 1.0));
+        }
+
+        let label = self.label();
+        if !self.progress.is_empty() {
+            out.push(run(self.padding(&label), 1.0));
+            out.push(run(self.progress.clone(), 1.0));
+            if !self.countdown.is_empty() {
+                out.push(run(format!("  {}", self.countdown), COUNTDOWN_ALPHA));
+            }
+        } else if !self.countdown.is_empty() {
+            out.push(run(self.padding(&label), 1.0));
+            out.push(run(self.countdown.clone(), COUNTDOWN_ALPHA));
+        }
+        out
     }
 }
 
@@ -1530,6 +1570,99 @@ mod tests {
             lines.iter().any(|l| l.contains("Summer Death")),
             "{lines:?}"
         );
+    }
+
+    fn run_alpha(line: &Line, contains: &str) -> f32 {
+        line.runs
+            .iter()
+            .find(|r| r.text.contains(contains))
+            .unwrap_or_else(|| panic!("no run containing {contains:?} in {:?}", line.runs))
+            .alpha
+    }
+
+    #[test]
+    fn challenge_runs_dim_name_objective_countdown_heading_and_done() {
+        let now = Utc::now();
+        let v = ModelView {
+            now,
+            challenges: Some(vec![
+                Challenge {
+                    name: "First Strike".into(),
+                    end: now + ChronoDuration::minutes(20),
+                    objectives: vec![Objective {
+                        name: "Kill Any Boss".into(),
+                        target: 7,
+                        score: 2,
+                        has_score: true,
+                    }],
+                    ..Challenge::default()
+                },
+                Challenge {
+                    name: "Summer Loot".into(),
+                    repeatable: true,
+                    end: now + ChronoDuration::days(5),
+                    objectives: vec![Objective {
+                        name: "Loot Anything".into(),
+                        target: 10,
+                        score: 10,
+                        has_score: true,
+                    }],
+                    ..Challenge::default()
+                },
+            ]),
+            ..ModelView::default()
+        };
+        let mut cfg = all_on();
+        cfg.widget.challenges.show_sections = true;
+        let lines = challenge_lines(&v, &cfg);
+
+        let heading = lines
+            .iter()
+            .find(|l| l.text.starts_with("──"))
+            .expect("section heading");
+        assert!(heading.color.is_none());
+        assert!(!heading.strike);
+        assert_eq!(heading.runs.len(), 1);
+        assert!(
+            (heading.runs[0].alpha - HEADING_ALPHA).abs() < 1e-5,
+            "{}",
+            heading.runs[0].alpha
+        );
+
+        let name = lines
+            .iter()
+            .find(|l| l.text.contains("First Strike"))
+            .expect("name");
+        assert!((run_alpha(name, "First Strike") - 1.0).abs() < 1e-5);
+        assert!((run_alpha(name, "20m") - COUNTDOWN_ALPHA).abs() < 1e-5);
+
+        let objective = lines
+            .iter()
+            .find(|l| l.text.contains("Kill Any Boss"))
+            .expect("objective");
+        assert!((run_alpha(objective, "Kill Any Boss") - OBJECTIVE_ALPHA).abs() < 1e-5);
+
+        let done_name = lines
+            .iter()
+            .find(|l| l.text.contains("Summer Loot"))
+            .expect("done name");
+        assert!(done_name.strike);
+        assert_eq!(done_name.color, Some(DONE_RGB));
+        assert!((run_alpha(done_name, "Summer Loot") - DONE_ALPHA).abs() < 1e-5);
+
+        let done_obj = lines
+            .iter()
+            .find(|l| l.text.contains("Loot Anything"))
+            .expect("done objective");
+        assert!(done_obj.strike);
+        assert!(
+            (run_alpha(done_obj, "Loot Anything") - DONE_ALPHA * OBJECTIVE_ALPHA).abs() < 1e-5,
+            "{}",
+            run_alpha(done_obj, "Loot Anything")
+        );
+
+        let joined: String = done_obj.runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(joined, done_obj.text);
     }
 
     #[test]
