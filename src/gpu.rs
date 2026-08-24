@@ -64,12 +64,13 @@ pub struct Gpu {
     atlas_tex: glow::Texture,
     u_resolution: glow::UniformLocation,
     font: Font,
+    font_want: String,
     atlas: Atlas,
     px: f32,
 }
 
 impl Gpu {
-    pub fn new(gl: Glow, buf_w: i32, buf_h: i32) -> Result<Self, Box<dyn Error>> {
+    pub fn new(gl: Glow, buf_w: i32, buf_h: i32, font_want: &str) -> Result<Self, Box<dyn Error>> {
         unsafe {
             eprintln!(
                 "GL renderer={} version={}",
@@ -78,7 +79,7 @@ impl Gpu {
             );
         }
 
-        let font = Font::load()?;
+        let font = Font::load(Some(font_want))?;
         let atlas = Atlas::new();
         let program = unsafe { link_program(&gl)? };
         let u_resolution = unsafe {
@@ -142,6 +143,7 @@ impl Gpu {
             atlas_tex,
             u_resolution,
             font,
+            font_want: font_want.trim().to_string(),
             atlas,
             px: 0.0,
         };
@@ -155,6 +157,28 @@ impl Gpu {
 
     pub fn resize(&self, buf_w: i32, buf_h: i32) {
         unsafe { self.gl.viewport(0, 0, buf_w, buf_h) };
+    }
+
+    pub fn set_font(&mut self, want: &str) {
+        let want = want.trim();
+        if want == self.font_want {
+            return;
+        }
+        match crate::font::try_load(Some(want)) {
+            Ok(font) => {
+                self.font = font;
+                self.font_want = want.to_string();
+                self.atlas.reset();
+                eprintln!(
+                    "font={} atlas={}x{} (hinted LCD, 1px outline)",
+                    self.font.name, self.atlas.width, self.atlas.height
+                );
+            }
+            Err(err) => {
+                eprintln!("font: {err}; keeping {}", self.font.name);
+                self.font_want = want.to_string();
+            }
+        }
     }
 
     pub fn draw(

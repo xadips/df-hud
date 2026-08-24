@@ -140,7 +140,7 @@ pub struct Hud {
     pub margin_right: i32,
     pub margin_bottom: i32,
     pub margin_left: i32,
-    pub font_family: String,
+    pub font: String,
     pub font_size: f32,
     pub text_color: String,
     pub opacity: f32,
@@ -184,7 +184,6 @@ pub struct Widget {
 pub struct StatusWidget {
     pub x: i32,
     pub y: i32,
-    pub font_family: String,
     pub font_size: f32,
 }
 
@@ -193,7 +192,6 @@ pub struct SessionWidget {
     pub enabled: bool,
     pub x: i32,
     pub y: i32,
-    pub font_family: String,
     pub font_size: f32,
     pub color: String,
     pub prefix: String,
@@ -204,7 +202,6 @@ pub struct XpWidget {
     pub enabled: bool,
     pub x: i32,
     pub y: i32,
-    pub font_family: String,
     pub font_size: f32,
     pub color: String,
     pub prefix: String,
@@ -217,7 +214,6 @@ pub struct BlockWidget {
     pub enabled: bool,
     pub x: i32,
     pub y: i32,
-    pub font_family: String,
     pub font_size: f32,
     pub color: String,
     pub show_position: bool,
@@ -228,7 +224,6 @@ pub struct BossesWidget {
     pub enabled: bool,
     pub x: i32,
     pub y: i32,
-    pub font_family: String,
     pub font_size: f32,
     pub color: String,
     pub show_nearest: bool,
@@ -247,7 +242,6 @@ pub struct MapWidget {
     pub opacity: f32,
     pub show_list: bool,
     pub max_listed: i32,
-    pub font_family: String,
     pub font_size: f32,
     pub color: String,
 }
@@ -257,7 +251,6 @@ pub struct ChallengesWidget {
     pub enabled: bool,
     pub x: i32,
     pub y: i32,
-    pub font_family: String,
     pub font_size: f32,
     pub color: String,
     pub show_repeatable: bool,
@@ -394,7 +387,7 @@ impl Default for Hud {
             margin_right: 0,
             margin_bottom: 0,
             margin_left: 0,
-            font_family: "Courier New, monospace".into(),
+            font: String::new(),
             font_size: 12.0,
             text_color: "#e6cc4d".into(),
             opacity: 1.0,
@@ -410,14 +403,12 @@ impl Default for Widget {
             status: StatusWidget {
                 x: 10,
                 y: 10,
-                font_family: String::new(),
                 font_size: 0.0,
             },
             session: SessionWidget {
                 enabled: true,
                 x: 350,
                 y: 60,
-                font_family: String::new(),
                 font_size: 0.0,
                 color: "#ffffff".into(),
                 prefix: "IC Time: ".into(),
@@ -426,7 +417,6 @@ impl Default for Widget {
                 enabled: true,
                 x: 220,
                 y: 85,
-                font_family: String::new(),
                 font_size: 0.0,
                 color: "#ffffff".into(),
                 prefix: "Xp/Hr: ".into(),
@@ -437,7 +427,6 @@ impl Default for Widget {
                 enabled: true,
                 x: 2340,
                 y: 300,
-                font_family: String::new(),
                 font_size: 0.0,
                 color: "#9ecbff".into(),
                 show_position: false,
@@ -446,7 +435,6 @@ impl Default for Widget {
                 enabled: true,
                 x: 2240,
                 y: 344,
-                font_family: String::new(),
                 font_size: 0.0,
                 color: String::new(),
                 show_nearest: true,
@@ -463,7 +451,6 @@ impl Default for Widget {
                 opacity: 0.9,
                 show_list: true,
                 max_listed: 10,
-                font_family: String::new(),
                 font_size: 0.0,
                 color: "#e8e8e8".into(),
             },
@@ -471,7 +458,6 @@ impl Default for Widget {
                 enabled: true,
                 x: 10,
                 y: 190,
-                font_family: String::new(),
                 font_size: 0.0,
                 color: "#e8e8e8".into(),
                 show_repeatable: false,
@@ -795,6 +781,7 @@ impl Config {
                     self.hud.layer
                 ));
             }
+            self.hud.font = self.hud.font.trim().to_string();
             if self.hud.font_size <= 0.0 {
                 errs.push(format!(
                     "hud.font_size {} must be positive",
@@ -1045,7 +1032,7 @@ fn validate_color(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn expand_home(p: &str) -> String {
+pub(crate) fn expand_home(p: &str) -> String {
     if p == "~" {
         return std::env::var("HOME").unwrap_or_else(|_| p.into());
     }
@@ -1549,6 +1536,8 @@ window = 120
             ("[hud]\nclick_through = true\n", "unknown key"),
             ("[hud]\ncss = \"x\"\n", "unknown key"),
             ("[console]\nwidth = 720\n", "unknown key"),
+            ("[hud]\nfont_family = \"x\"\n", "unknown key"),
+            ("[widget.session]\nfont_family = \"x\"\n", "unknown key"),
         ];
         for (body, want) in cases {
             let err = Config::parse(body).unwrap_err();

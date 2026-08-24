@@ -109,10 +109,11 @@ widest row happens to be. `hud.margin_*` insets it, which moves the origin every
 group is measured from - useful for pushing everything below a bar, and zero by
 default.
 
-`font_family`, `font_size` and `color` are per group and optional; absent means
-"use the `[hud]` values", so a group only carries the keys it differs on. The
-position defaults were measured at 2560x1440, so another resolution wants its own
-numbers - and on a scaled monitor these are logical pixels, not device ones.
+`font_size` and `color` are per group and optional; absent means "use the `[hud]`
+values", so a group only carries the keys it differs on. The overlay is one face
+(`hud.font`: a path or a filename, empty for auto). The position defaults were
+measured at 2560x1440, so another resolution wants its own numbers - and on a
+scaled monitor these are logical pixels, not device ones.
 
 A group's `color` is its **normal** colour. The colours that carry meaning still
 win over it: the error banner's red, an outpost attack's red, the amber on a block
