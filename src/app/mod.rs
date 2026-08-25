@@ -461,14 +461,19 @@ pub fn start_with(
     {
         let handle = handle.clone();
         player.set_on_tick(move |tick: Tick| {
-            let cfg = handle.cfg.lock().unwrap().clone();
-            ingest_player_tick(
+            let xp_window = {
+                let cfg = handle.cfg.lock().unwrap();
+                cfg.widget.xp.effective_window(cfg.poll.active_interval.0)
+            };
+            if ingest_player_tick(
                 &handle.store,
                 &handle.persist,
-                &cfg,
+                xp_window,
                 &handle.last_run_start,
                 tick,
-            );
+            ) {
+                handle.challenges.wake();
+            }
             handle.wake_ui();
         });
     }
@@ -678,13 +683,13 @@ fn catch_sighup(handle: Arc<Handle>, stop: Arc<AtomicBool>) {
 fn ingest_player_tick(
     store: &Store,
     persist: &state::Store,
-    cfg: &Config,
+    xp_window: Duration,
     last_run_start: &Mutex<Option<DateTime<Utc>>>,
     tick: Tick,
 ) -> bool {
     let applied = store.apply_tick(tick);
     if applied {
-        write_xp_sample(store, persist, cfg, last_run_start);
+        write_xp_sample(store, persist, xp_window, last_run_start);
     }
     applied
 }
@@ -692,7 +697,7 @@ fn ingest_player_tick(
 fn write_xp_sample(
     store: &Store,
     persist: &state::Store,
-    cfg: &Config,
+    xp_window: Duration,
     last_run_start: &Mutex<Option<DateTime<Utc>>>,
 ) {
     let Some(snap) = store.snapshot() else {
@@ -701,8 +706,6 @@ fn write_xp_sample(
     if snap.xp_source == XpSource::None || snap.cumulative_xp <= 0 {
         return;
     }
-    let window = cfg.widget.xp.effective_window(cfg.poll.active_interval.0);
-
     let (run_start, _) = store.run();
     {
         let mut last = last_run_start.lock().unwrap();
@@ -713,7 +716,7 @@ fn write_xp_sample(
         }
     }
     if let Some(prev) = store.previous_snapshot()
-        && let Some(reason) = xp::window_reset(&prev, &snap, window)
+        && let Some(reason) = xp::window_reset(&prev, &snap, xp_window)
     {
         persist.reset_xp_window(reason);
     }
@@ -723,7 +726,7 @@ fn write_xp_sample(
             cumulative: snap.cumulative_xp,
             source: snap.xp_source.as_str().to_string(),
         },
-        window,
+        xp_window,
     );
 }
 
@@ -856,20 +859,21 @@ mod tests {
         let store = Store::new(None);
         let persist = state::Store::new("");
         let cfg = Config::default();
+        let xp_window = cfg.widget.xp.effective_window(cfg.poll.active_interval.0);
         let last_run = Mutex::new(None);
         let start = Utc::now();
 
         assert!(ingest_player_tick(
             &store,
             &persist,
-            &cfg,
+            xp_window,
             &last_run,
             xp_tick(start, 1_000_000, None),
         ));
         assert!(ingest_player_tick(
             &store,
             &persist,
-            &cfg,
+            xp_window,
             &last_run,
             xp_tick(start + chrono::Duration::seconds(10), 1_001_000, None),
         ));
@@ -881,7 +885,7 @@ mod tests {
             assert!(!ingest_player_tick(
                 &store,
                 &persist,
-                &cfg,
+                xp_window,
                 &last_run,
                 xp_tick(
                     start + chrono::Duration::seconds(10 + i),
