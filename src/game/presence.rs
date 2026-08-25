@@ -724,7 +724,13 @@ impl WindowsListener {
                 return Err(io::Error::from_raw_os_error(err as i32));
             }
         }
-        let next = create_pipe(&self.path, false).unwrap_or(std::ptr::null_mut());
+        let next = match create_pipe(&self.path, false) {
+            Ok(handle) => handle,
+            Err(err) => {
+                eprintln!("presence: next pipe instance ({err})");
+                std::ptr::null_mut()
+            }
+        };
         *self.pending.lock().unwrap() = next;
         Ok(IpcStream::Windows(WindowsPipe { handle }))
     }
