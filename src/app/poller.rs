@@ -152,11 +152,9 @@ pub struct PlayerPoller {
     stop: Arc<AtomicBool>,
     shutdown: Arc<Notify>,
     wake: Arc<Notify>,
-    min_gap: Mutex<Duration>,
     game_running: Arc<AtomicBool>,
     session_stale: Arc<AtomicBool>,
     status: Mutex<PollerStatus>,
-    last_poll: Mutex<Option<Instant>>,
     on_tick: Mutex<Option<TickHandler>>,
 }
 
@@ -171,22 +169,15 @@ impl PlayerPoller {
             stop: runtime.stop,
             shutdown: runtime.shutdown,
             wake: Arc::new(Notify::new()),
-            min_gap: Mutex::new(MIN_REQUEST_GAP),
             game_running: runtime.game_running,
             session_stale: runtime.session_stale,
             status: Mutex::new(PollerStatus::default()),
-            last_poll: Mutex::new(None),
             on_tick: Mutex::new(None),
         })
     }
 
     pub fn set_on_tick(&self, fn_: impl Fn(Tick) + Send + Sync + 'static) {
         *self.on_tick.lock().unwrap() = Some(Arc::new(fn_));
-    }
-
-    #[cfg(test)]
-    pub fn set_min_gap(&self, d: Duration) {
-        *self.min_gap.lock().unwrap() = d;
     }
 
     pub fn wake(&self) {
@@ -288,7 +279,6 @@ impl PlayerPoller {
             st.last_attempt = Some(Utc::now());
             st.total_polls += 1;
         }
-        *self.last_poll.lock().unwrap() = Some(Instant::now());
         if self.gate.wait(&self.stop, &self.shutdown).is_err() {
             return Tick {
                 at: Utc::now(),
@@ -391,11 +381,10 @@ impl Schedule for PlayerPoller {
     }
 
     fn apply_floor(&self, next: &mut Instant) {
-        if let Some(last) = *self.last_poll.lock().unwrap() {
-            let floor = last + *self.min_gap.lock().unwrap();
-            if *next < floor {
-                *next = floor;
-            }
+        if let Some(floor) = self.gate.reserved()
+            && *next < floor
+        {
+            *next = floor;
         }
     }
 
@@ -412,10 +401,9 @@ impl Schedule for PlayerPoller {
     }
 
     fn after_wake(&self, next: &mut Instant) {
-        *next = match *self.last_poll.lock().unwrap() {
-            Some(last) => last + *self.min_gap.lock().unwrap(),
-            None => Instant::now(),
-        };
+        if let Some(floor) = self.gate.reserved() {
+            *next = floor;
+        }
     }
 
     fn poll(&self) -> Outcome {
@@ -802,7 +790,6 @@ mod tests {
                 session_stale: Arc::new(AtomicBool::new(false)),
             },
         );
-        p.set_min_gap(Duration::from_millis(20));
         (p, stop, shutdown)
     }
 
@@ -839,7 +826,6 @@ mod tests {
                 session_stale: Arc::new(AtomicBool::new(false)),
             },
         );
-        p.set_min_gap(Duration::from_millis(0));
         p
     }
 
