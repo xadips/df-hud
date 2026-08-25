@@ -83,9 +83,9 @@ The tray is how you find df-hud when the overlay is off.
 - **Reload config**: read the TOML again without restarting
 - **Quit df-hud**
 
-On Windows the menu also has **Open config file** and **Start df-hud with
-Windows**. If Discord IPC is on but not connected, **Retry Discord IPC bind**
-shows up.
+On Windows the menu also has **Open config file**, **Open log file**, and
+**Start df-hud with Windows**. If Discord IPC is on but not connected, **Retry
+Discord IPC bind** shows up.
 
 The ticks follow the keys. Hide the board with `T` and the menu updates.
 

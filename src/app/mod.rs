@@ -271,8 +271,33 @@ impl Handle {
 
     pub fn open_config(&self) {
         let path = self.config_file_path();
+        if let Err(err) = crate::config::write_defaults_if_missing(&path) {
+            eprintln!("tray: could not write config file: {err}");
+        }
         if let Err(err) = autostart::open_file(&path) {
             eprintln!("tray: could not open config file: {err}");
+        }
+    }
+
+    pub fn open_log(&self) {
+        let path = crate::config::default_log_path();
+        if let Some(dir) = path.parent()
+            && let Err(err) = std::fs::create_dir_all(dir)
+        {
+            eprintln!("tray: could not create log directory: {err}");
+            return;
+        }
+        if !path.exists()
+            && let Err(err) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+        {
+            eprintln!("tray: could not create log file: {err}");
+            return;
+        }
+        if let Err(err) = autostart::open_file(&path) {
+            eprintln!("tray: could not open log file: {err}");
         }
     }
 

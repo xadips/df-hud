@@ -290,9 +290,9 @@ pub fn print_help() {
 
 fn help_text() -> String {
     let config = if cfg!(windows) {
-        "TOML. default: %APPDATA%\\df-hud\\config.toml (missing = built-in defaults)"
+        "TOML. default: %APPDATA%\\df-hud\\config.toml (created with defaults if missing)"
     } else {
-        "TOML. default ~/.config/df-hud/config.toml (missing = built-in defaults)"
+        "TOML. default ~/.config/df-hud/config.toml (created with defaults if missing)"
     };
     let overlay = if cfg!(target_os = "linux") {
         "\
@@ -359,6 +359,11 @@ pub fn run(launch: Launch) -> Result<(), Box<dyn Error>> {
 
 pub fn run_headless(config: Option<PathBuf>, print_hud: bool) -> Result<(), Box<dyn Error>> {
     let path = config.unwrap_or_else(config::default_path);
+    match config::write_defaults_if_missing(&path) {
+        Ok(true) => eprintln!("config: wrote defaults to {}", path.display()),
+        Ok(false) => {}
+        Err(err) => eprintln!("config: could not write defaults: {err}"),
+    }
     let cfg = Config::load(&path)?;
     eprintln!(
         "df-hud {} starting ({})",

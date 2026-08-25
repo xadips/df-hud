@@ -528,6 +528,14 @@ mod linux {
                     }
                     .into(),
                 );
+                items.push(
+                    StandardItem {
+                        label: "Open log file".into(),
+                        activate: Box::new(|this: &mut HudTray| this.handle.open_log()),
+                        ..StandardItem::default()
+                    }
+                    .into(),
+                );
             }
             items.push(
                 StandardItem {
@@ -688,6 +696,7 @@ mod windows {
     const ID_RELOAD: u16 = 24;
     const ID_STARTUP: u16 = 25;
     const ID_OPEN_CONFIG: u16 = 26;
+    const ID_OPEN_LOG: u16 = 27;
     const ID_QUIT: u16 = 22;
 
     struct Ctx {
@@ -937,6 +946,13 @@ mod windows {
                 menu,
                 u32::MAX,
                 MF_STRING,
+                ID_OPEN_LOG as usize,
+                wide("Open log file").as_ptr(),
+            );
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING,
                 ID_RELOAD as usize,
                 wide("Reload config").as_ptr(),
             );
@@ -986,6 +1002,7 @@ mod windows {
             }
             ID_STARTUP => h.set_start_on_login(!h.start_on_login()),
             ID_OPEN_CONFIG => h.open_config(),
+            ID_OPEN_LOG => h.open_log(),
             ID_RELOAD => h.reload_config(),
             ID_QUIT => h.request_stop(),
             _ => {}
