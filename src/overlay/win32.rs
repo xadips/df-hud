@@ -291,6 +291,14 @@ impl Monitor {
                 .next()
                 .is_some_and(|tail| tail.eq_ignore_ascii_case(want))
     }
+
+    fn same_surface(&self, other: &Self) -> bool {
+        self.name.eq_ignore_ascii_case(&other.name)
+            && self.left == other.left
+            && self.top == other.top
+            && self.width == other.width
+            && self.height == other.height
+    }
 }
 
 fn list_monitors() -> Result<Vec<Monitor>, Box<dyn Error>> {
@@ -676,7 +684,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         },
         &mut warned_monitors,
     )?;
-    let mut current_monitor = monitor.name.clone();
+    let mut current = monitor.clone();
     let mut buf_w = monitor.width - 2 * WINDOW_INSET;
     let mut buf_h = monitor.height - 2 * WINDOW_INSET;
 
@@ -743,7 +751,22 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         let vis_mon = handle.vis.state().monitor;
         let next_monitor_request =
             config::overlay_monitor(args.monitor.as_deref(), &runtime_cfg.hud.monitor, &vis_mon);
-        if mapped && next_monitor_request != monitor_request {
+        if let Ok(list) = list_monitors() {
+            monitors = list;
+        }
+        let picked = pick_monitor(
+            &monitors,
+            if next_monitor_request.is_empty() {
+                None
+            } else {
+                Some(next_monitor_request.as_str())
+            },
+            &mut warned_monitors,
+        )
+        .ok();
+        let vis = handle.visible.load(Ordering::SeqCst);
+        let surface_moved = picked.as_ref().is_some_and(|m| !current.same_surface(m));
+        if mapped && (!vis || next_monitor_request != monitor_request || surface_moved) {
             if let Some(surface) = &surface {
                 let _ = surface.make_current();
             }
@@ -754,35 +777,15 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
             needs_present = false;
         }
         monitor_request = next_monitor_request;
-        let vis = handle.visible.load(Ordering::SeqCst);
-        if mapped && !vis {
-            if let Some(surface) = &surface {
-                let _ = surface.make_current();
-            }
-            gpu.take();
-            surface.take();
-            win.hide();
-            mapped = false;
-            needs_present = false;
-        } else if !mapped && vis {
-            if let Ok(list) = list_monitors() {
-                monitors = list;
-            }
-            if let Ok(m) = pick_monitor(
-                &monitors,
-                if monitor_request.is_empty() {
-                    None
-                } else {
-                    Some(monitor_request.as_str())
-                },
-                &mut warned_monitors,
-            ) && m.name != current_monitor
+        if !mapped && vis {
+            if let Some(m) = picked
+                && !current.same_surface(m)
             {
                 win.place(m)?;
                 buf_w = m.width - 2 * WINDOW_INSET;
                 buf_h = m.height - 2 * WINDOW_INSET;
-                current_monitor = m.name.clone();
-                eprintln!("hud: pinned to {}", current_monitor);
+                current = m.clone();
+                eprintln!("hud: pinned to {}", current.name);
             }
             match create_gpu(instance, win.hwnd, buf_w, buf_h, &runtime_cfg.hud.font) {
                 Ok((s, g)) => {
@@ -830,5 +833,31 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
             }
             overlay::Win32Wait::Failed(_) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn monitor(name: &str, left: i32, top: i32, width: i32, height: i32) -> Monitor {
+        Monitor {
+            name: name.into(),
+            left,
+            top,
+            width,
+            height,
+            dpi: 96,
+            primary: true,
+        }
+    }
+
+    #[test]
+    fn same_surface_ignores_name_case_not_size() {
+        let a = monitor(r"\\.\DISPLAY1", 0, 0, 2560, 1440);
+        assert!(a.same_surface(&monitor(r"\\.\display1", 0, 0, 2560, 1440)));
+        assert!(!a.same_surface(&monitor(r"\\.\DISPLAY1", 0, 0, 1920, 1080)));
+        assert!(!a.same_surface(&monitor(r"\\.\DISPLAY2", 0, 0, 2560, 1440)));
+        assert!(!a.same_surface(&monitor(r"\\.\DISPLAY1", 1920, 0, 2560, 1440)));
     }
 }
