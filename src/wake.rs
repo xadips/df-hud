@@ -132,6 +132,16 @@ impl Notify {
         self.cvar.notify_all();
     }
 
+    pub fn wait(&self) {
+        let mut g = self.flag.lock().unwrap();
+        if *g {
+            *g = false;
+            return;
+        }
+        let mut g = self.cvar.wait(g).unwrap();
+        *g = false;
+    }
+
     pub fn wait_timeout(&self, d: Duration) {
         let mut g = self.flag.lock().unwrap();
         if *g {

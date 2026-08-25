@@ -132,6 +132,18 @@ impl Keys {
         );
     }
 
+    /// Still waiting on delay, focus, or a window — keep the 200 ms poll.
+    fn waiting(&self, game: GameState, place: &Placement) -> bool {
+        if !game.running {
+            return false;
+        }
+        let g = self.inner.lock().unwrap();
+        if place.launcher_only {
+            return self.dismiss.load(Ordering::SeqCst) && !g.launcher_sent;
+        }
+        self.fps.load(Ordering::SeqCst) && !g.sent
+    }
+
     fn dismiss_launcher_tick(
         &self,
         now: SystemTime,
@@ -221,7 +233,11 @@ pub fn spawn(handle: Arc<crate::app::Handle>, stop: Arc<std::sync::atomic::Atomi
                     active: active.as_deref(),
                     ready,
                 });
-                handle.ui.wait_timeout(Duration::from_millis(200));
+                if handle.gamekeys.waiting(game, &place) {
+                    handle.ui.wait_timeout(Duration::from_millis(200));
+                } else {
+                    handle.ui.wait();
+                }
             }
         })
         .ok();
@@ -343,6 +359,7 @@ mod tests {
         let start = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
         let (game, place) = running(42, "0xabc");
         tick(&k, start, &cfg(), game, &place, &send);
+        assert!(k.waiting(game, &place), "delay is work");
         assert_eq!(send.count(), 0);
         tick(
             &k,
@@ -363,6 +380,17 @@ mod tests {
         );
         assert_eq!(send.count(), 1);
         assert_eq!(send.last(), ("y".into(), "0xabc".into()));
+        assert!(!k.waiting(game, &place), "sent this launch");
+    }
+
+    #[test]
+    fn waiting_is_idle_when_the_game_is_down() {
+        let k = Keys::new(&cfg());
+        let send = Fake::new();
+        let place = Placement::default();
+        let game = GameState::default();
+        tick(&k, SystemTime::UNIX_EPOCH, &cfg(), game, &place, &send);
+        assert!(!k.waiting(game, &place));
     }
 
     #[test]

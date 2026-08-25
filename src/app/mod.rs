@@ -210,6 +210,7 @@ impl Handle {
         if persist_tray(self, crate::config::TrayOption::FpsDisplay, on) {
             self.gamekeys.set_fps_display(on);
             self.cfg.lock().unwrap().game_keys.fps_display = on;
+            self.wake_ui();
         }
     }
 
@@ -217,6 +218,7 @@ impl Handle {
         if persist_tray(self, crate::config::TrayOption::DismissLauncher, on) {
             self.gamekeys.set_dismiss_launcher(on);
             self.cfg.lock().unwrap().game_keys.dismiss_launcher = on;
+            self.wake_ui();
         }
     }
 

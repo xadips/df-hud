@@ -399,6 +399,14 @@ mod windows {
         let mut last_focus = false;
         let mut msg: MSG = unsafe { zeroed() };
         while !stop.load(Ordering::SeqCst) && !handle.stopped() {
+            if !handle.game_running.load(Ordering::SeqCst) {
+                if !bound.is_empty() {
+                    unbind_all(&mut bound);
+                    last_focus = false;
+                }
+                handle.ui.wait();
+                continue;
+            }
             let cfg = handle.cfg.lock().unwrap().hotkeys.clone();
             let slots = if cfg.enabled {
                 slots_from_cfg(&cfg)
