@@ -74,6 +74,15 @@ impl From<OverlayArgs> for Args {
     }
 }
 
+fn output_follow_changed(
+    mapped: bool,
+    awaiting_remap: bool,
+    resolved_pin: &str,
+    pinned_output: &str,
+) -> bool {
+    (mapped || awaiting_remap) && resolved_pin != pinned_output
+}
+
 /// EGL window + context. Present (`eglSwapBuffers`) lives here so Gpu stays
 /// surface-agnostic (WGL uses the same Gpu).
 struct GlWindow {
@@ -206,11 +215,8 @@ impl App {
             return;
         };
         let cfg = handle.cfg.lock().unwrap().clone();
-        let monitor_changed = cfg.hud.monitor != self.cfg.hud.monitor;
         self.cfg = cfg;
-        if monitor_changed && self.mapped {
-            self.unmap();
-        }
+        self.follow_output();
     }
 
     fn buffer_size(&self) -> (i32, i32) {
@@ -357,6 +363,28 @@ impl App {
             &self.cfg.hud.monitor,
             &self.vis_monitor(),
         )
+    }
+
+    /// Name we would pin to: a known `wl_output`, or empty for compositor default.
+    fn resolved_pin(&self) -> String {
+        let want = self.wanted_output();
+        if self.lookup_output(&want).is_some() {
+            want
+        } else {
+            String::new()
+        }
+    }
+
+    /// `hud.monitor = "auto"` follows Visibility. Unmap so the next show rebinds.
+    fn follow_output(&mut self) {
+        if output_follow_changed(
+            self.mapped,
+            self.awaiting_remap,
+            &self.resolved_pin(),
+            &self.pinned_output,
+        ) {
+            self.unmap();
+        }
     }
 
     fn lookup_output(&self, want: &str) -> Option<WlOutput> {
@@ -784,11 +812,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
                         Some(gpu) => overlay::push_config(h, gpu, &cfg),
                         None => h.replace_config(cfg),
                     };
-                    let monitor_changed = applied.hud.monitor != app.cfg.hud.monitor;
                     app.cfg = applied;
-                    if monitor_changed && app.mapped {
-                        app.unmap();
-                    }
                 } else {
                     app.cfg = cfg;
                 }
@@ -796,6 +820,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
                 h.note_config_watch(&watch, false);
             }
         }
+        app.follow_output();
         let vis = app
             .handle
             .as_ref()
@@ -854,5 +879,20 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
                 app.needs_present = true;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rematch_when_auto_target_moves() {
+        assert!(output_follow_changed(true, false, "HDMI-A-1", "DP-2"));
+        assert!(!output_follow_changed(true, false, "DP-2", "DP-2"));
+        assert!(!output_follow_changed(false, false, "HDMI-A-1", "DP-2"));
+        assert!(output_follow_changed(false, true, "HDMI-A-1", "DP-2"));
+        assert!(output_follow_changed(true, false, "", "DP-2"));
+        assert!(!output_follow_changed(true, false, "", ""));
     }
 }
