@@ -37,7 +37,8 @@ Change them in `[hotkeys]`. An empty value turns that one off. See
 ## Install
 
 Windows, or a Wayland compositor with layer-shell: Hyprland, KDE, Sway, niri,
-COSMIC, and most others. GNOME is the exception, and does not plan to add it.
+COSMIC, and most others. GNOME, Cinnamon, and Weston do not have it. The
+[install](docs/install.md) page lists the rest.
 
 The built-in hotkeys need Hyprland; on any other compositor, bind your own keys
 to the loopback API instead, which reaches every action the keys do.
@@ -51,4 +52,4 @@ everything except the challenge board.
 [Install](docs/install.md), [how to use](docs/usage.md),
 [configuration](docs/configuration.md).
 
-GPL-3.0. Notes on the game feeds are in [knowledge/](knowledge/).
+GPL-3.0-or-later. Notes on the game feeds are in [knowledge/](knowledge/).

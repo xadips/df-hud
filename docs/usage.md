@@ -1,9 +1,14 @@
 # How to use
 
 Clicks go through the overlay to the game. The HUD hides while Dead Frontier is
-not running (`hud.only_when_game_running`). On Linux it also follows the game's
-workspace (`hud.follow_game_workspace`), so it does not sit on every other
-desktop on that monitor.
+not running (`hud.only_when_game_running`). That is pixels only.
+`poll.only_when_game_running` is the matching network switch: with it on,
+closing the game means zero requests. On Linux the overlay also follows the
+game's workspace (`hud.follow_game_workspace`), so it does not sit on every
+other desktop on that monitor.
+
+`hud.enabled = false` turns the overlay off for good. Tray, `K`, and the HTTP
+toggle cannot override that.
 
 If Hyprland or the game window cannot be found, the HUD stays up rather than
 disappearing.
@@ -22,7 +27,7 @@ lets go when you alt-tab. Defaults:
 | `hotkeys.overlay` | `K` | Show or hide the whole overlay |
 
 Set a value to `""` to leave that one unbound. Chords work (`Ctrl+Shift+M`,
-`Alt+F8`, `Win+K`).
+`Alt+F8`, `Win+K`). `hotkeys.enabled = false` turns the whole grab off.
 
 The keys only work while Dead Frontier is focused. So `K` does nothing if you
 have alt-tabbed away. The HUD itself hides by workspace, not by focus. A window

@@ -24,8 +24,9 @@ every level-up. The sidebar renders it as `df_exp / exp_lvl[level+1]`
 Consequence for XP/hr: a delta on `df_exp` goes **negative once per level**. The
 cumulative counter is `sum(exp_lvl 2..level) + df_exp`, which is continuous by
 construction — the XP that disappears from `df_exp` reappears in the prefix sum.
-`TestCumulativeXPIsContinuousAcrossLevelUp` pins that gaining one XP across a
-level boundary moves the cumulative total by exactly 1.
+`cumulative_xp_is_continuous_across_level_up` in `src/data/catalog.rs` pins
+that gaining one XP across a level boundary moves the cumulative total by
+exactly 1.
 
 Level 415 is the cap, hardcoded in `checkIfLevelUp` (`curLevel < 415`).
 
@@ -85,10 +86,11 @@ guess.
 So during play `df_exp` is already a monotonically rising counter, and a plain
 delta would work for the duration of a run. The reconstruction still earns its
 keep at the boundary: **it is invariant to a multi-level jump**, because whatever
-the prefix sum gains from the levels, `df_exp` loses. Pinned by
-`TestCumulativeXPSurvivesAMultiLevelJump`, which banks 600M at level 200,
-replays the website's per-level carry-over to level 235, and asserts the
-cumulative total does not move.
+the prefix sum gains from the levels, `df_exp` loses. A 600M bank at level 200
+that cashes in to 235 does not move the cumulative total. Table continuity
+across a single level-up (needed − 1 vs next level at 0 differs by 1) is pinned
+by `cumulative_xp_is_continuous_across_level_up` in `src/data/catalog.rs`. The
+banked multi-level case is not a named test.
 
 ### At the cap, `df_exp` is an unbounded accumulator
 

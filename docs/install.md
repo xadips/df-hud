@@ -68,8 +68,8 @@ at login. **Open config file** opens the TOML, and creates it if it is missing.
 
 ## Session script
 
-df-hud listens on `127.0.0.1:9310`. A userscript in the browser posts your
-session there. Install
+df-hud listens on `127.0.0.1:9310`. A userscript
+in the browser posts your session there. Install
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge) in
 Tampermonkey or Violentmonkey.
 
@@ -120,8 +120,8 @@ If nothing appears, [How to use](usage.md) covers visibility and keys.
 
 ## Build from source
 
-Rust stable. `make` is `cargo build --release`. `make check` is
-`cargo test --locked`.
+Rust 1.91 or later (`Cargo.toml` `rust-version`). `make` is
+`cargo build --release`. `make check` is `cargo test --locked`.
 
 Windows from Linux: `make package-windows`. On Windows itself,
 `build-windows.ps1 -Version ...`.

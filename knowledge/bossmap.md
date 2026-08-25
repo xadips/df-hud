@@ -54,9 +54,10 @@ For a **mission** the slot IS the outpost, zero-based: 0 Nastya's, 1 Fort Pastor
 2 Dogg's, 3 Precinct 13, 4 Secronom. Valcrest and Ground Zero carried none in the
 capture. Hence `M1..M5` with no ranking at all.
 
-**QRFs all arrive on slot 0** - two at once in the capture, `qrf` and `qrfdr` - so they
-cannot be numbered from it and are counted in feed order instead. Worth knowing before
-trusting the slot as a general key: it is unique per type for spawns and missions, and
+**QRFs all arrive on slot 0** - two at once in the capture, `qrf` and `qrfdr` -
+so they cannot be numbered from it. The overlay does not invent QRF1/QRF2
+either: Wasteland is `Δ`, Death Row is `▼`. Worth knowing before trusting the
+slot as a general key: it is unique per type for spawns and missions, and
 useless for QRFs.
 
 ## Three things taken from their own bossmap.js rather than guessed

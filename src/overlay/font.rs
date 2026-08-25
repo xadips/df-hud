@@ -1,7 +1,7 @@
 //! Bundled TTF → hinted LCD atlas. No Fontconfig, no Pango, no `FreeType`.
 //!
-//! Linux prefers a system monospace bold (Noto / Liberation / `DejaVu`), then
-//! falls back to the Go font Windows already embeds.
+//! Empty `hud.font` always loads the bundled JetBrains Mono Bold. A system
+//! face is used only when `hud.font` names a path or basename.
 //!
 //! The atlas is RGB coverage so ClearType-style edges survive; a transparent
 //! overlay can still fringe on bright game pixels. Gpu on EGL and WGL share this.
