@@ -1344,14 +1344,14 @@ mod tests {
                 let mut reader = dec.read_info().unwrap();
                 assert_eq!(reader.info().width, size as u32);
                 assert_eq!(reader.info().height, size as u32);
-                let mut buf = vec![0; reader.output_buffer_size()];
+                let mut buf = vec![0; reader.output_buffer_size().unwrap()];
                 reader.next_frame(&mut buf).unwrap();
                 let _ = buf;
             }
         }
         let data = icon_png(IconKind::Active, 64);
         let mut reader = png::Decoder::new(Cursor::new(&data)).read_info().unwrap();
-        let mut buf = vec![0; reader.output_buffer_size()];
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut buf).unwrap();
         let (w, h) = (info.width as usize, info.height as usize);
         let at = |x, y| {

@@ -379,22 +379,24 @@ mod tests {
         })
     }
 
+    /// ureq 3 turns a non-2xx into Err and drops the body, so these tests ask
+    /// for the response either way.
+    fn lenient_agent() -> ureq::Agent {
+        ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .build(),
+        )
+    }
+
     fn post(url: &str, ctype: &str, body: &[u8]) -> (u16, String) {
-        let mut req = ureq::post(url);
+        let mut req = lenient_agent().post(url);
         if !ctype.is_empty() {
-            req = req.set("Content-Type", ctype);
+            req = req.header("Content-Type", ctype);
         }
-        match req.send_bytes(body) {
-            Ok(resp) => {
-                let status = resp.status();
-                let text = resp.into_string().unwrap_or_default();
-                (status, text)
-            }
-            Err(ureq::Error::Status(status, resp)) => {
-                (status, resp.into_string().unwrap_or_default())
-            }
-            Err(e) => panic!("{e}"),
-        }
+        let mut resp = req.send(body).expect("post");
+        let status = resp.status().as_u16();
+        (status, resp.body_mut().read_to_string().unwrap_or_default())
     }
 
     fn test_srv(hooks: Hooks) -> (Server, Arc<Creds>, std::path::PathBuf) {
@@ -477,9 +479,8 @@ mod tests {
             &payload(valid_vars(), "", ""),
         );
         assert_eq!(status, 415);
-        let status = match ureq::get(&format!("{base}/api/userData")).call() {
-            Ok(r) => r.status(),
-            Err(ureq::Error::Status(s, _)) => s,
+        let status = match lenient_agent().get(&format!("{base}/api/userData")).call() {
+            Ok(r) => r.status().as_u16(),
             Err(_) => 0,
         };
         assert_ne!(status, 200);
@@ -496,7 +497,7 @@ mod tests {
             &payload(valid_vars(), FAKE_SALT, ""),
         );
         let resp = ureq::get(&format!("{base}/healthz")).call().unwrap();
-        let text = resp.into_string().unwrap();
+        let text = resp.into_body().read_to_string().unwrap();
         let got: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(got["have_credentials"], true);
         assert_eq!(got["have_signing_salt"], true);
@@ -566,9 +567,8 @@ mod tests {
         assert_eq!(post(&format!("{base}/api/xp/reset"), "", b"").0, 200);
         assert_eq!(runs.load(Ordering::SeqCst), 1);
         assert_eq!(resets.load(Ordering::SeqCst), 1);
-        let status = match ureq::get(&format!("{base}/api/run/start")).call() {
-            Ok(r) => r.status(),
-            Err(ureq::Error::Status(s, _)) => s,
+        let status = match lenient_agent().get(&format!("{base}/api/run/start")).call() {
+            Ok(r) => r.status().as_u16(),
             Err(_) => 0,
         };
         assert_ne!(status, 200);

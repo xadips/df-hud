@@ -14,18 +14,19 @@ description = "Dead Frontier overlay (GLES / WGL)"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 serde_json = "1"
-md-5 = "0.10"
+md-5 = "0.11"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 # rustls, not native-tls/openssl.
-ureq = { version = "2.12", default-features = false, features = ["tls"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Hinted LCD atlas. Pure Rust; no Fontconfig/Pango/FreeType.
 swash = { version = "0.2", features = ["scale", "render"] }
 # One renderer on both surfaces. Linux: GLES 3.0 via libEGL. Windows: GL 3.3 via WGL.
-glow = "0.16"
+glow = "0.18"
 # Runtime GL/EGL. khronos-egl 6.0.0 did not compile on rustc 1.97; keep this.
+# 0.8, not 0.9: the wayland stack pulls 0.8 through dlib, and we need no new API.
 libloading = "0.8"
 # Tray reticle PNG. Small encoder; not a GUI toolkit.
-png = "0.17"
+png = "0.18"
 # One argv walk. No clap; optional --print-view PATH is a peek, not a second parser.
 lexopt = "0.3"
 
