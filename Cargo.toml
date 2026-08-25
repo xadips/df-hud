@@ -1,7 +1,7 @@
 # Overlay. Do not add gtk, tokio, winit, wgpu, fyne, or khronos-egl.
 [package]
 name = "df-hud"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2024"
 # Duration::from_mins / from_hours. 1.90 does not build.
 rust-version = "1.91"
