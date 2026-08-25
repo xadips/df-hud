@@ -67,6 +67,7 @@ jobs:
           tar -tzf "$archive" | sort > package-files.txt
           printf '%s\n' \
             "$base/" \
+            "$base/JetBrainsMono-OFL.txt" \
             "$base/LICENSE" \
             "$base/df-hud" \
             "$base/df-hud.example.toml" \
@@ -124,7 +125,8 @@ jobs:
           archive="dist/df-hud-$VERSION-windows-amd64.zip"
           stage="dist/df-hud-$VERSION-windows-amd64"
           unzip -Z1 "$archive" | sort > package-files.txt
-          printf '%s\n' LICENSE df-hud.exe df-hud.example.toml | sort > expected-files.txt
+          printf '%s\n' LICENSE JetBrainsMono-OFL.txt df-hud.exe df-hud.example.toml \
+            | sort > expected-files.txt
           diff -u expected-files.txt package-files.txt
 
           x86_64-w64-mingw32-objdump -p "$stage/df-hud.exe" \
