@@ -53,6 +53,8 @@ finally {
 Copy-Item (Join-Path $RepoRoot "target\release\df-hud.exe") $Executable
 Copy-Item (Join-Path $RepoRoot "df-hud.example.toml") $Stage
 Copy-Item (Join-Path $RepoRoot "LICENSE") $Stage
+# OFL 1.1 requires the license to travel with the embedded font.
+Copy-Item (Join-Path $RepoRoot "assets\fonts\JetBrainsMono-OFL.txt") $Stage
 
 if (Test-Path $Archive) {
     Remove-Item $Archive -Force

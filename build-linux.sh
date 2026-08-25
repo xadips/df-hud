@@ -30,6 +30,8 @@ cargo build --locked --release --target x86_64-unknown-linux-gnu
 cp -- target/x86_64-unknown-linux-gnu/release/df-hud "$stage/df-hud"
 
 cp -- df-hud.example.toml LICENSE "$stage/"
+# OFL 1.1 requires the license to travel with the embedded font.
+cp -- assets/fonts/JetBrainsMono-OFL.txt "$stage/"
 cp -- contrib/df-hud.service "$stage/"
 tar -C "$output_directory" -czf "$archive" "$(basename -- "$stage")"
 

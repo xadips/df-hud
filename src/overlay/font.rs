@@ -17,20 +17,11 @@ use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::Format;
 
-/// Go Mono Bold. License: `assets/fonts/Go-fonts-LICENSE` (BSD, Bigelow & Holmes / Go project).
-const BUNDLED_TTF: &[u8] = include_bytes!("../../assets/fonts/Go-Mono-Bold.ttf");
-const BUNDLED_NAME: &str = "Go Mono Bold";
+/// JetBrains Mono Bold. License: `assets/fonts/JetBrainsMono-OFL.txt` (OFL 1.1).
+const BUNDLED_TTF: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Bold.ttf");
+const BUNDLED_NAME: &str = "JetBrains Mono Bold";
 
 /// System monospace bold faces, in the order we prefer. Filenames only — no Fontconfig.
-const SYSTEM_MONO_BOLD: &[&str] = &[
-    "NotoSansMono-Bold.ttf",
-    "NotoSansMono-Bold.otf",
-    "LiberationMono-Bold.ttf",
-    "DejaVuSansMono-Bold.ttf",
-    "Cousine-Bold.ttf",
-    "courbd.ttf",
-];
-
 const ATLAS_START: u32 = 512;
 /// Extra texels so LINEAR filtering does not pick a neighbour glyph.
 const PAD: u32 = 2;
@@ -131,10 +122,9 @@ pub(crate) fn try_load(want: Option<&str>) -> Result<Font, Box<dyn Error>> {
     }
 }
 
+/// Always the bundled font. A system pick varied by machine, and its coverage
+/// of the map markers was never guaranteed.
 fn load_auto() -> Font {
-    if let Some((bytes, name)) = load_system_mono_bold() {
-        return parse_font(Cow::Owned(bytes), name, true).expect("system TTF");
-    }
     parse_font(Cow::Borrowed(BUNDLED_TTF), BUNDLED_NAME.to_string(), false).expect("bundled TTF")
 }
 
@@ -254,18 +244,6 @@ fn image_to_rgb(image: &swash::scale::image::Image) -> Vec<u8> {
         }
         _ => vec![0u8; n * 3],
     }
-}
-
-fn load_system_mono_bold() -> Option<(Vec<u8>, String)> {
-    for dir in font_dirs() {
-        for file in SYSTEM_MONO_BOLD {
-            let path = dir.join(file);
-            if let Some(got) = read_ttf(&path) {
-                return Some(got);
-            }
-        }
-    }
-    None
 }
 
 fn read_ttf(path: &Path) -> Option<(Vec<u8>, String)> {
@@ -513,15 +491,14 @@ mod tests {
         }
     }
 
+    /// The default must not depend on what happens to be installed.
     #[test]
-    fn linux_prefers_a_system_mono_when_present() {
+    fn no_font_configured_uses_the_bundled_one() {
         let font = Font::load(None);
-        if Path::new("/usr/share/fonts/noto/NotoSansMono-Bold.ttf").is_file() {
-            assert!(
-                font.name.to_ascii_lowercase().contains("noto"),
-                "GTK monospace is Noto here, got {}",
-                font.name
-            );
+        assert_eq!(font.name, BUNDLED_NAME, "got {}", font.name);
+        for ch in ['Δ', '▼'] {
+            let g = font.rasterize(ch, 18.0, true);
+            assert!(g.width > 0 && g.height > 0, "{ch} did not render");
         }
     }
 
