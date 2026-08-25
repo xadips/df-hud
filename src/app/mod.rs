@@ -26,8 +26,8 @@ use crate::net::dfclient::Client;
 use crate::wake::{Notify, Wake};
 
 use groups::Groups;
-use poller::{ChallengePoller, PlayerPoller, PollerRuntime, MIN_REQUEST_GAP};
-use rategate::{sleep_cancellable, Gate};
+use poller::{ChallengePoller, MIN_REQUEST_GAP, PlayerPoller, PollerRuntime};
+use rategate::{Gate, sleep_cancellable};
 use store::Store;
 
 #[cfg(target_os = "linux")]
@@ -80,10 +80,10 @@ impl Handle {
     pub fn resume_pollers(&self) {
         self.player.resume();
         self.challenges.resume();
-        if let Some((_, _)) = self.creds.get() {
-            if let Some(at) = self.creds.updated_at() {
-                self.store.set_credentials_at(at);
-            }
+        if let Some((_, _)) = self.creds.get()
+            && let Some(at) = self.creds.updated_at()
+        {
+            self.store.set_credentials_at(at);
         }
         self.ping();
     }
@@ -707,10 +707,10 @@ fn write_xp_sample(
             persist.reset_xp_window("a new run started");
         }
     }
-    if let Some(prev) = store.previous_snapshot() {
-        if let Some(reason) = xp::window_reset(&prev, &snap, window) {
-            persist.reset_xp_window(reason);
-        }
+    if let Some(prev) = store.previous_snapshot()
+        && let Some(reason) = xp::window_reset(&prev, &snap, window)
+    {
+        persist.reset_xp_window(reason);
     }
     persist.append_xp_sample(
         XpSample {

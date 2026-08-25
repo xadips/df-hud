@@ -191,35 +191,33 @@ impl Watcher {
         let mut place = self.place.lock().unwrap().clone();
         let can_query = game.running && self.query.is_some();
         let mut query_failed_now = false;
-        if can_query {
-            if let Some(q) = &self.query {
-                let match_ = cfg.launcher_window_match();
-                match q.game_window(game.pid, &match_) {
-                    Err(err) => {
-                        query_failed_now = true;
-                        let now = Instant::now();
-                        let mut last = self.last_query_error.lock().unwrap();
-                        if last
-                            .map(|at| now.saturating_duration_since(at) >= QUERY_ERROR_LOG_INTERVAL)
-                            .unwrap_or(true)
-                        {
-                            eprintln!(
-                                "hud: cannot ask the desktop where the game's window is ({err}); \
+        if can_query && let Some(q) = &self.query {
+            let match_ = cfg.launcher_window_match();
+            match q.game_window(game.pid, &match_) {
+                Err(err) => {
+                    query_failed_now = true;
+                    let now = Instant::now();
+                    let mut last = self.last_query_error.lock().unwrap();
+                    if last
+                        .map(|at| now.saturating_duration_since(at) >= QUERY_ERROR_LOG_INTERVAL)
+                        .unwrap_or(true)
+                    {
+                        eprintln!(
+                            "hud: cannot ask the desktop where the game's window is ({err}); \
                                  keeping the last placement and retrying"
-                            );
-                            *last = Some(now);
-                        }
+                        );
+                        *last = Some(now);
                     }
-                    Ok(got) => {
-                        if self.last_query_error.lock().unwrap().take().is_some() {
-                            eprintln!("hud: desktop query recovered");
-                        }
-                        place = got;
-                        if place.known {
-                            window_seen = true;
-                            if game.same_session(*self.window_session.lock().unwrap()) {
-                                *self.window_seen.lock().unwrap() = true;
-                            }
+                }
+                Ok(got) => {
+                    if self.last_query_error.lock().unwrap().take().is_some() {
+                        eprintln!("hud: desktop query recovered");
+                    }
+                    place = got;
+                    if place.known {
+                        window_seen = true;
+                        if game.same_session(*self.window_session.lock().unwrap()) {
+                            *self.window_seen.lock().unwrap() = true;
                         }
                     }
                 }

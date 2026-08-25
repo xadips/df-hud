@@ -6,12 +6,12 @@
 
 #[cfg(test)]
 use std::io::Cursor;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::app::{store::TrayHint, Handle};
+use crate::app::{Handle, store::TrayHint};
 use crate::format;
 use crate::model::{Ns, View, Visibility};
 
@@ -376,8 +376,8 @@ fn run(handle: Arc<Handle>, stop: Arc<AtomicBool>) {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
+        ACTIVE, Arc, AtomicBool, ERROR, Handle, ICON_SIZE, IDLE, IconKind, Ordering, WARN,
         icon_kind, ipc_unconnected, menu_alert_from, raster, tooltip_with_presence, version_label,
-        Arc, AtomicBool, Handle, IconKind, Ordering, ACTIVE, ERROR, ICON_SIZE, IDLE, WARN,
     };
     use std::time::Duration;
 
@@ -665,15 +665,15 @@ mod windows {
     use std::time::Duration;
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::UI::Shell::{
-        Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-        NOTIFYICONDATAW,
+        NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+        Shell_NotifyIconW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow,
-        DispatchMessageW, GetCursorPos, InsertMenuW, LoadCursorW, PeekMessageW, PostQuitMessage,
-        RegisterClassExW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
-        CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_SEPARATOR,
-        MF_STRING, MF_UNCHECKED, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
+        CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
+        DestroyIcon, DestroyWindow, DispatchMessageW, GetCursorPos, IDC_ARROW, InsertMenuW,
+        LoadCursorW, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
+        PeekMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, TPM_RIGHTBUTTON,
+        TrackPopupMenu, TranslateMessage, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
         WM_RBUTTONUP, WNDCLASSEXW, WS_OVERLAPPED,
     };
 
@@ -708,251 +708,259 @@ mod windows {
     }
 
     unsafe fn run_inner(handle: Arc<Handle>, stop: Arc<AtomicBool>) {
-        let class = wide("df-hud-tray");
-        let wc = WNDCLASSEXW {
-            cbSize: size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(wndproc),
-            hInstance: windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null()),
-            hCursor: LoadCursorW(ptr::null_mut(), IDC_ARROW),
-            lpszClassName: class.as_ptr(),
-            ..zeroed()
-        };
-        RegisterClassExW(&wc);
-        let hwnd = CreateWindowExW(
-            0,
-            class.as_ptr(),
-            class.as_ptr(),
-            WS_OVERLAPPED,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            wc.hInstance,
-            ptr::null(),
-        );
-        if hwnd.is_null() {
-            eprintln!("tray: CreateWindowExW failed");
-            return;
-        }
-        let icon = hicon(IconKind::Idle);
-        let mut nid: NOTIFYICONDATAW = zeroed();
-        nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
-        nid.hWnd = hwnd;
-        nid.uID = 1;
-        nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-        nid.uCallbackMessage = WM_TRAY;
-        nid.hIcon = icon;
-        write_tip(&mut nid, "df-hud: starting");
-        Shell_NotifyIconW(NIM_ADD, &nid);
-        *CTX.lock().unwrap() = Some(Box::new(Ctx {
-            handle: handle.clone(),
-            hwnd,
-            icon,
-            kind: IconKind::Idle,
-            tip: "df-hud: starting".into(),
-        }));
-        let mut msg = zeroed();
-        while !stop.load(Ordering::SeqCst) {
-            refresh();
-            if PeekMessageW(&mut msg, hwnd, 0, 0, 1) != 0 {
-                if msg.message == WM_DESTROY {
-                    break;
-                }
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            } else {
-                handle.ui.wait_timeout(Duration::from_millis(200));
+        unsafe {
+            let class = wide("df-hud-tray");
+            let wc = WNDCLASSEXW {
+                cbSize: size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(wndproc),
+                hInstance: windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null()),
+                hCursor: LoadCursorW(ptr::null_mut(), IDC_ARROW),
+                lpszClassName: class.as_ptr(),
+                ..zeroed()
+            };
+            RegisterClassExW(&wc);
+            let hwnd = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                class.as_ptr(),
+                WS_OVERLAPPED,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                wc.hInstance,
+                ptr::null(),
+            );
+            if hwnd.is_null() {
+                eprintln!("tray: CreateWindowExW failed");
+                return;
             }
+            let icon = hicon(IconKind::Idle);
+            let mut nid: NOTIFYICONDATAW = zeroed();
+            nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+            nid.hWnd = hwnd;
+            nid.uID = 1;
+            nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+            nid.uCallbackMessage = WM_TRAY;
+            nid.hIcon = icon;
+            write_tip(&mut nid, "df-hud: starting");
+            Shell_NotifyIconW(NIM_ADD, &nid);
+            *CTX.lock().unwrap() = Some(Box::new(Ctx {
+                handle: handle.clone(),
+                hwnd,
+                icon,
+                kind: IconKind::Idle,
+                tip: "df-hud: starting".into(),
+            }));
+            let mut msg = zeroed();
+            while !stop.load(Ordering::SeqCst) {
+                refresh();
+                if PeekMessageW(&mut msg, hwnd, 0, 0, 1) != 0 {
+                    if msg.message == WM_DESTROY {
+                        break;
+                    }
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                } else {
+                    handle.ui.wait_timeout(Duration::from_millis(200));
+                }
+            }
+            Shell_NotifyIconW(NIM_DELETE, &nid);
+            if !icon.is_null() {
+                DestroyIcon(icon);
+            }
+            DestroyWindow(hwnd);
+            *CTX.lock().unwrap() = None;
         }
-        Shell_NotifyIconW(NIM_DELETE, &nid);
-        if !icon.is_null() {
-            DestroyIcon(icon);
-        }
-        DestroyWindow(hwnd);
-        *CTX.lock().unwrap() = None;
     }
 
     unsafe fn refresh() {
-        let mut g = CTX.lock().unwrap();
-        let Some(ctx) = g.as_mut() else {
-            return;
-        };
-        let view = ctx.handle.store.tray_hint(chrono::Utc::now());
-        let vis = ctx.handle.store.visibility();
-        let bind_failed = ctx.handle.presence_bind_failed();
-        let missing = ipc_unconnected(
-            Some(&view),
-            ctx.handle.has_presence(),
-            bind_failed,
-            ctx.handle.presence_client_connected(),
-            ctx.handle.vis.placement().launcher_only,
-        );
-        let kind = icon_kind(Some(&view), bind_failed, missing);
-        let tip = tooltip_with_presence(
-            Some(&view),
-            vis,
-            bind_failed,
-            missing,
-            ctx.handle.config_error().as_deref(),
-        );
-        if kind == ctx.kind && tip == ctx.tip {
-            return;
+        unsafe {
+            let mut g = CTX.lock().unwrap();
+            let Some(ctx) = g.as_mut() else {
+                return;
+            };
+            let view = ctx.handle.store.tray_hint(chrono::Utc::now());
+            let vis = ctx.handle.store.visibility();
+            let bind_failed = ctx.handle.presence_bind_failed();
+            let missing = ipc_unconnected(
+                Some(&view),
+                ctx.handle.has_presence(),
+                bind_failed,
+                ctx.handle.presence_client_connected(),
+                ctx.handle.vis.placement().launcher_only,
+            );
+            let kind = icon_kind(Some(&view), bind_failed, missing);
+            let tip = tooltip_with_presence(
+                Some(&view),
+                vis,
+                bind_failed,
+                missing,
+                ctx.handle.config_error().as_deref(),
+            );
+            if kind == ctx.kind && tip == ctx.tip {
+                return;
+            }
+            ctx.kind = kind;
+            ctx.tip = tip.clone();
+            if !ctx.icon.is_null() {
+                DestroyIcon(ctx.icon);
+            }
+            ctx.icon = hicon(kind);
+            let mut nid: NOTIFYICONDATAW = zeroed();
+            nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+            nid.hWnd = ctx.hwnd;
+            nid.uID = 1;
+            nid.uFlags = NIF_ICON | NIF_TIP;
+            nid.hIcon = ctx.icon;
+            write_tip(&mut nid, &tip);
+            Shell_NotifyIconW(NIM_MODIFY, &nid);
         }
-        ctx.kind = kind;
-        ctx.tip = tip.clone();
-        if !ctx.icon.is_null() {
-            DestroyIcon(ctx.icon);
-        }
-        ctx.icon = hicon(kind);
-        let mut nid: NOTIFYICONDATAW = zeroed();
-        nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
-        nid.hWnd = ctx.hwnd;
-        nid.uID = 1;
-        nid.uFlags = NIF_ICON | NIF_TIP;
-        nid.hIcon = ctx.icon;
-        write_tip(&mut nid, &tip);
-        Shell_NotifyIconW(NIM_MODIFY, &nid);
     }
 
     unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-        match msg {
-            WM_TRAY => {
-                if lp as u32 == WM_RBUTTONUP || lp as u32 == WM_LBUTTONUP {
-                    show_menu(hwnd);
+        unsafe {
+            match msg {
+                WM_TRAY => {
+                    if lp as u32 == WM_RBUTTONUP || lp as u32 == WM_LBUTTONUP {
+                        show_menu(hwnd);
+                    }
+                    0
                 }
-                0
+                WM_COMMAND => {
+                    on_command(wp as u16);
+                    0
+                }
+                WM_DESTROY => {
+                    PostQuitMessage(0);
+                    0
+                }
+                _ => DefWindowProcW(hwnd, msg, wp, lp),
             }
-            WM_COMMAND => {
-                on_command(wp as u16);
-                0
-            }
-            WM_DESTROY => {
-                PostQuitMessage(0);
-                0
-            }
-            _ => DefWindowProcW(hwnd, msg, wp, lp),
         }
     }
 
     unsafe fn show_menu(hwnd: HWND) {
-        let g = CTX.lock().unwrap();
-        let Some(ctx) = g.as_ref() else {
-            return;
-        };
-        let menu = CreatePopupMenu();
-        if let Some(alert) = menu_alert_from(&ctx.handle) {
+        unsafe {
+            let g = CTX.lock().unwrap();
+            let Some(ctx) = g.as_ref() else {
+                return;
+            };
+            let menu = CreatePopupMenu();
+            if let Some(alert) = menu_alert_from(&ctx.handle) {
+                InsertMenuW(
+                    menu,
+                    u32::MAX,
+                    MF_STRING | MF_GRAYED | MF_DISABLED,
+                    0,
+                    wide(&alert).as_ptr(),
+                );
+                InsertMenuW(menu, u32::MAX, MF_SEPARATOR, 0, ptr::null());
+            }
+            let overlay_on = ctx.handle.overlay_on.load(Ordering::SeqCst);
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING | if overlay_on { MF_CHECKED } else { MF_UNCHECKED },
+                ID_OVERLAY as usize,
+                wide("Show overlay").as_ptr(),
+            );
+            let board = ctx.handle.groups.shown("challenges");
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING | if board { MF_CHECKED } else { MF_UNCHECKED },
+                ID_CHALLENGES as usize,
+                wide("Show challenges").as_ptr(),
+            );
+            let fps = ctx.handle.gamekeys.fps_display();
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING | if fps { MF_CHECKED } else { MF_UNCHECKED },
+                ID_FPS as usize,
+                wide("FPS display on launch").as_ptr(),
+            );
+            let skip = ctx.handle.gamekeys.dismiss_launcher();
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING | if skip { MF_CHECKED } else { MF_UNCHECKED },
+                ID_LAUNCHER as usize,
+                wide("Skip the launcher").as_ptr(),
+            );
+            InsertMenuW(menu, u32::MAX, MF_SEPARATOR, 0, ptr::null());
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING,
+                ID_XP as usize,
+                wide("Reset xp/hr").as_ptr(),
+            );
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING,
+                ID_RUN as usize,
+                wide("Restart run clock").as_ptr(),
+            );
+            if ctx.handle.has_presence() {
+                InsertMenuW(
+                    menu,
+                    u32::MAX,
+                    MF_STRING,
+                    ID_RETRY as usize,
+                    wide("Retry Discord IPC bind").as_ptr(),
+                );
+            }
+            if crate::app::autostart::available() {
+                let startup = ctx.handle.start_on_login();
+                InsertMenuW(
+                    menu,
+                    u32::MAX,
+                    MF_STRING | if startup { MF_CHECKED } else { MF_UNCHECKED },
+                    ID_STARTUP as usize,
+                    wide("Start df-hud with Windows").as_ptr(),
+                );
+            }
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING,
+                ID_OPEN_CONFIG as usize,
+                wide("Open config file").as_ptr(),
+            );
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING,
+                ID_RELOAD as usize,
+                wide("Reload config").as_ptr(),
+            );
+            InsertMenuW(menu, u32::MAX, MF_SEPARATOR, 0, ptr::null());
             InsertMenuW(
                 menu,
                 u32::MAX,
                 MF_STRING | MF_GRAYED | MF_DISABLED,
                 0,
-                wide(&alert).as_ptr(),
+                wide(&version_label()).as_ptr(),
             );
-            InsertMenuW(menu, u32::MAX, MF_SEPARATOR, 0, ptr::null());
-        }
-        let overlay_on = ctx.handle.overlay_on.load(Ordering::SeqCst);
-        InsertMenuW(
-            menu,
-            u32::MAX,
-            MF_STRING | if overlay_on { MF_CHECKED } else { MF_UNCHECKED },
-            ID_OVERLAY as usize,
-            wide("Show overlay").as_ptr(),
-        );
-        let board = ctx.handle.groups.shown("challenges");
-        InsertMenuW(
-            menu,
-            u32::MAX,
-            MF_STRING | if board { MF_CHECKED } else { MF_UNCHECKED },
-            ID_CHALLENGES as usize,
-            wide("Show challenges").as_ptr(),
-        );
-        let fps = ctx.handle.gamekeys.fps_display();
-        InsertMenuW(
-            menu,
-            u32::MAX,
-            MF_STRING | if fps { MF_CHECKED } else { MF_UNCHECKED },
-            ID_FPS as usize,
-            wide("FPS display on launch").as_ptr(),
-        );
-        let skip = ctx.handle.gamekeys.dismiss_launcher();
-        InsertMenuW(
-            menu,
-            u32::MAX,
-            MF_STRING | if skip { MF_CHECKED } else { MF_UNCHECKED },
-            ID_LAUNCHER as usize,
-            wide("Skip the launcher").as_ptr(),
-        );
-        InsertMenuW(menu, u32::MAX, MF_SEPARATOR, 0, ptr::null());
-        InsertMenuW(
-            menu,
-            u32::MAX,
-            MF_STRING,
-            ID_XP as usize,
-            wide("Reset xp/hr").as_ptr(),
-        );
-        InsertMenuW(
-            menu,
-            u32::MAX,
-            MF_STRING,
-            ID_RUN as usize,
-            wide("Restart run clock").as_ptr(),
-        );
-        if ctx.handle.has_presence() {
             InsertMenuW(
                 menu,
                 u32::MAX,
                 MF_STRING,
-                ID_RETRY as usize,
-                wide("Retry Discord IPC bind").as_ptr(),
+                ID_QUIT as usize,
+                wide("Quit df-hud").as_ptr(),
             );
+            drop(g);
+            let mut pt = zeroed();
+            GetCursorPos(&mut pt);
+            SetForegroundWindow(hwnd);
+            TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, ptr::null());
         }
-        if crate::app::autostart::available() {
-            let startup = ctx.handle.start_on_login();
-            InsertMenuW(
-                menu,
-                u32::MAX,
-                MF_STRING | if startup { MF_CHECKED } else { MF_UNCHECKED },
-                ID_STARTUP as usize,
-                wide("Start df-hud with Windows").as_ptr(),
-            );
-        }
-        InsertMenuW(
-            menu,
-            u32::MAX,
-            MF_STRING,
-            ID_OPEN_CONFIG as usize,
-            wide("Open config file").as_ptr(),
-        );
-        InsertMenuW(
-            menu,
-            u32::MAX,
-            MF_STRING,
-            ID_RELOAD as usize,
-            wide("Reload config").as_ptr(),
-        );
-        InsertMenuW(menu, u32::MAX, MF_SEPARATOR, 0, ptr::null());
-        InsertMenuW(
-            menu,
-            u32::MAX,
-            MF_STRING | MF_GRAYED | MF_DISABLED,
-            0,
-            wide(&version_label()).as_ptr(),
-        );
-        InsertMenuW(
-            menu,
-            u32::MAX,
-            MF_STRING,
-            ID_QUIT as usize,
-            wide("Quit df-hud").as_ptr(),
-        );
-        drop(g);
-        let mut pt = zeroed();
-        GetCursorPos(&mut pt);
-        SetForegroundWindow(hwnd);
-        TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, ptr::null());
     }
 
     fn on_command(id: u16) {
@@ -995,10 +1003,10 @@ mod windows {
     }
 
     fn hicon(kind: IconKind) -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
-        use super::{premul_bgra, raster, ACTIVE, ERROR, IDLE, WARN};
+        use super::{ACTIVE, ERROR, IDLE, WARN, premul_bgra, raster};
         use windows_sys::Win32::Graphics::Gdi::{
-            CreateBitmap, CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-            DIB_RGB_COLORS,
+            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS,
+            DeleteObject,
         };
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             CreateIconIndirect, GetSystemMetrics, ICONINFO, SM_CXSMICON,
@@ -1218,9 +1226,11 @@ mod tests {
             status: "session expired - open any Dead Frontier page to refresh".into(),
             ..View::default()
         };
-        assert!(menu_alert(Some(&expired), None, false, false)
-            .unwrap()
-            .contains("session expired"));
+        assert!(
+            menu_alert(Some(&expired), None, false, false)
+                .unwrap()
+                .contains("session expired")
+        );
         let long = "x".repeat(80);
         assert_eq!(
             menu_alert(Some(&idle), Some(&long), false, false).as_deref(),
@@ -1235,14 +1245,16 @@ mod tests {
             status: "session expired - open any Dead Frontier page to refresh".into(),
             ..View::default()
         };
-        assert!(tooltip(
-            Some(&v),
-            Visibility {
-                visible: true,
-                ..Visibility::default()
-            }
-        )
-        .contains("session expired"));
+        assert!(
+            tooltip(
+                Some(&v),
+                Visibility {
+                    visible: true,
+                    ..Visibility::default()
+                }
+            )
+            .contains("session expired")
+        );
     }
 
     #[test]
@@ -1309,7 +1321,9 @@ mod tests {
             vis,
             false,
             false,
-            Some("/home/me/.config/df-hud/config.toml: unknown key widgext (a typo here would otherwise be silently ignored; see df-hud.example.toml)"),
+            Some(
+                "/home/me/.config/df-hud/config.toml: unknown key widgext (a typo here would otherwise be silently ignored; see df-hud.example.toml)",
+            ),
         );
         assert!(bad.contains("config: unknown key widgext"), "{bad}");
         assert!(!bad.contains("/home/me/"), "{bad}");

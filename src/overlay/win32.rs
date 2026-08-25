@@ -19,14 +19,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use glow::Context as Glow;
-use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{
-    GetLastError, GENERIC_WRITE, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT, RECT,
+    GENERIC_WRITE, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT, RECT,
     WPARAM,
 };
 use windows_sys::Win32::Graphics::Dwm::{
-    DwmEnableBlurBehindWindow, DwmExtendFrameIntoClientArea, DWM_BB_BLURREGION, DWM_BB_ENABLE,
-    DWM_BLURBEHIND,
+    DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND, DwmEnableBlurBehindWindow,
+    DwmExtendFrameIntoClientArea,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     CreateRectRgn, DeleteObject, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR,
@@ -36,28 +35,29 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Console::{
-    AttachConsole, GetConsoleProcessList, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
-    STD_OUTPUT_HANDLE,
+    ATTACH_PARENT_PROCESS, AttachConsole, GetConsoleProcessList, STD_ERROR_HANDLE,
+    STD_OUTPUT_HANDLE, SetStdHandle,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
-    TaskDialogIndirect, MARGINS, TASKDIALOGCONFIG, TASKDIALOG_BUTTON,
-    TDF_ALLOW_DIALOG_CANCELLATION, TDF_SIZE_TO_CONTENT, TD_ERROR_ICON,
+    MARGINS, TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TD_ERROR_ICON, TDF_ALLOW_DIALOG_CANCELLATION,
+    TDF_SIZE_TO_CONTENT, TaskDialogIndirect,
 };
 use windows_sys::Win32::UI::HiDpi::{
-    GetDpiForMonitor, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
-    MDT_EFFECTIVE_DPI,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI,
+    SetProcessDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW,
-    LoadCursorW, MessageBoxW, MsgWaitForMultipleObjects, PeekMessageW, RegisterClassExW,
-    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
-    CS_HREDRAW, CS_OWNDC, CS_VREDRAW, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA,
-    MB_ICONERROR, MB_OK, MONITORINFOF_PRIMARY, MSG, PM_REMOVE, QS_ALLINPUT, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA,
-    WM_CLOSE, WM_DESTROY, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA,
+    LoadCursorW, MB_ICONERROR, MB_OK, MONITORINFOF_PRIMARY, MSG, MessageBoxW,
+    MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, QS_ALLINPUT, RegisterClassExW, SW_HIDE,
+    SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TranslateMessage, WM_CLOSE, WM_DESTROY, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
+use windows_sys::core::BOOL;
 
 use crate::app;
 use crate::cli::OverlayArgs;
@@ -162,10 +162,10 @@ pub fn fatal_alert(err: &str) {
     if shared_console() {
         return;
     }
-    if let Some(path) = &log {
-        if show_fatal_task_dialog(err, path) {
-            return;
-        }
+    if let Some(path) = &log
+        && show_fatal_task_dialog(err, path)
+    {
+        return;
     }
     let text = wide(&format!(
         "{err}\n\nThe overlay did not start. Fix the problem and launch df-hud again."
@@ -196,10 +196,10 @@ fn write_fatal_log(err: &str) -> Option<PathBuf> {
 }
 
 fn fatal_log_path() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("LOCALAPPDATA") {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir).join("df-hud").join("df-hud.log"));
-        }
+    if let Ok(dir) = std::env::var("LOCALAPPDATA")
+        && !dir.is_empty()
+    {
+        return Some(PathBuf::from(dir).join("df-hud").join("df-hud.log"));
     }
     Some(config::default_path().parent()?.join("df-hud.log"))
 }
@@ -239,10 +239,10 @@ fn show_fatal_task_dialog(err: &str, log: &Path) -> bool {
     if hr < 0 {
         return false;
     }
-    if button == ID_OPEN_LOG {
-        if let Err(open_err) = crate::app::autostart::open_file(log) {
-            eprintln!("could not open log: {open_err}");
-        }
+    if button == ID_OPEN_LOG
+        && let Err(open_err) = crate::app::autostart::open_file(log)
+    {
+        eprintln!("could not open log: {open_err}");
     }
     true
 }
@@ -692,7 +692,9 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     eprintln!(
         "hwnd layered+topmost+tool+noactivate+transparent  swap-interval=0  inset={WINDOW_INSET}"
     );
-    eprintln!("done-when: live HUD (block / XP / challenges / map) at 1 Hz over the game; clicks still pass through");
+    eprintln!(
+        "done-when: live HUD (block / XP / challenges / map) at 1 Hz over the game; clicks still pass through"
+    );
 
     let handle = app::start_with(
         watch.cfg.clone(),
@@ -774,14 +776,13 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     Some(monitor_request.as_str())
                 },
                 &mut warned_monitors,
-            ) {
-                if m.name != current_monitor {
-                    win.place(m)?;
-                    buf_w = m.width - 2 * WINDOW_INSET;
-                    buf_h = m.height - 2 * WINDOW_INSET;
-                    current_monitor = m.name.clone();
-                    eprintln!("hud: pinned to {}", current_monitor);
-                }
+            ) && m.name != current_monitor
+            {
+                win.place(m)?;
+                buf_w = m.width - 2 * WINDOW_INSET;
+                buf_h = m.height - 2 * WINDOW_INSET;
+                current_monitor = m.name.clone();
+                eprintln!("hud: pinned to {}", current_monitor);
             }
             match create_gpu(instance, win.hwnd, buf_w, buf_h, &runtime_cfg.hud.font) {
                 Ok((s, g)) => {
@@ -794,17 +795,18 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 Err(err) => eprintln!("WGL: {err}"),
             }
         }
-        if mapped && needs_present {
-            if let (Some(surface), Some(gpu)) = (surface.as_ref(), gpu.as_mut()) {
-                win.reassert_exstyle();
-                surface.make_current()?;
-                gpu.set_font(&runtime_cfg.hud.font);
-                let built = overlay::scene(&handle, buf_w as f32, buf_h as f32);
-                gpu.draw(buf_w, buf_h, buf_w, buf_h, &built)?;
-                surface.swap()?;
-                swaps += 1;
-                needs_present = false;
-            }
+        if mapped
+            && needs_present
+            && let (Some(surface), Some(gpu)) = (surface.as_ref(), gpu.as_mut())
+        {
+            win.reassert_exstyle();
+            surface.make_current()?;
+            gpu.set_font(&runtime_cfg.hud.font);
+            let built = overlay::scene(&handle, buf_w as f32, buf_h as f32);
+            gpu.draw(buf_w, buf_h, buf_w, buf_h, &built)?;
+            surface.swap()?;
+            swaps += 1;
+            needs_present = false;
         }
 
         let timeout_ms = overlay::wait_ms(now, started, args.duration, next_tick);

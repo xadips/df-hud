@@ -6,11 +6,11 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::data::TIME_OFFSET;
 use crate::data::bossmap::{self, BossMap};
 use crate::data::catalog::Catalog;
 use crate::data::citymap;
 use crate::data::xp;
-use crate::data::TIME_OFFSET;
 use crate::format;
 use crate::model::{
     Challenge, Deadline, GameState, Ns, PollerStatus, PresenceState, RunState, Snapshot, Tick,
@@ -37,19 +37,18 @@ pub fn parse_snapshot(
     if let Some(total) = int64_var(vars, "df_exptotal").filter(|v| *v > 0) {
         s.cumulative_xp = total;
         s.xp_source = XpSource::ExpTotal;
-    } else if let Some(c) = catalog {
-        if let Some(total) = c.cumulative_xp(s.level, s.exp_in_level) {
-            s.cumulative_xp = total;
-            s.xp_source = XpSource::Table;
-        }
+    } else if let Some(c) = catalog
+        && let Some(total) = c.cumulative_xp(s.level, s.exp_in_level)
+    {
+        s.cumulative_xp = total;
+        s.xp_source = XpSource::Table;
     }
-    if let Some(c) = catalog {
-        if s.level > 0 {
-            if let Some(needed) = c.exp_needed(s.level) {
-                s.exp_needed = needed;
-                s.pending_levels = pending_levels(c, s.level, s.exp_in_level);
-            }
-        }
+    if let Some(c) = catalog
+        && s.level > 0
+        && let Some(needed) = c.exp_needed(s.level)
+    {
+        s.exp_needed = needed;
+        s.pending_levels = pending_levels(c, s.level, s.exp_in_level);
     }
 
     let x = int_var(vars, "df_positionx");
@@ -69,11 +68,12 @@ pub fn parse_snapshot(
     }
     s.block_support = deadline_var(vars, "df_block_support_until", at);
 
-    if let Some(start) = int64_var(vars, "df_expstart") {
-        if s.xp_source == XpSource::ExpTotal && s.cumulative_xp >= start {
-            s.exp_since_start = s.cumulative_xp - start;
-            s.has_exp_since_start = true;
-        }
+    if let Some(start) = int64_var(vars, "df_expstart")
+        && s.xp_source == XpSource::ExpTotal
+        && s.cumulative_xp >= start
+    {
+        s.exp_since_start = s.cumulative_xp - start;
+        s.has_exp_since_start = true;
     }
 
     s.hp = int_var(vars, "df_hpcurrent").unwrap_or(0);
@@ -304,16 +304,16 @@ impl Store {
                 s.snapshot = Snapshot::default();
                 s.have_snap = false;
                 clear_session_derived(&mut s);
-            } else if let Some(seed) = s.run_seed.take() {
-                if seed.matches(g) {
-                    s.run_start = Some(seed.started_at);
-                    run_changed = true;
-                    let ago = Utc::now().signed_duration_since(seed.started_at);
-                    eprintln!(
-                        "session: resuming the run started {} ago",
-                        format::ago(ago.to_std().unwrap_or_default())
-                    );
-                }
+            } else if let Some(seed) = s.run_seed.take()
+                && seed.matches(g)
+            {
+                s.run_start = Some(seed.started_at);
+                run_changed = true;
+                let ago = Utc::now().signed_duration_since(seed.started_at);
+                eprintln!(
+                    "session: resuming the run started {} ago",
+                    format::ago(ago.to_std().unwrap_or_default())
+                );
             }
             (run_changed, s.on_run_change.clone())
         };
@@ -496,12 +496,12 @@ impl Store {
             client_uptime: Ns::from_std(s.game.elapsed(now)),
             ..View::default()
         };
-        if s.game.running {
-            if let Some(start) = s.run_start {
-                v.has_session = true;
-                if now > start {
-                    v.session_time = Ns::from_chrono(now - start);
-                }
+        if s.game.running
+            && let Some(start) = s.run_start
+        {
+            v.has_session = true;
+            if now > start {
+                v.session_time = Ns::from_chrono(now - start);
             }
         }
         if s.have_snap {
@@ -571,16 +571,18 @@ impl Store {
                 v.city_marks = Some(marks.clone());
             }
             let block_empty = v.block_events.as_ref().is_none_or(Vec::is_empty);
-            if v.has_position && block_empty && !v.client_loading {
-                if let Some(m) = bossmap::nearest_mark(&marks) {
-                    v.has_nearest = true;
-                    v.nearest_dx = m.walk.dx;
-                    v.nearest_dy = m.walk.dy;
-                    v.nearest_x = m.x;
-                    v.nearest_y = m.y;
-                    v.nearest_distance_in_blocks = m.walk.blocks;
-                    v.nearest_detour = m.walk.detour;
-                }
+            if v.has_position
+                && block_empty
+                && !v.client_loading
+                && let Some(m) = bossmap::nearest_mark(&marks)
+            {
+                v.has_nearest = true;
+                v.nearest_dx = m.walk.dx;
+                v.nearest_dy = m.walk.dy;
+                v.nearest_x = m.x;
+                v.nearest_y = m.y;
+                v.nearest_distance_in_blocks = m.walk.blocks;
+                v.nearest_detour = m.walk.detour;
             }
         }
         if s.have_board {
@@ -604,12 +606,12 @@ impl Store {
             have_data: s.have_snap,
             ..TrayHint::default()
         };
-        if s.game.running {
-            if let Some(start) = s.run_start {
-                hint.has_session = true;
-                if now > start {
-                    hint.session_time = Ns::from_chrono(now - start);
-                }
+        if s.game.running
+            && let Some(start) = s.run_start
+        {
+            hint.has_session = true;
+            if now > start {
+                hint.session_time = Ns::from_chrono(now - start);
             }
         }
         if let Some(get) = &s.xp_samples {
@@ -666,10 +668,8 @@ fn stability_locked(s: &Inner) -> XpStability {
 }
 
 fn fire_run_change(on_change: Option<Arc<dyn Fn() + Send + Sync>>, changed: bool) {
-    if changed {
-        if let Some(f) = on_change {
-            f();
-        }
+    if changed && let Some(f) = on_change {
+        f();
     }
 }
 

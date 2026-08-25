@@ -1,7 +1,7 @@
 //! Hotkey chords for config validation. Names match Win32 virtual keys.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
@@ -181,8 +181,8 @@ fn focus_matches(
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        fire, game_focused, slots_from_cfg, Arc, AtomicBool, Binding, Ordering, Slot, MOD_ALT,
-        MOD_CONTROL, MOD_SHIFT, MOD_WIN,
+        Arc, AtomicBool, Binding, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, Ordering, Slot, fire,
+        game_focused, slots_from_cfg,
     };
     use std::fs::{self, File, OpenOptions};
     use std::io::Read;
@@ -388,7 +388,7 @@ mod windows {
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, PeekMessageW, HWND_MESSAGE, MSG, PM_REMOVE, WM_HOTKEY,
+        GetForegroundWindow, HWND_MESSAGE, MSG, PM_REMOVE, PeekMessageW, WM_HOTKEY,
     };
 
     const MOD_NOREPEAT: u32 = 0x4000;
@@ -501,12 +501,11 @@ fn parse_virtual_key(part: &str) -> Option<(String, u32)> {
             return Some((upper, u32::from(key)));
         }
     }
-    if let Some(rest) = upper.strip_prefix('F') {
-        if let Ok(n) = rest.parse::<u32>() {
-            if (1..=24).contains(&n) {
-                return Some((format!("F{n}"), 0x70 + n - 1));
-            }
-        }
+    if let Some(rest) = upper.strip_prefix('F')
+        && let Ok(n) = rest.parse::<u32>()
+        && (1..=24).contains(&n)
+    {
+        return Some((format!("F{n}"), 0x70 + n - 1));
     }
     let named: &[(&str, &str, u32)] = &[
         ("BACKTICK", "Grave", 0xc0),

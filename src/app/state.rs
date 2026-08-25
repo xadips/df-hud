@@ -101,15 +101,14 @@ impl Store {
             if !g.dirty {
                 return Ok(());
             }
-            if let Some(last) = g.last_save {
-                if now
+            if let Some(last) = g.last_save
+                && now
                     .signed_duration_since(last)
                     .to_std()
                     .unwrap_or(Duration::ZERO)
                     < SAVE_INTERVAL
-                {
-                    return Ok(());
-                }
+            {
+                return Ok(());
             }
         }
         self.save()
@@ -140,14 +139,14 @@ impl Store {
 
     pub fn append_xp_sample(&self, sample: XpSample, window: Duration) {
         self.update(|st| {
-            if let Some(prev) = st.xp_samples.last() {
-                if prev.source != sample.source {
-                    eprintln!(
-                        "state: cumulative XP source changed from {} to {}; resetting the rate window",
-                        prev.source, sample.source
-                    );
-                    st.xp_samples.clear();
-                }
+            if let Some(prev) = st.xp_samples.last()
+                && prev.source != sample.source
+            {
+                eprintln!(
+                    "state: cumulative XP source changed from {} to {}; resetting the rate window",
+                    prev.source, sample.source
+                );
+                st.xp_samples.clear();
             }
             st.xp_samples.push(sample.clone());
             let cutoff = sample.at

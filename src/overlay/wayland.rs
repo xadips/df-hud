@@ -17,8 +17,8 @@ use std::error::Error;
 use std::ffi::c_void;
 use std::os::fd::{AsFd, AsRawFd};
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use glow::Context as Glow;
@@ -30,13 +30,13 @@ use crate::cli::OverlayArgs;
 use crate::config::{self, Config};
 use crate::overlay::{self, egl::Egl, gpu::Gpu, present};
 
-use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_client::{delegate_noop, Connection, Dispatch, Proxy, QueueHandle};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, delegate_noop};
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
@@ -273,10 +273,10 @@ impl App {
         }
         self.apply_passthrough();
         self.apply_viewport();
-        if let Some(serial) = self.pending_serial.take() {
-            if let Some(layer) = &self.layer_surface {
-                layer.ack_configure(serial);
-            }
+        if let Some(serial) = self.pending_serial.take()
+            && let Some(layer) = &self.layer_surface
+        {
+            layer.ack_configure(serial);
         }
         let cfg = self.current_cfg();
         let built = match &self.handle {
@@ -711,15 +711,14 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
     }
     app.surface = Some(surface);
     app.pin_output();
-    if frac_mgr.is_none() {
-        if let Some(output) = app
+    if frac_mgr.is_none()
+        && let Some(output) = app
             .outputs
             .iter()
             .find(|o| o.name.eq_ignore_ascii_case(&app.output_name))
             .or_else(|| app.outputs.first())
-        {
-            app.frac_scale = (output.scale.max(1) as u32) * 120;
-        }
+    {
+        app.frac_scale = (output.scale.max(1) as u32) * 120;
     }
     app.apply_layer_role();
     app.surface.as_ref().expect("surface").commit();
@@ -748,7 +747,9 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         args.namespace, app.output_name
     );
     eprintln!("check: hyprctl layers | grep -A5 {}", args.namespace);
-    eprintln!("done-when: live HUD (block / XP / challenges / map) at 1 Hz over the game; clicks still pass through");
+    eprintln!(
+        "done-when: live HUD (block / XP / challenges / map) at 1 Hz over the game; clicks still pass through"
+    );
 
     app.present()?;
 
@@ -767,11 +768,11 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
 
-        if let Some(h) = &app.handle {
-            if h.stopped() {
-                app.drop_gpu_before_window();
-                return Ok(());
-            }
+        if let Some(h) = &app.handle
+            && h.stopped()
+        {
+            app.drop_gpu_before_window();
+            return Ok(());
         }
         let now = Instant::now();
         if overlay::due(now, &mut next_tick) {

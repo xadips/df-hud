@@ -12,10 +12,10 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
+use swash::FontRef;
 use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::Format;
-use swash::FontRef;
 
 /// Go Mono Bold. License: `assets/fonts/Go-fonts-LICENSE` (BSD, Bigelow & Holmes / Go project).
 const BUNDLED_TTF: &[u8] = include_bytes!("../../assets/fonts/Go-Mono-Bold.ttf");

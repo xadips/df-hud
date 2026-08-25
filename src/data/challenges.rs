@@ -351,11 +351,13 @@ mod tests {
             (24, 30, false, true)
         );
         assert!(!Challenge::default().complete());
-        assert!(!Objective {
-            score: 5,
-            ..Objective::default()
-        }
-        .done());
+        assert!(
+            !Objective {
+                score: 5,
+                ..Objective::default()
+            }
+            .done()
+        );
         let ended = Challenge {
             end: Utc::now() - chrono::Duration::hours(1),
             ..Challenge::default()
@@ -365,28 +367,34 @@ mod tests {
             Challenge::default().remaining(Utc::now()),
             std::time::Duration::ZERO
         );
-        assert!(Challenge {
-            clan: true,
-            ..Challenge::default()
-        }
-        .eligible(1));
+        assert!(
+            Challenge {
+                clan: true,
+                ..Challenge::default()
+            }
+            .eligible(1)
+        );
         assert!(Challenge::default().eligible(1));
-        assert!(!Challenge {
-            min_level: 10,
-            max_level: 20,
-            ..Challenge::default()
-        }
-        .eligible(1));
-        assert!(Challenge {
-            min_level: 10,
-            max_level: 20,
-            objectives: vec![Objective {
-                has_score: true,
-                ..Objective::default()
-            }],
-            ..Challenge::default()
-        }
-        .eligible(1));
+        assert!(
+            !Challenge {
+                min_level: 10,
+                max_level: 20,
+                ..Challenge::default()
+            }
+            .eligible(1)
+        );
+        assert!(
+            Challenge {
+                min_level: 10,
+                max_level: 20,
+                objectives: vec![Objective {
+                    has_score: true,
+                    ..Objective::default()
+                }],
+                ..Challenge::default()
+            }
+            .eligible(1)
+        );
     }
 
     #[test]

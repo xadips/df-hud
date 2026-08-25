@@ -6,24 +6,24 @@
 //! not the overlay class — `WM_DESTROY` on a shared class ended the WGL spike.
 
 use std::error::Error;
-use std::ffi::{c_void, CString};
+use std::ffi::{CString, c_void};
 use std::mem::{size_of, zeroed};
 use std::ptr;
 
 use libloading::Library;
 use windows_sys::Win32::Foundation::HWND;
-use windows_sys::Win32::Graphics::Gdi::{GetDC, ReleaseDC, HDC};
+use windows_sys::Win32::Graphics::Gdi::{GetDC, HDC, ReleaseDC};
 use windows_sys::Win32::Graphics::OpenGL::{
-    wglCreateContext, wglDeleteContext, wglGetProcAddress, wglMakeCurrent, ChoosePixelFormat,
-    DescribePixelFormat, GetPixelFormat, SetPixelFormat, SwapBuffers, HGLRC, PFD_DOUBLEBUFFER,
+    ChoosePixelFormat, DescribePixelFormat, GetPixelFormat, HGLRC, PFD_DOUBLEBUFFER,
     PFD_DRAW_TO_WINDOW, PFD_SUPPORT_COMPOSITION, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA,
-    PIXELFORMATDESCRIPTOR,
+    PIXELFORMATDESCRIPTOR, SetPixelFormat, SwapBuffers, wglCreateContext, wglDeleteContext,
+    wglGetProcAddress, wglMakeCurrent,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, WS_OVERLAPPEDWINDOW,
 };
 
-use crate::overlay::win32::{last_err, wide, DUMMY_CLASS};
+use crate::overlay::win32::{DUMMY_CLASS, last_err, wide};
 
 const WGL_DRAW_TO_WINDOW_ARB: i32 = 0x2001;
 const WGL_ACCELERATION_ARB: i32 = 0x2003;

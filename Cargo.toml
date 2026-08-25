@@ -1,8 +1,8 @@
 # Overlay. Do not add gtk, tokio, winit, wgpu, fyne, or khronos-egl.
 [package]
 name = "df-hud"
-version = "0.4.1"
-edition = "2021"
+version = "0.4.2"
+edition = "2024"
 license = "GPL-3.0-or-later"
 publish = false
 description = "Dead Frontier overlay (GLES / WGL)"

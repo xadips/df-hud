@@ -1,7 +1,7 @@
 //! Runtime-loaded EGL 1.5 / GLES 3.0. No compile-time link to libEGL.
 
 use std::error::Error;
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 
 use libloading::{Library, Symbol};
@@ -107,14 +107,12 @@ impl Egl {
             return ptr::null();
         };
         let mut ptr = unsafe { (self.p_get_proc_address)(owned.as_ptr()).cast_const() };
-        if ptr.is_null() {
-            if let Some(gles) = &self.gles {
-                if let Ok(sym) =
-                    unsafe { gles.get::<unsafe extern "C" fn()>(owned.as_bytes_with_nul()) }
-                {
-                    ptr = (*sym) as *const c_void;
-                }
-            }
+        if ptr.is_null()
+            && let Some(gles) = &self.gles
+            && let Ok(sym) =
+                unsafe { gles.get::<unsafe extern "C" fn()>(owned.as_bytes_with_nul()) }
+        {
+            ptr = (*sym) as *const c_void;
         }
         ptr
     }

@@ -90,10 +90,10 @@ pub fn window_reset(prev: &Snapshot, next: &Snapshot, window: Duration) -> Optio
     }
     if !window.is_zero() {
         let gap = next.at.signed_duration_since(prev.at);
-        if let Ok(limit) = chrono::Duration::from_std(window.saturating_mul(2)) {
-            if gap > limit {
-                return Some("a long gap between samples");
-            }
+        if let Ok(limit) = chrono::Duration::from_std(window.saturating_mul(2))
+            && gap > limit
+        {
+            return Some("a long gap between samples");
         }
     }
     None
