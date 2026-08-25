@@ -392,7 +392,7 @@ prefix = "IC Time: "
 [widget.xp]
 enabled = true
 x = 220
-y = 85
+y = 80
 # White to match the clock, and because this sits beside the game's own
 # "LV 415: 8,122,281,000" and reads as its continuation.
 color = "#ffffff"
@@ -405,15 +405,14 @@ prefix = "Xp/Hr: "
 # active_interval; if it is not it widens rather than being rejected, and the
 # startup log says so.
 #
-# Five minutes, not thirty seconds, because XP arrives in lumps: a window short
+# One minute, not thirty seconds, because XP arrives in lumps: a window short
 # enough to contain no kill reads as a rate of zero, and a number flipping
-# between 20M/hr and nothing is actively misleading. Shorten it if you want it to
-# react faster and can live with it twitching.
+# between 20M/hr and nothing is actively misleading.
 #
 # The window is reset, not averaged across, whenever the samples either side stop
 # being comparable: a new run, a death, an XP boost starting or ending, a clock
 # jump, or a long gap.
-window = 300
+window = 60
 min_samples = 3
 
 [widget.map]
@@ -468,9 +467,11 @@ scale = 0.4
 # writing on it hard to read.
 opacity = 0.9
 
-# The key beside the grid - which identifier is what, how far to walk, how long
-# is left. Without it the digits in the cells mean nothing. Sorted nearest first,
-# because the question is not "what is on the map" but "what can I get to".
+# The key beside the grid - which identifier is what, how far to walk. Sorted
+# nearest first, because the question is not "what is on the map" but "what can
+# I get to". The city hour (bosses, bandits, QRF) is one countdown, on the
+# nearest of those rows, to the right of the name. Dailies, nests, and missions
+# keep their own.
 show_list = true
 
 # Cap on entries, 0 for no cap. What does not fit is COUNTED ("+3 more") rather

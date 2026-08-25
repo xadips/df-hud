@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn scales_across_common_resolutions() {
-        let point = (220.0, 85.0);
+        let point = (220.0, 80.0);
         let cases = [
             (
                 "1080p",
@@ -88,7 +88,7 @@ mod tests {
                     game_height: 1080.0,
                 },
                 165.0,
-                63.75,
+                60.0,
             ),
             (
                 "1440p",
@@ -99,7 +99,7 @@ mod tests {
                     game_height: 1440.0,
                 },
                 220.0,
-                85.0,
+                80.0,
             ),
             (
                 "4k 100 percent",
@@ -110,7 +110,7 @@ mod tests {
                     game_height: 2160.0,
                 },
                 330.0,
-                127.5,
+                120.0,
             ),
             (
                 "4k 150 percent",
@@ -121,7 +121,7 @@ mod tests {
                     game_height: 2160.0,
                 },
                 220.0,
-                85.0,
+                80.0,
             ),
         ];
         for (name, vp, want_x, want_y) in cases {

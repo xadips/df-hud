@@ -13,7 +13,7 @@ no OCR.
 - [Block info](docs/widgets/block.md): region or outpost, and block support. Top right.
 - [Bosses](docs/widgets/bosses.md): what is on your block, or the nearest event
 - [Run clock](docs/widgets/session.md): time spent playing, not how long the client has been open
-- [XP/hr](docs/widgets/xp.md): a five-minute average
+- [XP/hr](docs/widgets/xp.md): a one-minute average
 - [Challenge board](docs/widgets/challenges.md): the whole board, filtered by category
 - [City map](docs/widgets/map.md): the inner city. Press a key to show it
 

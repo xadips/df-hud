@@ -1005,6 +1005,44 @@ fn map_timer(m: &CityMark) -> String {
     }
 }
 
+/// City bosses, bandit packs, and QRFs share the hourly turnover. Dailies are
+/// random, nests last about two hours, missions are their own clock.
+fn shares_hourly_cycle(m: &CityMark) -> bool {
+    if m.off_map {
+        return false;
+    }
+    let cat = bossmap::mark_category(m.kind, &m.enemies);
+    if cat != MarkCategory::Nest && !bossmap::daily_marker(&m.enemies).is_empty() {
+        return false;
+    }
+    matches!(
+        cat,
+        MarkCategory::Boss | MarkCategory::Bandits | MarkCategory::Qrf
+    )
+}
+
+/// Indices whose hourly countdown is a duplicate of an earlier (nearer) row.
+fn hourly_cycle_dupes(entries: &[&CityMark]) -> std::collections::HashSet<usize> {
+    let mut buckets: std::collections::HashMap<u64, Vec<usize>> = std::collections::HashMap::new();
+    for (i, m) in entries.iter().enumerate() {
+        if !shares_hourly_cycle(m) || m.ends_in.0 <= 0 {
+            continue;
+        }
+        buckets
+            .entry(m.ends_in.std().as_secs())
+            .or_default()
+            .push(i);
+    }
+    let mut hide = std::collections::HashSet::new();
+    for idxs in buckets.values() {
+        if idxs.len() < 2 {
+            continue;
+        }
+        hide.extend(idxs.iter().copied().skip(1));
+    }
+    hide
+}
+
 fn map_list(marks: &[&CityMark], max_listed: i32, in_onslaught: bool) -> Vec<Line> {
     let mut order: Vec<String> = Vec::new();
     let mut best: std::collections::HashMap<String, CityMark> = std::collections::HashMap::new();
@@ -1038,6 +1076,8 @@ fn map_list(marks: &[&CityMark], max_listed: i32, in_onslaught: bool) -> Vec<Lin
     } else {
         max_listed as usize
     };
+    let shown: Vec<&CityMark> = entries.iter().take(cap).collect();
+    let hide_timer = hourly_cycle_dupes(&shown);
     let mut rows = Vec::new();
     for (i, m) in entries.iter().enumerate() {
         if i == cap {
@@ -1078,7 +1118,11 @@ fn map_list(marks: &[&CityMark], max_listed: i32, in_onslaught: bool) -> Vec<Lin
         } else {
             m.enemies.iter().map(String::as_str).collect()
         };
-        let extra = map_timer(m);
+        let extra = if hide_timer.contains(&i) {
+            String::new()
+        } else {
+            map_timer(m)
+        };
         let extra = extra.trim();
         rows.push(Line {
             text: format!("{}  {}", m.marker, names[0]),
@@ -1997,6 +2041,82 @@ mod tests {
         );
         assert_eq!(rows.iter().filter(|r| r.chip.is_some()).count(), 2);
         assert_eq!(rows.iter().filter(|r| r.chip_ring).count(), 1);
+        assert!(
+            !rows[0].timer.is_empty() && rows[1].timer.is_empty(),
+            "shared hour once, on the nearer QRF: {:?}",
+            rows.iter()
+                .map(|r| (r.text.as_str(), r.timer.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn map_list_hides_shared_hourly_timers() {
+        let hour = Duration::from_secs(19 * 60 + 36);
+        let bandits = mark("B4", 2, true, hour, &["4 x Bandits"]);
+        let boss = mark("I6", 5, true, hour, &["4 x Flaming Long Arms"]);
+        let qrf = CityMark {
+            marker: bossmap::QRF_MARKER.into(),
+            label: "QRF Wasteland".into(),
+            kind: CityEventKind::Qrf,
+            event_type: "qrf".into(),
+            ends_in: Ns::from_std(hour),
+            walk: Walk {
+                blocks: 6,
+                ..Walk::default()
+            },
+            reachable: true,
+            ..CityMark::default()
+        };
+        let nest = mark(
+            "N4",
+            7,
+            true,
+            Duration::from_secs(2 * 3600),
+            &["3 x Flaming Titan", "1 x Flaming Mother"],
+        );
+        let daily = mark("DH", 8, true, hour, &["1 x Devil Hound"]);
+        let mission = CityMark {
+            marker: "M5".into(),
+            label: "Wrath of the Wraiths".into(),
+            kind: CityEventKind::Mission,
+            enemies: vec!["5 x Flaming Wraith".into()],
+            ends_in: Ns::from_std(Duration::from_secs(10 * 3600 - 60)),
+            walk: Walk {
+                blocks: 9,
+                ..Walk::default()
+            },
+            reachable: true,
+            ..CityMark::default()
+        };
+        let rows = map_list(&[&bandits, &boss, &qrf, &nest, &daily, &mission], 20, false);
+        let headed: Vec<_> = rows.iter().filter(|r| r.chip.is_some()).collect();
+        let timer_of = |marker: &str| {
+            headed
+                .iter()
+                .find(|r| r.text.starts_with(marker))
+                .map(|r| r.timer.as_str())
+                .unwrap_or("")
+        };
+        let hour_text = crate::format::countdown(hour);
+        assert_eq!(timer_of("B4"), hour_text);
+        assert!(
+            timer_of("I6").is_empty(),
+            "same hour as B4: {:?}",
+            timer_of("I6")
+        );
+        assert!(timer_of(bossmap::QRF_MARKER).is_empty(), "same hour as B4");
+        assert_eq!(
+            timer_of("N4"),
+            crate::format::countdown(Duration::from_secs(2 * 3600)),
+            "nests keep the two-hour window"
+        );
+        assert_eq!(
+            timer_of("DH"),
+            hour_text,
+            "dailies keep their own clock even when it matches the hour"
+        );
+        assert!(!timer_of("M5").is_empty());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 `[widget.xp]`. Experience per hour, averaged over a sliding window.
 
-The default window is five minutes (`window = 300`). XP arrives in lumps. A
+The default window is one minute (`window = 60`). XP arrives in lumps. A
 window short enough to hold no kill reads as zero. The rate stays blank until
 `min_samples` polls have landed (default 3).
 
@@ -13,10 +13,10 @@ over `color`. After a challenge reward dumps a lump into the average, **X**
 | Key | Default | |
 | --- | --- | --- |
 | `enabled` | `true` | On or off |
-| `x`, `y` | `220`, `85` | Position at 2560x1440 |
+| `x`, `y` | `220`, `80` | Position at 2560x1440 |
 | `prefix` | `"Xp/Hr: "` | Text before the number |
 | `color` | `#ffffff` | Normal colour. Amber and red still win. |
-| `window` | `300` | Averaging window, seconds |
+| `window` | `60` | Averaging window, seconds |
 | `min_samples` | `3` | Samples before a rate is shown |
 
 If `window` is too short to hold `min_samples` at the poll interval, it widens

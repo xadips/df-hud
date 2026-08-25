@@ -195,6 +195,7 @@ it is worth fetching:
 | what | cycle |
 | --- | --- |
 | city bosses, bandit packs, QRF | on the hour, `XX:00` |
+| nests | about two hours up, next wave around 4 or 5 hours |
 | Onslaught (block `3000,3000`) | every 5 minutes |
 | Devil Hound, Behemoth, Volatile Leaper, 8x Bandits | **once a day at a random time**, lasting 3 hours for the zombies and 2 for the bandits |
 
