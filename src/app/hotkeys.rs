@@ -216,6 +216,10 @@ mod linux {
         let mut last_focus = false;
         let mut bind_failed = false;
         let mut leftover = String::new();
+        let hypr = hyprland_socket_present();
+        if !hypr {
+            eprintln!("hotkeys: no Hyprland socket; HTTP remains the control hatch");
+        }
         while !stop.load(Ordering::SeqCst) && !handle.stopped() {
             let cfg = handle.cfg.lock().unwrap().hotkeys.clone();
             let slots = if cfg.enabled {
@@ -231,7 +235,7 @@ mod linux {
             let focused = cfg.enabled && game_focused(&handle);
             if key != last_key || focused != last_focus {
                 unbind_all(&mut bound);
-                if focused {
+                if focused && hypr {
                     if let Err(err) = bind_all(&slots, &script, &mut bound) {
                         if !bind_failed {
                             eprintln!(
@@ -323,6 +327,10 @@ mod linux {
 
     fn lua_quote(s: &str) -> String {
         format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+
+    fn hyprland_socket_present() -> bool {
+        crate::game::desktop::hypr_socket_path(".socket.sock").is_ok()
     }
 
     fn hypr_eval(lua: &str) -> Result<(), String> {
