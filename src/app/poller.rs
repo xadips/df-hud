@@ -813,7 +813,7 @@ mod tests {
                 .http_status_as_error(false)
                 .build(),
         );
-        let p = PlayerPoller::new(
+        PlayerPoller::new(
             Arc::new(Mutex::new(Client::with_agent(agent, base, "df-hud-test"))),
             PollerRuntime {
                 creds: Arc::new(Creds::new("")),
@@ -825,8 +825,7 @@ mod tests {
                 game_running: Arc::new(AtomicBool::new(true)),
                 session_stale: Arc::new(AtomicBool::new(false)),
             },
-        );
-        p
+        )
     }
 
     #[test]

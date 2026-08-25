@@ -144,11 +144,15 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
         push_text_group(
             &mut scene,
             xf,
-            cfg.hud.margin_left + cfg.widget.status.x,
-            cfg.hud.margin_top + cfg.widget.status.y,
-            font_px(cfg, cfg.widget.status.font_size, xf),
-            view.status_color.unwrap_or(hud_color),
-            hud_a,
+            LineLayout {
+                at: [
+                    cfg.hud.margin_left + cfg.widget.status.x,
+                    cfg.hud.margin_top + cfg.widget.status.y,
+                ],
+                font_px: font_px(cfg, cfg.widget.status.font_size, xf),
+                default_color: view.status_color.unwrap_or(hud_color),
+                hud_a,
+            },
             &[view.status.as_str()],
         );
     }
@@ -158,11 +162,15 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
         push_text_group(
             &mut scene,
             xf,
-            cfg.hud.margin_left + cfg.widget.session.x,
-            cfg.hud.margin_top + cfg.widget.session.y,
-            font_px(cfg, cfg.widget.session.font_size, xf),
-            widget_color(cfg, &cfg.widget.session.color),
-            hud_a,
+            LineLayout {
+                at: [
+                    cfg.hud.margin_left + cfg.widget.session.x,
+                    cfg.hud.margin_top + cfg.widget.session.y,
+                ],
+                font_px: font_px(cfg, cfg.widget.session.font_size, xf),
+                default_color: widget_color(cfg, &cfg.widget.session.color),
+                hud_a,
+            },
             &[&line],
         );
     }
@@ -172,12 +180,17 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
         push_text_group(
             &mut scene,
             xf,
-            cfg.hud.margin_left + cfg.widget.xp.x,
-            cfg.hud.margin_top + cfg.widget.xp.y,
-            font_px(cfg, cfg.widget.xp.font_size, xf),
-            view.xp_color
-                .unwrap_or(widget_color(cfg, &cfg.widget.xp.color)),
-            hud_a,
+            LineLayout {
+                at: [
+                    cfg.hud.margin_left + cfg.widget.xp.x,
+                    cfg.hud.margin_top + cfg.widget.xp.y,
+                ],
+                font_px: font_px(cfg, cfg.widget.xp.font_size, xf),
+                default_color: view
+                    .xp_color
+                    .unwrap_or(widget_color(cfg, &cfg.widget.xp.color)),
+                hud_a,
+            },
             &[&line],
         );
     }
@@ -191,11 +204,15 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
         push_text_group(
             &mut scene,
             xf,
-            cfg.hud.margin_left + cfg.widget.block.x,
-            cfg.hud.margin_top + cfg.widget.block.y,
-            font_px(cfg, cfg.widget.block.font_size, xf),
-            widget_color(cfg, &cfg.widget.block.color),
-            hud_a,
+            LineLayout {
+                at: [
+                    cfg.hud.margin_left + cfg.widget.block.x,
+                    cfg.hud.margin_top + cfg.widget.block.y,
+                ],
+                font_px: font_px(cfg, cfg.widget.block.font_size, xf),
+                default_color: widget_color(cfg, &cfg.widget.block.color),
+                hud_a,
+            },
             &refs,
         );
     }
@@ -258,16 +275,15 @@ fn font_px(cfg: &Config, group_pt: f32, xf: Transform) -> f32 {
     xf.size(pt.max(1.0) * PT_TO_PX)
 }
 
-fn push_text_group(
-    scene: &mut Scene,
-    xf: Transform,
-    ax: i32,
-    ay: i32,
+#[derive(Clone, Copy)]
+struct LineLayout {
+    at: [i32; 2],
     font_px: f32,
-    color: [f32; 4],
+    default_color: [f32; 4],
     hud_a: f32,
-    rows: &[&str],
-) {
+}
+
+fn push_text_group(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[&str]) {
     let lines: Vec<Line> = rows
         .iter()
         .map(|r| Line {
@@ -275,25 +291,7 @@ fn push_text_group(
             ..Line::default()
         })
         .collect();
-    push_lines(
-        scene,
-        xf,
-        LineLayout {
-            at: [ax, ay],
-            font_px,
-            default_color: color,
-            hud_a,
-        },
-        &lines,
-    );
-}
-
-#[derive(Clone, Copy)]
-struct LineLayout {
-    at: [i32; 2],
-    font_px: f32,
-    default_color: [f32; 4],
-    hud_a: f32,
+    push_lines(scene, xf, layout, &lines);
 }
 
 fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line]) {
