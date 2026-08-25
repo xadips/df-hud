@@ -78,35 +78,46 @@ pub fn hud_lines(v: &ModelView, cfg: &Config, groups: &Groups) -> Vec<String> {
         if !scene.block_sub.is_empty() {
             text.push(scene.block_sub);
         }
-        rows.push((cfg.widget.block.y, cfg.widget.block.x, text));
+        let [x, y] = cfg.hud.place(
+            cfg.widget.block.anchor,
+            cfg.widget.block.x,
+            cfg.widget.block.y,
+        );
+        rows.push((y, x, text));
     }
     if !scene.bosses.is_empty() {
-        rows.push((
-            cfg.widget.bosses.y,
+        let [x, y] = cfg.hud.place(
+            cfg.widget.bosses.anchor,
             cfg.widget.bosses.x,
-            scene.bosses.iter().map(line_plain).collect(),
-        ));
+            cfg.widget.bosses.y,
+        );
+        rows.push((y, x, scene.bosses.iter().map(line_plain).collect()));
     }
     if !scene.clock.is_empty() {
-        rows.push((
-            cfg.widget.session.y,
+        let [x, y] = cfg.hud.place(
+            cfg.widget.session.anchor,
             cfg.widget.session.x,
+            cfg.widget.session.y,
+        );
+        rows.push((
+            y,
+            x,
             vec![format!("{}{}", cfg.widget.session.prefix, scene.clock)],
         ));
     }
     if !scene.xp.is_empty() {
-        rows.push((
-            cfg.widget.xp.y,
-            cfg.widget.xp.x,
-            vec![format!("{}{}", cfg.widget.xp.prefix, scene.xp)],
-        ));
+        let [x, y] = cfg
+            .hud
+            .place(cfg.widget.xp.anchor, cfg.widget.xp.x, cfg.widget.xp.y);
+        rows.push((y, x, vec![format!("{}{}", cfg.widget.xp.prefix, scene.xp)]));
     }
     if !scene.challenges.is_empty() {
-        rows.push((
-            cfg.widget.challenges.y,
+        let [x, y] = cfg.hud.place(
+            cfg.widget.challenges.anchor,
             cfg.widget.challenges.x,
-            scene.challenges.into_iter().map(|l| l.text).collect(),
-        ));
+            cfg.widget.challenges.y,
+        );
+        rows.push((y, x, scene.challenges.into_iter().map(|l| l.text).collect()));
     }
     rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     for (_, _, text) in rows {

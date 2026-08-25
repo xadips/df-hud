@@ -36,7 +36,7 @@ use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, delegate_noop};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum, delegate_noop};
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
@@ -170,6 +170,32 @@ struct OutputInfo {
     name: String,
     description: String,
     scale: i32,
+    logical_w: i32,
+    logical_h: i32,
+    mode_w: i32,
+    mode_h: i32,
+}
+
+impl OutputInfo {
+    fn panel(&self) -> Option<(i32, i32)> {
+        if self.logical_w > 0 && self.logical_h > 0 {
+            Some((self.logical_w, self.logical_h))
+        } else if self.mode_w > 0 && self.mode_h > 0 {
+            Some((self.mode_w, self.mode_h))
+        } else {
+            None
+        }
+    }
+}
+
+fn output_reference(outputs: &[OutputInfo], want: Option<&str>) -> Option<(i32, i32)> {
+    let named = want
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"))
+        .and_then(|want| outputs.iter().find(|o| o.name.eq_ignore_ascii_case(want)));
+    named
+        .or_else(|| outputs.first())
+        .and_then(OutputInfo::panel)
 }
 
 struct App {
@@ -513,6 +539,21 @@ impl Dispatch<WlOutput, usize> for App {
             }
             wl_output::Event::Description { description } => output.description = description,
             wl_output::Event::Scale { factor } => output.scale = factor,
+            wl_output::Event::Mode {
+                flags,
+                width,
+                height,
+                ..
+            } => {
+                let current = matches!(
+                    flags,
+                    WEnum::Value(mode) if mode.contains(wl_output::Mode::Current)
+                );
+                if output.mode_w == 0 || current {
+                    output.mode_w = width;
+                    output.mode_h = height;
+                }
+            }
             _ => {}
         }
     }
@@ -530,8 +571,13 @@ impl Dispatch<ZxdgOutputV1, usize> for App {
         let Some(output) = state.outputs.get_mut(*index) else {
             return;
         };
-        if let zxdg_output_v1::Event::Name { name } = event {
-            output.name = name;
+        match event {
+            zxdg_output_v1::Event::Name { name } => output.name = name,
+            zxdg_output_v1::Event::LogicalSize { width, height } => {
+                output.logical_w = width;
+                output.logical_h = height;
+            }
+            _ => {}
         }
     }
 }
@@ -636,8 +682,6 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         .bind::<ZxdgOutputManagerV1, _, _>(&qh, 1..=3, ())
         .ok();
 
-    let mut watch = config::Watch::open(args.config.clone())?;
-
     let mut app = App {
         qh: qh.clone(),
         compositor: Some(compositor),
@@ -662,7 +706,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         output_name: args.output.clone().unwrap_or_else(|| "auto".into()),
         pending_serial: None,
         needs_present: false,
-        cfg: watch.cfg.clone(),
+        cfg: Config::default(),
         namespace: args.namespace.clone(),
         cli_output: args.output.clone(),
         pinned_output: String::new(),
@@ -686,6 +730,10 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
             name: String::new(),
             description: String::new(),
             scale: 1,
+            logical_w: 0,
+            logical_h: 0,
+            mode_w: 0,
+            mode_h: 0,
         });
     }
     if let Some(mgr) = &xdg_output_mgr {
@@ -711,6 +759,10 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
     if args.list_outputs {
         return Ok(());
     }
+
+    let seed = output_reference(&app.outputs, args.output.as_deref());
+    let mut watch = config::Watch::open_with_reference(args.config.clone(), seed)?;
+    app.cfg = watch.cfg.clone();
 
     app.handle = Some(app::start_with(
         watch.cfg.clone(),

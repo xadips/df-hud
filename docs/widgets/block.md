@@ -13,7 +13,8 @@ against the client.
 | Key | Default | |
 | --- | --- | --- |
 | `enabled` | `true` | On or off |
-| `x`, `y` | `2340`, `300` | Position at 2560x1440. Top right. |
+| `anchor` | `right` | `x` is an inset from `hud.reference_width` |
+| `x`, `y` | `220`, `300` | 220px in from the right, 300 down |
 | `color` | `#9ecbff` | Normal colour |
 | `show_position` | `false` | Print `x, y` next to the name |
 

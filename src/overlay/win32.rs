@@ -296,6 +296,15 @@ impl Monitor {
     }
 }
 
+pub(crate) fn primary_panel() -> Option<(i32, i32)> {
+    let monitors = list_monitors().ok()?;
+    monitors
+        .iter()
+        .find(|m| m.primary)
+        .or_else(|| monitors.first())
+        .map(|m| (m.width, m.height))
+}
+
 fn list_monitors() -> Result<Vec<Monitor>, Box<dyn Error>> {
     let mut out: Vec<Monitor> = Vec::new();
     let ok = unsafe {
@@ -667,7 +676,12 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let mut watch = config::Watch::open(args.config.clone())?;
+    let seed = monitors
+        .iter()
+        .find(|m| m.primary)
+        .or_else(|| monitors.first())
+        .map(|m| (m.width, m.height));
+    let mut watch = config::Watch::open_with_reference(args.config.clone(), seed)?;
     let mut warned_monitors = HashSet::new();
     let want_name = config::overlay_monitor(args.monitor.as_deref(), &watch.cfg.hud.monitor, "");
     let monitor = pick_monitor(

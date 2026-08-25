@@ -30,7 +30,8 @@ on that grid.
 | Key | Default | |
 | --- | --- | --- |
 | `enabled` | `true` | On or off |
-| `x`, `y` | `2240`, `344` | Position at 2560x1440 |
+| `anchor` | `right` | `x` is an inset from `hud.reference_width` |
+| `x`, `y` | `320`, `344` | 320px in from the right, under block info |
 | `show_nearest` | `true` | Nearest event when this block is empty |
 
 These rows are the longest thing the HUD draws. Leave room on the right. Lines
