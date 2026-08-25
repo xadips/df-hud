@@ -1,14 +1,9 @@
 //! Uniform 2560×1440 → viewport transform.
-//!
-//! Game width/height letterbox the content rect when known. Linux leaves them 0
-//! (no Unity registry).
 
 #[derive(Clone, Copy, Debug)]
 pub struct Viewport {
     pub width: f32,
     pub height: f32,
-    pub game_width: f32,
-    pub game_height: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,27 +23,11 @@ impl Transform {
             };
         }
 
-        let mut content_x = 0.0;
-        let mut content_y = 0.0;
-        let mut content_w = viewport.width;
-        let mut content_h = viewport.height;
-        if viewport.game_width > 0.0 && viewport.game_height > 0.0 {
-            let game_aspect = viewport.game_width / viewport.game_height;
-            let view_aspect = viewport.width / viewport.height;
-            if game_aspect > view_aspect {
-                content_h = viewport.width / game_aspect;
-                content_y = (viewport.height - content_h) / 2.0;
-            } else if game_aspect < view_aspect {
-                content_w = viewport.height * game_aspect;
-                content_x = (viewport.width - content_w) / 2.0;
-            }
-        }
-
-        let scale = (content_w / ref_w).min(content_h / ref_h);
+        let scale = (viewport.width / ref_w).min(viewport.height / ref_h);
         Self {
             scale,
-            offset_x: content_x + (content_w - ref_w * scale) / 2.0,
-            offset_y: content_y + (content_h - ref_h * scale) / 2.0,
+            offset_x: (viewport.width - ref_w * scale) / 2.0,
+            offset_y: (viewport.height - ref_h * scale) / 2.0,
         }
     }
 
@@ -84,8 +63,6 @@ mod tests {
                 Viewport {
                     width: 1920.0,
                     height: 1080.0,
-                    game_width: 1920.0,
-                    game_height: 1080.0,
                 },
                 165.0,
                 60.0,
@@ -95,32 +72,26 @@ mod tests {
                 Viewport {
                     width: 2560.0,
                     height: 1440.0,
-                    game_width: 2560.0,
-                    game_height: 1440.0,
                 },
                 220.0,
                 80.0,
             ),
             (
-                "4k 100 percent",
+                "4k",
                 Viewport {
                     width: 3840.0,
                     height: 2160.0,
-                    game_width: 3840.0,
-                    game_height: 2160.0,
                 },
                 330.0,
                 120.0,
             ),
             (
-                "4k 150 percent",
+                "ultrawide 3440x1440",
                 Viewport {
-                    width: 2560.0,
+                    width: 3440.0,
                     height: 1440.0,
-                    game_width: 3840.0,
-                    game_height: 2160.0,
                 },
-                220.0,
+                660.0,
                 80.0,
             ),
         ];
@@ -133,28 +104,12 @@ mod tests {
         }
     }
 
+    /// 16:10 fits the 16:9 reference by height, leaving a band top and bottom.
     #[test]
-    fn centers_inside_ultrawide_game_content() {
-        let t = xf(Viewport {
-            width: 3440.0,
-            height: 1440.0,
-            game_width: 2560.0,
-            game_height: 1440.0,
-        });
-        let (x, y) = t.point(0.0, 0.0);
-        assert!(
-            (x - 440.0).abs() < 0.01 && y.abs() < 0.01,
-            "reference origin = {x},{y}, want 440,0"
-        );
-    }
-
-    #[test]
-    fn no_game_size_uses_full_viewport() {
+    fn taller_than_reference_centres_vertically() {
         let t = xf(Viewport {
             width: 1920.0,
             height: 1200.0,
-            game_width: 0.0,
-            game_height: 0.0,
         });
         // min(1920/2560, 1200/1440) = min(0.75, 0.833…) = 0.75
         assert!((t.scale - 0.75).abs() < 0.0001);

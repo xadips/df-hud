@@ -63,16 +63,7 @@ pub fn empty_overlay_scene(cfg: &Config, width: f32, height: f32) -> scene::Scen
 }
 
 fn overlay_scene_view(view: &View, cfg: &Config, width: f32, height: f32) -> scene::Scene {
-    scene::build(
-        view,
-        cfg,
-        Viewport {
-            width,
-            height,
-            game_width: 0.0,
-            game_height: 0.0,
-        },
-    )
+    scene::build(view, cfg, Viewport { width, height })
 }
 
 pub fn hud_lines(v: &ModelView, cfg: &Config, groups: &Groups) -> Vec<String> {

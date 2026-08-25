@@ -768,8 +768,6 @@ mod tests {
         Viewport {
             width: 2560.0,
             height: 1440.0,
-            game_width: 0.0,
-            game_height: 0.0,
         }
     }
 
