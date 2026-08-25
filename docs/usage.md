@@ -37,6 +37,29 @@ stores its own bindings.
 Linux installs the same keys on Hyprland. Windows uses `RegisterHotKey`. Do not
 also bind them in the compositor or AutoHotkey.
 
+### Without Hyprland
+
+On any other layer-shell compositor df-hud grabs nothing, so bind keys yourself
+and POST to the loopback listener. Every action above is reachable, and so are
+four groups the keys do not cover:
+
+| Action | Request to `http://127.0.0.1:9310` |
+| --- | --- |
+| City map | `POST /api/widget/map/toggle` |
+| Challenge board | `POST /api/widget/challenges/toggle` |
+| Restart the run clock | `POST /api/run/start` |
+| Reset XP/hr | `POST /api/xp/reset` |
+| Show or hide the overlay | `POST /api/overlay/toggle` |
+| Other groups | `POST /api/widget/<name>/toggle`, where name is `block`, `bosses`, `session`, or `xp` |
+
+```sh
+bind = SUPER, V, exec, curl -fsS -X POST http://127.0.0.1:9310/api/widget/map/toggle
+```
+
+One difference matters. The keys df-hud grabs only fire while Dead Frontier is
+focused, and it lets go when you alt-tab. A compositor binding fires wherever
+you are, so pick keys you will not want elsewhere.
+
 The [city map](widgets/map.md) starts hidden. Press `V` to bring it up.
 
 Hiding a group with a key or the tray lasts until you restart. It is not saved

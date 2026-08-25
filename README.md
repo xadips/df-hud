@@ -1,6 +1,6 @@
 # df-hud
 
-A HUD overlay for Dead Frontier on Windows and Hyprland.
+A HUD overlay for Dead Frontier on Windows and Linux (Wayland).
 
 It sits on top of the game, including fullscreen, and clicks go through to the
 game. It reads the game's API and DFProfiler's event map. No screen scraping,
@@ -36,8 +36,11 @@ Change them in `[hotkeys]`. An empty value turns that one off. See
 
 ## Install
 
-Windows, or Linux with a wlroots compositor that speaks layer-shell. On Linux
-the hotkeys need Hyprland.
+Windows, or a Wayland compositor with layer-shell: Hyprland, KDE, Sway, niri,
+COSMIC, and most others. GNOME is the exception, and does not plan to add it.
+
+The built-in hotkeys need Hyprland; on any other compositor, bind your own keys
+to the loopback API instead, which reaches every action the keys do.
 
 You also need
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge), a
