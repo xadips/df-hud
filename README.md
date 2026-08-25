@@ -1,30 +1,27 @@
 # df-hud
 
-A native heads-up display for Dead Frontier on Windows and Hyprland.
+A HUD overlay for Dead Frontier on Windows and Hyprland.
 
-It draws over the game — including fullscreen — and passes every pointer event
-through to the client underneath. Data comes from the game's own API and
-DFProfiler's event map. There is no screen scraping and no OCR.
-
-Replaces SilverOverlays, a Windows PyQt app that under Proton gives no reliable
-always-on-top over a fullscreen game, no global hotkeys on Wayland, and no tray.
+It sits on top of the game, including fullscreen, and clicks go through to the
+game. It reads the game's API and DFProfiler's event map. No screen scraping,
+no OCR.
 
 ![df-hud overlay on Dead Frontier](docs/images/overlay.png)
 
 ## Features
 
-- **[Block info](docs/widgets/block.md)** — region or outpost, and block support
-- **[Bosses](docs/widgets/bosses.md)** — what is standing on your block, or the nearest event
-- **[Run clock](docs/widgets/session.md)** — time spent playing, not how long the client has been open
-- **[XP/hr](docs/widgets/xp.md)** — a five-minute average
-- **[Challenge board](docs/widgets/challenges.md)** — the whole board, filtered by category
-- **[City map](docs/widgets/map.md)** — the inner city, summoned with a key
+- [Block info](docs/widgets/block.md): region or outpost, and block support. Top right.
+- [Bosses](docs/widgets/bosses.md): what is on your block, or the nearest event
+- [Run clock](docs/widgets/session.md): time spent playing, not how long the client has been open
+- [XP/hr](docs/widgets/xp.md): a five-minute average
+- [Challenge board](docs/widgets/challenges.md): the whole board, filtered by category
+- [City map](docs/widgets/map.md): the inner city. Press a key to show it
 
 Each group sits where you put it. The map starts hidden.
 
 ## Keys
 
-Registered only while Dead Frontier is focused. Defaults:
+These only work while Dead Frontier is focused.
 
 | Key | Action |
 | --- | --- |
@@ -34,13 +31,15 @@ Registered only while Dead Frontier is focused. Defaults:
 | `X` | Reset the XP/hr average |
 | `K` | Show or hide the overlay |
 
-Change them in `[hotkeys]`. Empty unbinds. See [How to use](docs/usage.md).
+Change them in `[hotkeys]`. An empty value turns that one off. See
+[How to use](docs/usage.md).
 
 ## Install
 
-Windows, or Linux with a wlroots compositor that speaks layer-shell. Hotkeys on
-Linux need Hyprland.
+Windows, or Linux with a wlroots compositor that speaks layer-shell. On Linux
+the hotkeys need Hyprland.
 
-**[Install](docs/install.md)** · **[How to use](docs/usage.md)** · **[Configuration](docs/configuration.md)**
+[Install](docs/install.md), [how to use](docs/usage.md),
+[configuration](docs/configuration.md).
 
-GPL-3.0. How the feeds were measured lives in [knowledge/](knowledge/).
+GPL-3.0. Notes on the game feeds are in [knowledge/](knowledge/).
