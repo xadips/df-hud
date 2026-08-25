@@ -240,10 +240,10 @@ margin_right = 0
 margin_bottom = 0
 margin_left = 0
 
-# Empty picks a system monospace bold (Noto / Liberation / DejaVu), then bundled
-# Go Mono. A path or a filename searched in the usual font dirs:
-# font = "JetBrainsMono-Bold.ttf"
-# font = "~/fonts/JetBrainsMono-Bold.ttf"
+# Empty uses the bundled JetBrains Mono Bold. A path or a filename searched in
+# the usual font dirs. A named font falls back to the bundled one per glyph:
+# font = "IosevkaTerm-Bold.ttf"
+# font = "~/fonts/IosevkaTerm-Bold.ttf"
 font = ""
 font_size = 12
 text_color = "#e6cc4d"

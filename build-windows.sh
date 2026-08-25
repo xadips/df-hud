@@ -34,6 +34,8 @@ export RUSTFLAGS
 )
 cp "$ROOT/target/x86_64-pc-windows-gnu/release/df-hud.exe" "$STAGE/df-hud.exe"
 cp "$ROOT/df-hud.example.toml" "$ROOT/LICENSE" "$STAGE/"
+# OFL 1.1 requires the license to travel with the embedded font.
+cp "$ROOT/assets/fonts/JetBrainsMono-OFL.txt" "$STAGE/"
 rm -f "$ARCHIVE"
 (
 	cd "$STAGE"
