@@ -91,8 +91,8 @@ XP boost expiring in 49 years.
 
 **`2147483647` means "never expires".** That is int32 max — 2038-01-19, the
 classic end of 32-bit time — and it is what the live server returns for a
-permanent boost. the bridge userscript arrives at the same place from the other
-direction, treating anything more than 600,000 seconds out as infinite.
+permanent boost. Treating anything more than 600,000 seconds out as infinite
+arrives at the same place from the other direction.
 
 df-hud models this as a state (`dfDeadline.Forever`) rather than a very large
 number, and additionally refuses any deadline more than a year away. That guard

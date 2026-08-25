@@ -180,6 +180,7 @@ struct Inner {
     catalog: Option<Catalog>,
     poller: PollerStatus,
     creds_at: Option<DateTime<Utc>>,
+    public_id_configured: bool,
     run_start: Option<DateTime<Utc>>,
     run_seed: Option<RunState>,
     run_terminal: bool,
@@ -225,6 +226,7 @@ impl Store {
                 catalog,
                 poller: PollerStatus::default(),
                 creds_at: None,
+                public_id_configured: false,
                 run_start: None,
                 run_seed: None,
                 run_terminal: false,
@@ -357,6 +359,12 @@ impl Store {
 
     pub fn set_credentials_at(&self, t: DateTime<Utc>) {
         self.inner.lock().unwrap().creds_at = Some(t);
+    }
+
+    /// Whether `df.user_id` is configured. It only changes the banner: the
+    /// poller decides on its own when to actually fall back to it.
+    pub fn set_public_id_configured(&self, on: bool) {
+        self.inner.lock().unwrap().public_id_configured = on;
     }
 
     pub fn set_catalog(&self, c: Catalog) {
@@ -620,7 +628,10 @@ fn status_locked(s: &Inner) -> (String, bool) {
             "session expired - open any Dead Frontier page to refresh".into(),
             true,
         )
-    } else if s.creds_at.is_none() {
+    // A configured df.user_id covers everything except the board, and the board
+    // already says so where it would be. A banner here would repeat that in a
+    // second place, and would keep nagging after challenges are switched off.
+    } else if s.creds_at.is_none() && !s.public_id_configured {
         ("waiting for the bridge script".into(), true)
     } else if s.poller.paused && !s.poller.pause_reason.is_empty() {
         (s.poller.pause_reason.clone(), false)
@@ -1042,6 +1053,42 @@ mod tests {
         let v = s.derive(now);
         assert!(v.status.contains("session expired"));
         assert!(v.status_is_fix);
+    }
+
+    #[test]
+    fn a_configured_user_id_silences_the_missing_session_banner() {
+        let now = Utc::now();
+        let s = Store::new(None);
+        assert!(
+            s.derive(now).status.contains("bridge"),
+            "no identity at all still asks for the script"
+        );
+
+        // With df.user_id everything but the board works, and the board carries
+        // its own message. The banner must not repeat it.
+        s.set_public_id_configured(true);
+        let v = s.derive(now);
+        assert!(!v.status.contains("bridge"), "{}", v.status);
+        assert!(!v.status.contains("challenge"), "{}", v.status);
+        assert_eq!(v.status, "waiting for the first poll");
+        assert!(!v.status_is_fix, "nothing for the user to fix");
+    }
+
+    #[test]
+    fn a_configured_user_id_does_not_mask_a_real_failure() {
+        let now = Utc::now();
+        let s = Store::new(None);
+        s.set_public_id_configured(true);
+        s.set_poller_status(PollerStatus {
+            failures: 2,
+            ..PollerStatus::default()
+        });
+        assert!(s.derive(now).status.contains("not responding"));
+        s.set_poller_status(PollerStatus {
+            stale: true,
+            ..PollerStatus::default()
+        });
+        assert!(s.derive(now).status.contains("session expired"));
     }
 
     fn assert_tray_hint_matches_view(s: &Store, now: DateTime<Utc>) {

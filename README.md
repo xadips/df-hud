@@ -39,6 +39,12 @@ Change them in `[hotkeys]`. An empty value turns that one off. See
 Windows, or Linux with a wlroots compositor that speaks layer-shell. On Linux
 the hotkeys need Hyprland.
 
+You also need
+[DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge), a
+userscript that hands df-hud your session on `127.0.0.1`. Without it the
+overlay runs but has nothing to show, unless you set `df.user_id`, which covers
+everything except the challenge board.
+
 [Install](docs/install.md), [how to use](docs/usage.md),
 [configuration](docs/configuration.md).
 
