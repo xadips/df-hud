@@ -33,12 +33,37 @@ mod wake;
 fn main() {
     #[cfg(windows)]
     overlay::win32::init_stdio();
+    install_panic_hook();
     if let Err(err) = run() {
         eprintln!("{err}");
         #[cfg(windows)]
-        overlay::win32::fatal_alert(&err.to_string());
+        overlay::win32::fatal_alert(&err.to_string(), "The overlay did not start");
         std::process::exit(1);
     }
+}
+
+/// A panic aborts without unwinding, and most of them happen on a worker thread
+/// rather than main. Say which one before the process goes.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("unnamed").to_string();
+        eprintln!("{}", panic_banner(&name));
+        default(info);
+        #[cfg(windows)]
+        overlay::win32::fatal_alert(
+            &format!("{}\n\n{info}", panic_banner(&name)),
+            "The overlay crashed",
+        );
+    }));
+}
+
+fn panic_banner(thread: &str) -> String {
+    format!(
+        "df-hud {} panicked on thread {thread:?}",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -60,5 +85,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         other => cli::run(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A crash report is only useful if it names the thread and the version.
+    #[test]
+    fn panic_banner_names_thread_and_version() {
+        let line = panic_banner("df-hud-poller");
+        assert!(line.contains("df-hud-poller"), "{line}");
+        assert!(line.contains(env!("CARGO_PKG_VERSION")), "{line}");
+    }
+
+    #[test]
+    fn panic_hook_installs_without_panicking() {
+        install_panic_hook();
+        let hook = std::panic::take_hook();
+        let caught = std::panic::catch_unwind(|| panic_banner("t"));
+        std::panic::set_hook(hook);
+        assert!(caught.is_ok());
     }
 }

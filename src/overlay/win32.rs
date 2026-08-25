@@ -157,18 +157,18 @@ fn bind_log_file() {
 
 /// No console window on Explorer / Run. Keep a dialog up so a bad config is
 /// readable. `cmd` after AttachConsole already has stderr; skip the box there.
-pub fn fatal_alert(err: &str) {
+pub fn fatal_alert(err: &str, headline: &str) {
     let log = write_fatal_log(err);
     if shared_console() {
         return;
     }
     if let Some(path) = &log
-        && show_fatal_task_dialog(err, path)
+        && show_fatal_task_dialog(err, path, headline)
     {
         return;
     }
     let text = wide(&format!(
-        "{err}\n\nThe overlay did not start. Fix the problem and launch df-hud again."
+        "{err}\n\n{headline}. Fix the problem and launch df-hud again."
     ));
     let title = wide("df-hud");
     unsafe {
@@ -204,9 +204,9 @@ fn fatal_log_path() -> Option<PathBuf> {
     Some(config::default_path().parent()?.join("df-hud.log"))
 }
 
-fn show_fatal_task_dialog(err: &str, log: &Path) -> bool {
+fn show_fatal_task_dialog(err: &str, log: &Path, headline: &str) -> bool {
     let title = wide("df-hud");
-    let instruction = wide("The overlay did not start");
+    let instruction = wide(headline);
     let content = wide(&format!(
         "{err}\n\nFix the problem and launch df-hud again."
     ));
