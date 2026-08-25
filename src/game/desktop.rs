@@ -777,7 +777,7 @@ fn parse_windows_address(address: &str) -> Result<windows_sys::Win32::Foundation
 fn windows_monitor_name(hwnd: windows_sys::Win32::Foundation::HWND) -> String {
     use std::mem::size_of;
     use windows_sys::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, MonitorFromWindow,
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromWindow,
     };
 
     let hmon = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
