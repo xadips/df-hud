@@ -18,6 +18,14 @@ rm -f -- "$archive"
 mkdir -p -- "$stage"
 
 cd -- "$repo_root"
+
+# Keep the builder's home out of the shipped binary. `strip` drops symbols but
+# not the panic-location strings, which otherwise carry an absolute path for
+# every dependency. CI builds as `runner`, but this script also runs by hand.
+cargo_home=${CARGO_HOME:-$HOME/.cargo}
+rustup_home=${RUSTUP_HOME:-$HOME/.rustup}
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$cargo_home/registry=/cargo/registry --remap-path-prefix=$rustup_home=/rustup --remap-path-prefix=$repo_root=/build"
+
 cargo build --locked --release --target x86_64-unknown-linux-gnu
 cp -- target/x86_64-unknown-linux-gnu/release/df-hud "$stage/df-hud"
 

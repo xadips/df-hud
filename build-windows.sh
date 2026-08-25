@@ -22,6 +22,12 @@ mkdir -p "$OUT"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 
+# See build-linux.sh: strip does not remove panic-location paths.
+CARGO_HOME_DIR=${CARGO_HOME:-$HOME/.cargo}
+RUSTUP_HOME_DIR=${RUSTUP_HOME:-$HOME/.rustup}
+RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$CARGO_HOME_DIR/registry=/cargo/registry --remap-path-prefix=$RUSTUP_HOME_DIR=/rustup --remap-path-prefix=$ROOT=/build"
+export RUSTFLAGS
+
 (
 	cd "$ROOT"
 	cargo build --locked --release --target x86_64-pc-windows-gnu

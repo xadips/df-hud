@@ -34,6 +34,11 @@ if (Test-Path $Stage) {
 }
 New-Item $Stage -ItemType Directory -Force | Out-Null
 
+# See build-linux.sh: strip does not remove panic-location paths.
+$CargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME ".cargo" }
+$RustupHome = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { Join-Path $HOME ".rustup" }
+$env:RUSTFLAGS = "$($env:RUSTFLAGS) --remap-path-prefix=$CargoHome\registry=/cargo/registry --remap-path-prefix=$RustupHome=/rustup --remap-path-prefix=$RepoRoot=/build"
+
 Push-Location $RepoRoot
 try {
     & $Cargo.Source build --locked --release
