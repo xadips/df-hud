@@ -3,6 +3,8 @@
 name = "df-hud"
 version = "0.4.2"
 edition = "2024"
+# Duration::from_mins / from_hours. 1.90 does not build.
+rust-version = "1.91"
 license = "GPL-3.0-or-later"
 publish = false
 description = "Dead Frontier overlay (GLES / WGL)"
@@ -64,6 +66,10 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[profile.dev]
+# Backtraces keep file and line. 150 MB binary becomes 63 MB.
+debug = "line-tables-only"
 
 [profile.release]
 panic = "abort"

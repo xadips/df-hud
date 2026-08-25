@@ -40,27 +40,21 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Reject GUI / async crates
+      - name: Supply chain (advisories, licenses, bans, sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+      # deny.toml owns the crate bans. Only per-target rules live here.
+      - name: Check the resolved tree per target
         run: |
           set -euo pipefail
-          if grep -E '^name = "(gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne|khronos-egl)"' Cargo.lock; then
-            echo "forbidden crate in Cargo.lock"
-            exit 1
-          fi
           linux_tree="$(cargo tree --target x86_64-unknown-linux-gnu --edges no-dev --prefix none)"
           printf 'linux-gnu tree:\n%s\n' "$linux_tree"
-          if printf '%s\n' "$linux_tree" | grep -Ei '^(gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne|khronos-egl) '; then
-            echo "forbidden crate in linux-gnu tree"
-            exit 1
-          fi
           win_tree="$(cargo tree --target x86_64-pc-windows-gnu --edges no-dev --prefix none)"
           printf 'windows-gnu tree:\n%s\n' "$win_tree"
-          if printf '%s\n' "$win_tree" | grep -Ei '^(wayland|gtk|gdk|gotk|libadwaita|tokio|winit|wgpu|iced|egui|slint|reqwest|fyne|khronos-egl) '; then
-            echo "forbidden crate in windows-gnu tree"
-            exit 1
-          fi
-          if printf '%s\n' "$win_tree" | grep -E '^windows '; then
-            echo "kitchen-sink windows crate is forbidden; use windows-sys"
+          if printf '%s\n' "$win_tree" | grep -Ei '^wayland'; then
+            echo "wayland crates must stay behind a linux target gate"
             exit 1
           fi
           if ! printf '%s\n' "$win_tree" | grep -q '^swash '; then
