@@ -359,7 +359,8 @@ pub fn run(launch: Launch) -> Result<(), Box<dyn Error>> {
 
 pub fn run_headless(config: Option<PathBuf>, print_hud: bool) -> Result<(), Box<dyn Error>> {
     let path = config.unwrap_or_else(config::default_path);
-    match config::write_defaults_if_missing(&path) {
+    match config::write_defaults_if_missing_with_reference(&path, crate::overlay::seed_reference())
+    {
         Ok(true) => eprintln!("config: wrote defaults to {}", path.display()),
         Ok(false) => {}
         Err(err) => eprintln!("config: could not write defaults: {err}"),

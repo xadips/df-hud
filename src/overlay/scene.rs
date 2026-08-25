@@ -145,10 +145,11 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
             &mut scene,
             xf,
             LineLayout {
-                at: [
-                    cfg.hud.margin_left + cfg.widget.status.x,
-                    cfg.hud.margin_top + cfg.widget.status.y,
-                ],
+                at: cfg.hud.place(
+                    cfg.widget.status.anchor,
+                    cfg.widget.status.x,
+                    cfg.widget.status.y,
+                ),
                 font_px: font_px(cfg, cfg.widget.status.font_size, xf),
                 default_color: view.status_color.unwrap_or(hud_color),
                 hud_a,
@@ -163,10 +164,11 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
             &mut scene,
             xf,
             LineLayout {
-                at: [
-                    cfg.hud.margin_left + cfg.widget.session.x,
-                    cfg.hud.margin_top + cfg.widget.session.y,
-                ],
+                at: cfg.hud.place(
+                    cfg.widget.session.anchor,
+                    cfg.widget.session.x,
+                    cfg.widget.session.y,
+                ),
                 font_px: font_px(cfg, cfg.widget.session.font_size, xf),
                 default_color: widget_color(cfg, &cfg.widget.session.color),
                 hud_a,
@@ -181,10 +183,9 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
             &mut scene,
             xf,
             LineLayout {
-                at: [
-                    cfg.hud.margin_left + cfg.widget.xp.x,
-                    cfg.hud.margin_top + cfg.widget.xp.y,
-                ],
+                at: cfg
+                    .hud
+                    .place(cfg.widget.xp.anchor, cfg.widget.xp.x, cfg.widget.xp.y),
                 font_px: font_px(cfg, cfg.widget.xp.font_size, xf),
                 default_color: view
                     .xp_color
@@ -205,10 +206,11 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
             &mut scene,
             xf,
             LineLayout {
-                at: [
-                    cfg.hud.margin_left + cfg.widget.block.x,
-                    cfg.hud.margin_top + cfg.widget.block.y,
-                ],
+                at: cfg.hud.place(
+                    cfg.widget.block.anchor,
+                    cfg.widget.block.x,
+                    cfg.widget.block.y,
+                ),
                 font_px: font_px(cfg, cfg.widget.block.font_size, xf),
                 default_color: widget_color(cfg, &cfg.widget.block.color),
                 hud_a,
@@ -222,10 +224,11 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
             &mut scene,
             xf,
             LineLayout {
-                at: [
-                    cfg.hud.margin_left + cfg.widget.challenges.x,
-                    cfg.hud.margin_top + cfg.widget.challenges.y,
-                ],
+                at: cfg.hud.place(
+                    cfg.widget.challenges.anchor,
+                    cfg.widget.challenges.x,
+                    cfg.widget.challenges.y,
+                ),
                 font_px: font_px(cfg, cfg.widget.challenges.font_size, xf),
                 default_color: widget_color(cfg, &cfg.widget.challenges.color),
                 hud_a,
@@ -239,10 +242,11 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
             &mut scene,
             xf,
             LineLayout {
-                at: [
-                    cfg.hud.margin_left + cfg.widget.bosses.x,
-                    cfg.hud.margin_top + cfg.widget.bosses.y,
-                ],
+                at: cfg.hud.place(
+                    cfg.widget.bosses.anchor,
+                    cfg.widget.bosses.x,
+                    cfg.widget.bosses.y,
+                ),
                 font_px: font_px(cfg, cfg.widget.bosses.font_size, xf),
                 default_color: widget_color(cfg, &cfg.widget.bosses.color),
                 hud_a,
@@ -778,7 +782,7 @@ mod tests {
         let view = dummy_view();
         let mut cfg = Config::default();
         let a = build(&view, &cfg, vp_1440());
-        cfg.widget.block.x = 1800;
+        cfg.widget.block.x = 400;
         let b = build(&view, &cfg, vp_1440());
         let ax = a
             .texts
@@ -793,8 +797,35 @@ mod tests {
             .unwrap()
             .x;
         assert!((ax - 2340.0).abs() < 0.5, "default block x = {ax}");
-        assert!((bx - 1800.0).abs() < 0.5, "moved block x = {bx}");
+        assert!((bx - 2160.0).abs() < 0.5, "moved block x = {bx}");
         assert!((bx - ax).abs() > 100.0);
+    }
+
+    #[test]
+    fn right_groups_follow_a_narrower_reference() {
+        let view = dummy_view();
+        let mut cfg = Config::default();
+        cfg.hud.reference_width = 1920;
+        cfg.hud.reference_height = 1200;
+        let scene = build(
+            &view,
+            &cfg,
+            Viewport {
+                width: 1920.0,
+                height: 1200.0,
+            },
+        );
+        let block = scene
+            .texts
+            .iter()
+            .find(|t| t.text.contains("Holdout"))
+            .unwrap();
+        assert!(
+            (block.x - 1700.0).abs() < 0.5,
+            "block should sit 220px from the 1920 right edge, got {}",
+            block.x
+        );
+        assert!(block.x + 80.0 < 1920.0, "block must stay on screen");
     }
 
     #[test]

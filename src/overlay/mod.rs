@@ -52,6 +52,18 @@ pub fn classify_win32_wait(result: u32, handle_count: u32) -> Win32Wait {
     }
 }
 
+/// Primary panel size for stamping `hud.reference_*` into a first-run config.
+pub fn seed_reference() -> Option<(i32, i32)> {
+    #[cfg(windows)]
+    {
+        win32::primary_panel()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 pub fn start_tick(started: Instant) -> Instant {
     started + TICK
 }

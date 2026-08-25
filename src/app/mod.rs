@@ -271,7 +271,10 @@ impl Handle {
 
     pub fn open_config(&self) {
         let path = self.config_file_path();
-        if let Err(err) = crate::config::write_defaults_if_missing(&path) {
+        if let Err(err) = crate::config::write_defaults_if_missing_with_reference(
+            &path,
+            crate::overlay::seed_reference(),
+        ) {
             eprintln!("tray: could not write config file: {err}");
         }
         if let Err(err) = autostart::open_file(&path) {

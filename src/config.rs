@@ -155,6 +155,15 @@ pub struct Hud {
     pub reference_height: i32,
 }
 
+/// Which edge `x` is measured from. `y` is always from the top.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Anchor {
+    #[default]
+    Left,
+    Right,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BossMap {
     pub enabled: bool,
@@ -191,6 +200,7 @@ pub struct Widget {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatusWidget {
+    pub anchor: Anchor,
     pub x: i32,
     pub y: i32,
     pub font_size: f32,
@@ -199,6 +209,7 @@ pub struct StatusWidget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionWidget {
     pub enabled: bool,
+    pub anchor: Anchor,
     pub x: i32,
     pub y: i32,
     pub font_size: f32,
@@ -209,6 +220,7 @@ pub struct SessionWidget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct XpWidget {
     pub enabled: bool,
+    pub anchor: Anchor,
     pub x: i32,
     pub y: i32,
     pub font_size: f32,
@@ -221,6 +233,7 @@ pub struct XpWidget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BlockWidget {
     pub enabled: bool,
+    pub anchor: Anchor,
     pub x: i32,
     pub y: i32,
     pub font_size: f32,
@@ -231,6 +244,7 @@ pub struct BlockWidget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BossesWidget {
     pub enabled: bool,
+    pub anchor: Anchor,
     pub x: i32,
     pub y: i32,
     pub font_size: f32,
@@ -258,6 +272,7 @@ pub struct MapWidget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChallengesWidget {
     pub enabled: bool,
+    pub anchor: Anchor,
     pub x: i32,
     pub y: i32,
     pub font_size: f32,
@@ -446,16 +461,33 @@ impl Default for Hud {
     }
 }
 
+impl Hud {
+    /// Design-space top-left of a group. Right-anchored `x` is an inset from
+    /// `reference_width`, so shrinking that width keeps the group on screen.
+    pub fn place(&self, anchor: Anchor, x: i32, y: i32) -> [i32; 2] {
+        let px = match anchor {
+            Anchor::Left => self.margin_left.saturating_add(x),
+            Anchor::Right => self
+                .reference_width
+                .saturating_sub(self.margin_right)
+                .saturating_sub(x),
+        };
+        [px, self.margin_top.saturating_add(y)]
+    }
+}
+
 impl Default for Widget {
     fn default() -> Self {
         Self {
             status: StatusWidget {
+                anchor: Anchor::Left,
                 x: 10,
                 y: 10,
                 font_size: 0.0,
             },
             session: SessionWidget {
                 enabled: true,
+                anchor: Anchor::Left,
                 x: 350,
                 y: 60,
                 font_size: 0.0,
@@ -464,6 +496,7 @@ impl Default for Widget {
             },
             xp: XpWidget {
                 enabled: true,
+                anchor: Anchor::Left,
                 x: 220,
                 y: 80,
                 font_size: 0.0,
@@ -474,7 +507,8 @@ impl Default for Widget {
             },
             block: BlockWidget {
                 enabled: true,
-                x: 2340,
+                anchor: Anchor::Right,
+                x: 220,
                 y: 300,
                 font_size: 0.0,
                 color: "#9ecbff".into(),
@@ -482,7 +516,8 @@ impl Default for Widget {
             },
             bosses: BossesWidget {
                 enabled: true,
-                x: 2240,
+                anchor: Anchor::Right,
+                x: 320,
                 y: 344,
                 font_size: 0.0,
                 color: String::new(),
@@ -505,6 +540,7 @@ impl Default for Widget {
             },
             challenges: ChallengesWidget {
                 enabled: true,
+                anchor: Anchor::Left,
                 x: 10,
                 y: 190,
                 font_size: 0.0,
@@ -1001,7 +1037,7 @@ impl Config {
         ] {
             if x < 0 || y < 0 {
                 errs.push(format!(
-                    "widget.{name} position {x}, {y} cannot be negative: it is measured from the top-left of the screen"
+                    "widget.{name} position {x}, {y} cannot be negative: x is from the left, or from the right when anchor = \"right\""
                 ));
             }
             if font < 0.0 {
@@ -1198,15 +1234,56 @@ fn write_config_atomically(path: &Path, body: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Example TOML with `reference_*` filled in from the panel when we have one.
+fn seed_default_toml(reference: Option<(i32, i32)>) -> String {
+    let mut body = DEFAULT_TOML.to_string();
+    let Some((width, height)) = reference else {
+        return body;
+    };
+    if width <= 0 || height <= 0 {
+        return body;
+    }
+    body = body.replacen(
+        "reference_width = 2560",
+        &format!("reference_width = {width}"),
+        1,
+    );
+    body = body.replacen(
+        "reference_height = 1440",
+        &format!("reference_height = {height}"),
+        1,
+    );
+    body
+}
+
 /// Write the example defaults when `path` does not exist. `true` if a file was created.
-pub fn write_defaults_if_missing(path: &Path) -> Result<bool, String> {
+/// `reference` stamps `hud.reference_*` from the current panel when we have one.
+pub fn write_defaults_if_missing_with_reference(
+    path: &Path,
+    reference: Option<(i32, i32)>,
+) -> Result<bool, String> {
     match std::fs::metadata(path) {
         Ok(_) => Ok(false),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            write_config_atomically(path, DEFAULT_TOML)?;
+            write_config_atomically(path, &seed_default_toml(reference))?;
             Ok(true)
         }
         Err(err) => Err(format!("{}: {err}", path.display())),
+    }
+}
+
+#[cfg(not(test))]
+fn log_defaults_written(path: &Path, created: Result<bool, String>, reference: Option<(i32, i32)>) {
+    match created {
+        Ok(true) => match reference {
+            Some((w, h)) => eprintln!(
+                "config: wrote defaults to {} (reference {w}x{h})",
+                path.display()
+            ),
+            None => eprintln!("config: wrote defaults to {}", path.display()),
+        },
+        Ok(false) => {}
+        Err(err) => eprintln!("config: could not write defaults: {err}"),
     }
 }
 
@@ -1219,14 +1296,19 @@ pub struct Watch {
 }
 
 impl Watch {
-    pub fn open(path: Option<PathBuf>) -> Result<Self, Box<dyn Error>> {
+    pub fn open_with_reference(
+        path: Option<PathBuf>,
+        reference: Option<(i32, i32)>,
+    ) -> Result<Self, Box<dyn Error>> {
         let path = path.unwrap_or_else(default_path);
+        #[cfg(test)]
+        let _ = reference;
         #[cfg(not(test))]
-        match write_defaults_if_missing(&path) {
-            Ok(true) => eprintln!("config: wrote defaults to {}", path.display()),
-            Ok(false) => {}
-            Err(err) => eprintln!("config: could not write defaults: {err}"),
-        }
+        log_defaults_written(
+            &path,
+            write_defaults_if_missing_with_reference(&path, reference),
+            reference,
+        );
         let cfg = Config::load(&path)?;
         let mtime = std::fs::metadata(&path)
             .ok()
@@ -1424,7 +1506,8 @@ mod tests {
     #[test]
     fn empty_file_is_defaults() {
         let cfg = Config::parse("").unwrap();
-        assert_eq!(cfg.widget.block.x, 2340);
+        assert_eq!(cfg.widget.block.x, 220);
+        assert_eq!(cfg.widget.block.anchor, Anchor::Right);
         assert_eq!(cfg.hud.reference_width, 2560);
         assert_eq!(cfg.poll.active_interval, Duration::from_secs(10));
     }
@@ -1465,10 +1548,50 @@ mod tests {
 
     #[test]
     fn stub_toml_moves_block_x() {
-        let cfg = Config::parse("[widget.block]\nx = 1800\n").unwrap();
-        assert_eq!(cfg.widget.block.x, 1800);
+        let cfg = Config::parse("[widget.block]\nx = 400\n").unwrap();
+        assert_eq!(cfg.widget.block.x, 400);
         assert_eq!(cfg.widget.block.y, 300);
+        assert_eq!(cfg.widget.block.anchor, Anchor::Right);
         assert_eq!(cfg.poll.active_interval, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn right_anchor_follows_reference_width() {
+        let cfg = Config::default();
+        assert_eq!(
+            cfg.hud.place(
+                cfg.widget.block.anchor,
+                cfg.widget.block.x,
+                cfg.widget.block.y
+            ),
+            [2340, 300]
+        );
+        let cfg =
+            Config::parse("[hud]\nreference_width = 1920\nreference_height = 1200\n").unwrap();
+        assert_eq!(
+            cfg.hud.place(
+                cfg.widget.block.anchor,
+                cfg.widget.block.x,
+                cfg.widget.block.y
+            ),
+            [1700, 300]
+        );
+        assert_eq!(
+            cfg.hud.place(
+                cfg.widget.bosses.anchor,
+                cfg.widget.bosses.x,
+                cfg.widget.bosses.y
+            ),
+            [1600, 344]
+        );
+        assert_eq!(
+            cfg.hud.place(
+                cfg.widget.session.anchor,
+                cfg.widget.session.x,
+                cfg.widget.session.y
+            ),
+            [350, 60]
+        );
     }
 
     #[test]
@@ -1493,8 +1616,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
-        assert!(write_defaults_if_missing(&path).unwrap());
-        assert!(!write_defaults_if_missing(&path).unwrap());
+        assert!(write_defaults_if_missing_with_reference(&path, None).unwrap());
+        assert!(!write_defaults_if_missing_with_reference(&path, None).unwrap());
         let mut cfg = Config::load(&path).unwrap();
         cfg.source = None;
         assert_eq!(cfg, Config::default());
@@ -1502,8 +1625,28 @@ mod tests {
     }
 
     #[test]
+    fn seed_stamps_the_panel_into_reference() {
+        let body = seed_default_toml(Some((1920, 1200)));
+        assert!(body.contains("reference_width = 1920"));
+        assert!(body.contains("reference_height = 1200"));
+        assert!(!body.contains("reference_width = 2560"));
+        let cfg = Config::parse(&body).unwrap();
+        assert_eq!(cfg.hud.reference_width, 1920);
+        assert_eq!(cfg.hud.reference_height, 1200);
+        assert_eq!(cfg.widget.block.anchor, Anchor::Right);
+        assert_eq!(
+            cfg.hud.place(
+                cfg.widget.block.anchor,
+                cfg.widget.block.x,
+                cfg.widget.block.y
+            ),
+            [1700, 300]
+        );
+    }
+
+    #[test]
     fn watch_none_uses_default_path() {
-        let watch = Watch::open(None).unwrap();
+        let watch = Watch::open_with_reference(None, None).unwrap();
         assert_eq!(watch.path(), Some(default_path().as_path()));
     }
 
@@ -1718,6 +1861,7 @@ window = 120
             ("[console]\nwidth = 720\n", "unknown key"),
             ("[hud]\nfont_family = \"x\"\n", "unknown key"),
             ("[widget.session]\nfont_family = \"x\"\n", "unknown key"),
+            ("[widget.block]\nanchor = \"centre\"\n", "left"),
         ];
         for (body, want) in cases {
             let err = Config::parse(body).unwrap_err();

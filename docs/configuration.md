@@ -1,9 +1,11 @@
 # Configuration
 
 The first overlay start writes [df-hud.example.toml](../df-hud.example.toml) to
-the path below if that file is missing. Those are the built-in defaults (a test
-checks the values). After that, keys you leave in the file stay pinned; delete
-the file to get a fresh copy of the current defaults.
+the path below if that file is missing, and fills `hud.reference_width` /
+`hud.reference_height` from the current panel so left-side groups sit in
+native pixels. The rest are the built-in defaults (a test checks the values).
+After that, keys you leave in the file stay pinned; delete the file to get a
+fresh copy.
 
 | | Linux | Windows |
 | --- | --- | --- |
@@ -33,11 +35,12 @@ A bad edit keeps the running config. The HUD does not go down mid-game for that.
 
 ## Placement
 
-Each group has its own `x` and `y` under `[widget.*]`. Those are pixels from the
-top-left of the screen, written for `hud.reference_width` x
-`hud.reference_height` (defaults 2560x1440), then scaled to your monitor.
-Defaults were set at 2560x1440 against the game's own UI. Block info starts in
-the top right.
+Each group has its own `x` and `y` under `[widget.*]`, written for
+`hud.reference_width` x `hud.reference_height` (defaults 2560x1440), then
+scaled to your monitor. `y` is from the top. `x` is from the left unless
+`anchor = "right"`, then `x` is an inset from `reference_width`. Block info
+and the boss list use that so they stay on the right if you set the reference
+to your panel (1920x1200 and so on).
 
 A group near the right edge is clipped, not wrapped. A wrapping line would make
 everything below it jump. Leave room for the longest string that group can show.
