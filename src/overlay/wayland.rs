@@ -591,7 +591,15 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
     let qh = event_queue.handle();
 
     let compositor: WlCompositor = globals.bind(&qh, 4..=6, ())?;
-    let layer_shell: ZwlrLayerShellV1 = globals.bind(&qh, 1..=4, ())?;
+    // Every actively developed compositor has layer-shell except GNOME, which
+    // has declined it. Naming that beats handing the user a protocol error for
+    // a global they have never heard of.
+    let layer_shell: ZwlrLayerShellV1 = globals.bind(&qh, 1..=4, ()).map_err(|e| {
+        format!(
+            "this compositor has no wlr-layer-shell, so df-hud cannot draw over the game ({e}).\n\
+             Hyprland, KDE, Sway, niri, COSMIC and most others support it; GNOME does not."
+        )
+    })?;
     let viewporter = globals.bind::<WpViewporter, _, _>(&qh, 1..=1, ()).ok();
     let frac_mgr = globals
         .bind::<WpFractionalScaleManagerV1, _, _>(&qh, 1..=1, ())

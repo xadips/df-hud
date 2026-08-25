@@ -16,8 +16,18 @@ challenge board.
 
 ## Linux
 
-You need a wlroots compositor that speaks layer-shell (Hyprland), plus `libEGL`,
-`libGLESv2`, and `libwayland-client`. No GTK. Hotkeys only work on Hyprland.
+You need a Wayland compositor that speaks
+[wlr-layer-shell](https://wayland.app/protocols/wlr-layer-shell-unstable-v1),
+plus `libEGL`, `libGLESv2`, and `libwayland-client`. No GTK, no X11.
+
+Nearly every compositor has it: Hyprland, KWin (KDE), Sway, niri, COSMIC, river,
+Wayfire, labwc, Mir, phoc, Treeland, GameScope. The ones that do not are
+**Mutter (GNOME)**, **Muffin (Cinnamon)**, and Weston. GNOME has declined to add
+it, so df-hud cannot draw over the game there.
+
+df-hud only grabs keys itself on Hyprland. Everything else on that list runs the
+overlay fine, and [How to use](usage.md#without-hyprland) covers binding your own
+keys to the loopback API.
 
 From a clone:
 
