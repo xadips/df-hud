@@ -2,13 +2,15 @@
 //!
 //! `wglCreateContext` + `ChoosePixelFormat` cannot request a core profile or
 //! guarantee alpha. The dummy-context dance loads `wglChoosePixelFormatARB` and
-//! `wglCreateContextAttribsARB`. Dummy HWND uses [`crate::overlay::win32::DUMMY_CLASS`],
-//! not the overlay class — `WM_DESTROY` on a shared class ended the WGL spike.
+//! `wglCreateContextAttribsARB` once per process. Dummy HWND uses
+//! [`crate::overlay::win32::DUMMY_CLASS`], not the overlay class — `WM_DESTROY`
+//! on a shared class ended the WGL spike.
 
 use std::error::Error;
 use std::ffi::{CString, c_void};
 use std::mem::{size_of, zeroed};
 use std::ptr;
+use std::sync::OnceLock;
 
 use libloading::Library;
 use windows_sys::Win32::Foundation::HWND;
@@ -66,8 +68,15 @@ impl GlSurface {
             return Err(last_err("GetDC"));
         }
 
-        let (choose_fmt, create_ctx, get_attr, swap_interval_fn, opengl32) =
-            load_wgl_extensions(instance)?;
+        let procs = wgl_procs(instance)?;
+        let opengl32 = unsafe { Library::new("opengl32.dll") }
+            .map_err(|err| format!("load opengl32.dll: {err}"))?;
+        let (choose_fmt, create_ctx, get_attr, swap_interval_fn) = (
+            procs.choose_fmt,
+            procs.create_ctx,
+            procs.get_attr,
+            procs.swap_interval,
+        );
 
         let existing = unsafe { GetPixelFormat(hdc) };
         let format = if existing != 0 {
@@ -231,17 +240,27 @@ impl Drop for GlSurface {
     }
 }
 
-type WglExtensions = (
-    ChoosePixelFormatArb,
-    CreateContextAttribsArb,
-    GetPixelFormatAttribivArb,
-    Option<SwapIntervalExt>,
-    Library,
-);
+struct WglProcs {
+    choose_fmt: ChoosePixelFormatArb,
+    create_ctx: CreateContextAttribsArb,
+    get_attr: GetPixelFormatAttribivArb,
+    swap_interval: Option<SwapIntervalExt>,
+}
+
+fn wgl_procs(
+    instance: windows_sys::Win32::Foundation::HINSTANCE,
+) -> Result<&'static WglProcs, Box<dyn Error>> {
+    static PROCS: OnceLock<WglProcs> = OnceLock::new();
+    if let Some(procs) = PROCS.get() {
+        return Ok(procs);
+    }
+    let loaded = load_wgl_extensions(instance)?;
+    Ok(PROCS.get_or_init(|| loaded))
+}
 
 fn load_wgl_extensions(
     instance: windows_sys::Win32::Foundation::HINSTANCE,
-) -> Result<WglExtensions, Box<dyn Error>> {
+) -> Result<WglProcs, Box<dyn Error>> {
     let class = wide(DUMMY_CLASS);
     let title = wide("df-hud-wgl-dummy");
     let hwnd = unsafe {
@@ -299,9 +318,6 @@ fn load_wgl_extensions(
         return Err(last_err("dummy wglCreateContext"));
     }
 
-    let opengl32 = unsafe { Library::new("opengl32.dll") }
-        .map_err(|err| format!("load opengl32.dll: {err}"))?;
-
     let choose = load_wgl_symbol::<ChoosePixelFormatArb>("wglChoosePixelFormatARB")
         .ok_or("wglChoosePixelFormatARB missing — cannot request an alpha pixel format")?;
     let create = load_wgl_symbol::<CreateContextAttribsArb>("wglCreateContextAttribsARB")
@@ -317,7 +333,12 @@ fn load_wgl_extensions(
         DestroyWindow(hwnd);
     }
 
-    Ok((choose, create, get_attr, swap, opengl32))
+    Ok(WglProcs {
+        choose_fmt: choose,
+        create_ctx: create,
+        get_attr,
+        swap_interval: swap,
+    })
 }
 
 fn load_wgl_symbol<T>(name: &str) -> Option<T> {
