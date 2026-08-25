@@ -78,9 +78,9 @@ The record uses **two different epochs**, and applying the wrong one is worth
 almost four decades of error. This was caught by live data: the HUD reported an
 XP boost expiring in 49 years.
 
-1. **Compact epoch — unix minus 1,200,000,000.** Used by `df_servertime` and
-   `df_hungertime`. Live: `df_servertime = 586484051` at a unix time of
-   `1786484051`.
+1. **Compact epoch — unix minus `TIME_OFFSET` (`1_200_000_000` in
+   `src/data/mod.rs`).** Used by `df_servertime` and `df_hungertime`. Live:
+   `df_servertime = 586484051` at a unix time of `1786484051`.
 2. **Plain unix seconds.** Used by the `*until` expiry fields. Settled by the
    game's own arithmetic:
 
@@ -113,10 +113,13 @@ What it does mean is unresolved. Two candidates fit the observation - "the brows
 is on an outpost page" and "the character is not docked, including after exiting
 the client from the city" - and nothing so far distinguishes them.
 
-df-hud uses **movement** instead: the run starts at the first poll where
-`df_positionx/y/z` changed. Nothing on the server moves your character while you
-are looking at a launcher. `df_inoutpost` is kept only as an end-of-run condition,
-where being wrong stops a clock early rather than inventing playing time.
+df-hud does not use `df_inoutpost` to start the clock. The client's own
+position (Discord rich presence: a city block or an outpost) starts it when
+that pipe is fresh. If presence is quiet, the first poll that sees
+`df_positionx/y/z` change or a leave-outpost transition starts it instead.
+Nothing on the server moves your character while you are looking at a
+launcher. `df_inoutpost` is kept only as an end-of-run condition, where being
+wrong stops a clock early rather than inventing playing time.
 
 ## There is no "session started" timestamp
 

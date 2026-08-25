@@ -25,11 +25,12 @@ same name DFProfiler's map uses.
 | `I1`..`In` | Inner-city bosses, one enemy type |
 | `N1`..`Nn` | Nests, several types on one block |
 | `M1`..`M5` | Missions, one per outpost (`M2` is Fort Pastor) |
-| `Δ` | A QRF. Numbered only when more than one is up |
+| `Δ` | Wasteland QRF |
+| `▼` | Death Row QRF |
 | `DH` `VL` `BH` `LB` | Today's daily: Devil Hound, Volatile Leaper, Behemoth, Legendary Bandits |
 | `N` `D` `P` `F` `S` `C` `Z` | Outposts |
 
-A ring only when the letter is not enough: today's daily, a mission, a QRF.
+A ring only when the letter is not enough: today's daily, a mission, either QRF.
 Bandits, bosses, and nests have no ring. The letter already says what they are.
 A nest that contains the daily keeps its `N` number and gets the ring.
 

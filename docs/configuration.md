@@ -3,8 +3,9 @@
 You do not need a config file. With none, you get the built-in defaults.
 
 Copy [df-hud.example.toml](../df-hud.example.toml) and keep only the lines you
-change. That file comments every key and a test checks it against the defaults,
-so it cannot drift.
+change. That file matches the built-in defaults (a test checks the values) and
+comments most keys. A few sample lines stay commented so they pick up the
+current version or path.
 
 | | Linux | Windows |
 | --- | --- | --- |
@@ -63,6 +64,18 @@ HUD vanishes when you play.
 
 `enabled = false` turns a group off for good. Hiding it with a key or the tray
 lasts until restart. The status banner has no `enabled` key.
+
+## Switches
+
+These sit next to the groups and are easy to miss if you only read the widget
+pages. The example TOML comments them in place.
+
+| Key | Default | |
+| --- | --- | --- |
+| `hud.enabled` | `true` | Master overlay switch. Tray, `K`, and the HTTP toggle cannot turn it back on. |
+| `hotkeys.enabled` | `true` | All grabbed keys. Empty strings still turn individual bindings off. |
+| `hud.only_when_game_running` | `true` | Hide the pixels when the game is not running. |
+| `poll.only_when_game_running` | `true` | Stop asking the game server when the game is not running. Separate from the HUD hide. |
 
 Hotkeys, tray, poll intervals, and the rest of the file are in the example TOML.
 See [How to use](usage.md) for the default keys.

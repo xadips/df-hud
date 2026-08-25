@@ -13,5 +13,5 @@
 - [City map](widgets/map.md)
 - [Challenge board](widgets/challenges.md)
 
-Every setting is commented in [df-hud.example.toml](../df-hud.example.toml).
+Defaults and most keys are in [df-hud.example.toml](../df-hud.example.toml).
 Notes on the game feeds are in [knowledge/](../knowledge/).
