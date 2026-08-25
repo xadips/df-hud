@@ -606,18 +606,21 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
         let pad_y = xf.size(2.0).max(1.0);
         // Two-character chip (I5 / B4). Δ and ▼ sit in the same box so columns line up.
         let chip_w = mono_advance("MM", list_px) + pad_x * 2.0;
-        let timer_col = view
+        let name_x = lx + chip_w + xf.size(4.0);
+        let name_col = view
             .map
             .list
             .iter()
             .filter(|r| r.chip.is_some())
-            .map(|r| mono_advance(&r.timer, list_px))
+            .map(|row| {
+                let (_, name) = map_chip_parts(&row.text);
+                mono_advance(name, list_px)
+            })
             .fold(0.0_f32, f32::max);
-        let timer_x = lx + chip_w + xf.size(4.0);
-        let name_x = timer_x + timer_col + 2.0 * mono_advance(" ", list_px);
+        let timer_x = name_x + name_col + 2.0 * mono_advance(" ", list_px);
         for row in &view.map.list {
             if let Some(chip) = row.chip {
-                let glyph = row.text.split("  ").next().unwrap_or("");
+                let (glyph, name) = map_chip_parts(&row.text);
                 let gh = list_px + pad_y * 2.0;
                 scene.fills.push(Fill {
                     x: lx,
@@ -649,12 +652,6 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
                     lcd: false,
                     center_h: Some(gh),
                 });
-                let name = row
-                    .text
-                    .get(glyph.len()..)
-                    .unwrap_or("")
-                    .trim_start()
-                    .to_string();
                 if !row.timer.is_empty() {
                     // Timer at 78% of the list colour so the subject stays the bright run.
                     let dim = [color[0] * 0.78, color[1] * 0.78, color[2] * 0.78, color[3]];
@@ -674,7 +671,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
                     x: name_x,
                     y: ly - pad_y,
                     color,
-                    text: name,
+                    text: name.to_string(),
                     font_px: list_px,
                     outline: true,
                     outline_color: None,
@@ -698,6 +695,12 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
             ly += list_px * LINE_HEIGHT;
         }
     }
+}
+
+fn map_chip_parts(text: &str) -> (&str, &str) {
+    let glyph = text.split("  ").next().unwrap_or("");
+    let name = text.get(glyph.len()..).unwrap_or("").trim_start();
+    (glyph, name)
 }
 
 fn mono_advance(text: &str, px: f32) -> f32 {
@@ -1029,6 +1032,12 @@ mod tests {
             .find(|t| t.text.contains("Mother"))
             .expect("nest");
         assert!((n0.x - n1.x).abs() < 0.05, "names {} vs {}", n0.x, n1.x);
+        assert!(
+            n0.x < t0.x,
+            "name {} should sit left of timer {}",
+            n0.x,
+            t0.x
+        );
         assert!(
             (nest.x - n0.x).abs() < 0.05,
             "nest continuation {} vs name {}",

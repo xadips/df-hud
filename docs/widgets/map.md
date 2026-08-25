@@ -34,8 +34,14 @@ Bandits, bosses, and nests have no ring. The letter already says what they are.
 A nest that contains the daily keeps its `N` number and gets the ring.
 
 The list beside the grid is nearest first, one entry per event, not per block.
-The feed repeats the same pack on many tiles. Each row is the label, the
-countdown, and the enemy types.
+The feed repeats the same pack on many tiles. Each row is the label and the
+enemy types, then a countdown to the right of the name when that event has its
+own clock.
+
+Bosses, bandits, and QRFs share the city hour, so that countdown is printed
+once, on the nearest of them. Dailies (`DH` `VL` `BH` `LB`) are random spawns
+and keep their own time. Nests last about two hours, not one, and keep theirs.
+Missions do too.
 
 ## Size and crop
 

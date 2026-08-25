@@ -453,11 +453,11 @@ impl Default for Widget {
             xp: XpWidget {
                 enabled: true,
                 x: 220,
-                y: 85,
+                y: 80,
                 font_size: 0.0,
                 color: "#ffffff".into(),
                 prefix: "Xp/Hr: ".into(),
-                window: Duration(StdDuration::from_secs(300)),
+                window: Duration(StdDuration::from_secs(60)),
                 min_samples: 3,
             },
             block: BlockWidget {
@@ -1794,7 +1794,7 @@ window = 120
         let def = Config::default();
         assert_eq!(
             def.widget.xp.effective_window(def.poll.active_interval.0),
-            StdDuration::from_secs(300)
+            StdDuration::from_secs(60)
         );
     }
 
