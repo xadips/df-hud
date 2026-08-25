@@ -272,26 +272,61 @@ fn default_user_agent() -> String {
 }
 
 pub fn default_data_dir() -> String {
-    if let Ok(dir) = std::env::var("XDG_DATA_HOME") {
-        if !dir.is_empty() {
-            return format!("{dir}/df-hud");
-        }
+    #[cfg(windows)]
+    {
+        let local = std::env::var("LOCALAPPDATA").ok();
+        let home = std::env::var("USERPROFILE").ok();
+        return windows_app_dir(local.as_deref(), home.as_deref(), "Local")
+            .join("df-hud")
+            .to_string_lossy()
+            .into_owned();
     }
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() => format!("{home}/.local/share/df-hud"),
-        _ => ".".into(),
+    #[cfg(not(windows))]
+    {
+        if let Ok(dir) = std::env::var("XDG_DATA_HOME") {
+            if !dir.is_empty() {
+                return format!("{dir}/df-hud");
+            }
+        }
+        match std::env::var("HOME") {
+            Ok(home) if !home.is_empty() => format!("{home}/.local/share/df-hud"),
+            _ => ".".into(),
+        }
     }
 }
 
 pub fn default_path() -> PathBuf {
-    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir).join("df-hud/config.toml");
+    #[cfg(windows)]
+    {
+        let appdata = std::env::var("APPDATA").ok();
+        let home = std::env::var("USERPROFILE").ok();
+        return windows_app_dir(appdata.as_deref(), home.as_deref(), "Roaming")
+            .join("df-hud")
+            .join("config.toml");
+    }
+    #[cfg(not(windows))]
+    {
+        if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
+            if !dir.is_empty() {
+                return PathBuf::from(dir).join("df-hud/config.toml");
+            }
+        }
+        match std::env::var("HOME") {
+            Ok(home) if !home.is_empty() => PathBuf::from(home).join(".config/df-hud/config.toml"),
+            _ => PathBuf::from("config.toml"),
         }
     }
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() => PathBuf::from(home).join(".config/df-hud/config.toml"),
-        _ => PathBuf::from("config.toml"),
+}
+
+/// `%APPDATA%` / `%LOCALAPPDATA%`, else `%USERPROFILE%\AppData\<kind>`.
+#[cfg(any(windows, test))]
+fn windows_app_dir(env_val: Option<&str>, home: Option<&str>, kind: &str) -> PathBuf {
+    if let Some(dir) = env_val.filter(|s| !s.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    match home.filter(|s| !s.is_empty()) {
+        Some(home) => PathBuf::from(home).join("AppData").join(kind),
+        None => PathBuf::from("."),
     }
 }
 
@@ -1788,5 +1823,20 @@ window = 120
         assert!(got.contains("fps_display = false # keep this"), "{got}");
         assert!(got.contains("dismiss_launcher = true"), "{got}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn windows_app_dir_prefers_env_then_profile() {
+        assert_eq!(
+            windows_app_dir(Some(r"C:\Users\tester\AppData\Roaming"), None, "Roaming"),
+            PathBuf::from(r"C:\Users\tester\AppData\Roaming")
+        );
+        assert_eq!(
+            windows_app_dir(Some(""), Some(r"C:\Users\tester"), "Local"),
+            PathBuf::from(r"C:\Users\tester")
+                .join("AppData")
+                .join("Local")
+        );
+        assert_eq!(windows_app_dir(None, None, "Roaming"), PathBuf::from("."));
     }
 }
