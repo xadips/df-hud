@@ -421,9 +421,9 @@ min_samples = 3
 # cell per block, gaps left empty, district lines heavier, an identifier on every
 # active event and a ring on the block you are standing on.
 #
-# IT STARTS HIDDEN. SUPER + ALT + M brings it up
-# (POST /api/widget/map/toggle) - this is something you summon to decide where to
-# walk and dismiss ten seconds later. Turning enabled off costs you the key too.
+# IT STARTS HIDDEN. The map hotkey (`hotkeys.map`, default V) brings it up.
+# This is something you summon to decide where to walk and dismiss ten seconds
+# later. Turning enabled off costs you the key too.
 #
 # The mouse passes through it to the game like any other group, which is why it
 # has no hover: a map you can point at would eat the clicks you shoot with.
