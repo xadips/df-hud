@@ -138,7 +138,7 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
     );
     let hud_a = cfg.hud.opacity.clamp(0.0, 1.0);
     let mut scene = Scene::default();
-    let hud_color = parse_color(&cfg.hud.text_color, hud_a);
+    let hud_color = parse_color(&cfg.hud.text_color, 1.0);
 
     if !view.status.is_empty() {
         push_text_group(
@@ -148,6 +148,7 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
             cfg.hud.margin_top + cfg.widget.status.y,
             font_px(cfg, cfg.widget.status.font_size, xf),
             view.status_color.unwrap_or(hud_color),
+            hud_a,
             &[view.status.as_str()],
         );
     }
@@ -160,7 +161,8 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
             cfg.hud.margin_left + cfg.widget.session.x,
             cfg.hud.margin_top + cfg.widget.session.y,
             font_px(cfg, cfg.widget.session.font_size, xf),
-            widget_color(cfg, &cfg.widget.session.color, hud_a),
+            widget_color(cfg, &cfg.widget.session.color),
+            hud_a,
             &[&line],
         );
     }
@@ -174,7 +176,8 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
             cfg.hud.margin_top + cfg.widget.xp.y,
             font_px(cfg, cfg.widget.xp.font_size, xf),
             view.xp_color
-                .unwrap_or(widget_color(cfg, &cfg.widget.xp.color, hud_a)),
+                .unwrap_or(widget_color(cfg, &cfg.widget.xp.color)),
+            hud_a,
             &[&line],
         );
     }
@@ -191,7 +194,8 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
             cfg.hud.margin_left + cfg.widget.block.x,
             cfg.hud.margin_top + cfg.widget.block.y,
             font_px(cfg, cfg.widget.block.font_size, xf),
-            widget_color(cfg, &cfg.widget.block.color, hud_a),
+            widget_color(cfg, &cfg.widget.block.color),
+            hud_a,
             &refs,
         );
     }
@@ -206,7 +210,7 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
                     cfg.hud.margin_top + cfg.widget.challenges.y,
                 ],
                 font_px: font_px(cfg, cfg.widget.challenges.font_size, xf),
-                default_color: widget_color(cfg, &cfg.widget.challenges.color, hud_a),
+                default_color: widget_color(cfg, &cfg.widget.challenges.color),
                 hud_a,
             },
             &view.challenges,
@@ -214,7 +218,6 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
     }
 
     if cfg.widget.bosses.enabled && !view.bosses.is_empty() {
-        let color = widget_color(cfg, &cfg.widget.bosses.color, hud_a);
         push_lines(
             &mut scene,
             xf,
@@ -224,8 +227,8 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
                     cfg.hud.margin_top + cfg.widget.bosses.y,
                 ],
                 font_px: font_px(cfg, cfg.widget.bosses.font_size, xf),
-                default_color: color,
-                hud_a: color[3],
+                default_color: widget_color(cfg, &cfg.widget.bosses.color),
+                hud_a,
             },
             &view.bosses,
         );
@@ -238,11 +241,11 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
     scene
 }
 
-fn widget_color(cfg: &Config, color: &str, hud_a: f32) -> [f32; 4] {
+fn widget_color(cfg: &Config, color: &str) -> [f32; 4] {
     if color.trim().is_empty() {
-        parse_color(&cfg.hud.text_color, hud_a)
+        parse_color(&cfg.hud.text_color, 1.0)
     } else {
-        parse_color(color, hud_a)
+        parse_color(color, 1.0)
     }
 }
 
@@ -262,6 +265,7 @@ fn push_text_group(
     ay: i32,
     font_px: f32,
     color: [f32; 4],
+    hud_a: f32,
     rows: &[&str],
 ) {
     let lines: Vec<Line> = rows
@@ -278,7 +282,7 @@ fn push_text_group(
             at: [ax, ay],
             font_px,
             default_color: color,
-            hud_a: color[3],
+            hud_a,
         },
         &lines,
     );
@@ -1156,6 +1160,43 @@ mod tests {
         assert!((strike.x0 - name_pad.x).abs() < 0.05);
         assert!((progress.x + mono_advance("10/10", font_px) - strike.x1).abs() < 0.05);
         assert!((strike.color[3] - 0.8 * 0.60).abs() < 1e-4);
+    }
+
+    #[test]
+    fn hud_opacity_is_applied_once_to_default_and_tinted_text() {
+        let mut view = dummy_view();
+        view.map = MapView::default();
+        view.status_color = Some([1.0, 0.82, 0.4, 1.0]);
+        view.bosses = vec![Line {
+            text: "Titan".into(),
+            ..Line::default()
+        }];
+        let mut cfg = Config::default();
+        cfg.hud.opacity = 0.8;
+        cfg.widget.map.enabled = false;
+        cfg.widget.challenges.enabled = false;
+        let scene = build(&view, &cfg, vp_1440());
+
+        let alpha = |needle: &str| {
+            scene
+                .texts
+                .iter()
+                .find(|t| t.text.contains(needle))
+                .unwrap_or_else(|| panic!("{needle}"))
+                .color[3]
+        };
+        for (name, got) in [
+            ("status", alpha("df-hud overlay")),
+            ("clock", alpha("IC Time")),
+            ("xp", alpha("Xp/Hr")),
+            ("block", alpha("Holdout")),
+            ("boss", alpha("Titan")),
+        ] {
+            assert!(
+                (got - 0.8).abs() < 1e-4,
+                "{name} alpha {got} want hud.opacity once"
+            );
+        }
     }
 
     #[test]
