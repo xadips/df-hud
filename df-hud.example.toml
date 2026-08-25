@@ -491,7 +491,7 @@ font_size = 0
 color = "#e8e8e8"
 
 [widget.challenges]
-# The whole board, in the board's own order.
+# The board grouped by category: event, yours, then clan. Not raw Flash order.
 enabled = true
 x = 10
 y = 190
@@ -523,6 +523,7 @@ show_completed = true
 # It earns its row back: a prefix every challenge in a category shares moves up
 # into the heading, so the five clan entries say "Weekly Challenge" once between
 # them instead of once each. Never drawn when only one category is on screen.
+# Off drops the divider only. Rows stay grouped by category either way.
 show_sections = true
 
 # Cap on rows, or 0 for no cap. The group has its own place on screen, so the

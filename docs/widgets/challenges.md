@@ -1,6 +1,6 @@
 # Challenge board
 
-`[widget.challenges]`. The whole board, in the game's own order.
+`[widget.challenges]`. The board grouped by category: event, yours, then clan.
 
 Each category is a switch, not a row limit:
 
@@ -10,7 +10,7 @@ Each category is a switch, not a row limit:
 | `show_clan` | `true` | Clan challenges. That progress is the clan's, not yours. |
 | `show_personal` | `true` | Ordinary dailies and weeklies |
 | `show_completed` | `true` | Finished rows from any of the three |
-| `show_sections` | `true` | A divider naming each category |
+| `show_sections` | `true` | A divider naming each category. Off keeps the groups, without the heading. |
 
 `T` (`hotkeys.challenges`) and the tray item **Show challenges** hide the board
 until you restart. That is not saved. `enabled` in the file is what stays.
