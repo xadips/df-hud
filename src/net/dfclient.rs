@@ -83,7 +83,12 @@ pub fn hash_body(salt: &str, body: &str) -> String {
             hasher.update(second.as_bytes());
         }
     }
-    format!("{:x}", hasher.finalize())
+    // digest 0.11 returns hybrid_array::Array, which has no LowerHex.
+    hasher.finalize().iter().fold(String::new(), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 
 pub fn signed_body(salt: &str, params: &[Param]) -> String {
@@ -174,9 +179,12 @@ impl Client {
     #[cfg(test)]
     pub fn new(base_url: &str, user_agent: &str) -> Self {
         Self::with_agent(
-            ureq::AgentBuilder::new()
-                .timeout(Duration::from_secs(10))
-                .build(),
+            ureq::Agent::new_with_config(
+                ureq::Agent::config_builder()
+                    .timeout_global(Some(Duration::from_secs(10)))
+                    .http_status_as_error(false)
+                    .build(),
+            ),
             base_url,
             user_agent,
         )
@@ -226,25 +234,26 @@ impl Client {
         let mut req = self
             .agent
             .post(&url)
-            .set("Content-Type", "application/x-www-form-urlencoded")
-            .set("User-Agent", &self.user_agent);
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("User-Agent", &self.user_agent);
         if !self.cookie.is_empty() {
-            req = req.set("Cookie", &self.cookie);
+            req = req.header("Cookie", &self.cookie);
         }
-        let resp = req.send_string(&body)?;
+        let resp = req.send(&body)?;
         self.read_flash(resp, endpoint)
     }
 
     fn read_flash(
         &self,
-        resp: ureq::Response,
+        resp: ureq::http::Response<ureq::Body>,
         call: &str,
     ) -> Result<Vars, Box<dyn std::error::Error>> {
         if resp.status() != 200 {
             return Err(format!("df: {call}: HTTP {}", resp.status()).into());
         }
         let mut raw = Vec::new();
-        resp.into_reader()
+        resp.into_body()
+            .into_reader()
             .take(self.max_body)
             .read_to_end(&mut raw)?;
         let text = String::from_utf8_lossy(&raw).into_owned();
@@ -315,7 +324,7 @@ impl Client {
         let resp = self
             .agent
             .get(&url)
-            .set("User-Agent", &self.user_agent)
+            .header("User-Agent", &self.user_agent)
             .call()?;
         self.read_flash(resp, GET_VALUES)
     }

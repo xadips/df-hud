@@ -778,7 +778,12 @@ mod tests {
                 "salt",
             )
             .unwrap();
-        let agent = ureq::AgentBuilder::new().timeout(cfg.df.timeout.0).build();
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(cfg.df.timeout.0))
+                .http_status_as_error(false)
+                .build(),
+        );
         let client = Client::with_agent(agent, base, "df-hud-test");
         client.disable_public_get_values();
         let stop = Arc::new(AtomicBool::new(false));
@@ -815,7 +820,12 @@ mod tests {
         cfg.poll.only_when_game_running = false;
         cfg.df.timeout = crate::config::Duration(Duration::from_secs(2));
         cfg.df.user_id = user_id.into();
-        let agent = ureq::AgentBuilder::new().timeout(cfg.df.timeout.0).build();
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(cfg.df.timeout.0))
+                .http_status_as_error(false)
+                .build(),
+        );
         let p = PlayerPoller::new(
             Arc::new(Mutex::new(Client::with_agent(agent, base, "df-hud-test"))),
             PollerRuntime {
@@ -954,9 +964,12 @@ mod tests {
             err: None,
             scheduled: false,
         });
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(2))
-            .build();
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(2)))
+                .http_status_as_error(false)
+                .build(),
+        );
         let cfg = Arc::new(Mutex::new(cfg));
         let p = ChallengePoller::new(
             Arc::new(Mutex::new(Client::with_agent(

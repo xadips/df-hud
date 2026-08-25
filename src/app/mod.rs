@@ -332,10 +332,13 @@ pub fn load_creds_and_catalog(
 
 pub fn df_client(cfg: &Config) -> Client {
     Client::with_agent(
-        ureq::AgentBuilder::new()
-            .timeout(cfg.df.timeout.0)
-            .user_agent(&cfg.df.user_agent)
-            .build(),
+        ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(cfg.df.timeout.0))
+                .user_agent(cfg.df.user_agent.clone())
+                .http_status_as_error(false)
+                .build(),
+        ),
         &cfg.df.base_url,
         &cfg.df.user_agent,
     )
