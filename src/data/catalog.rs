@@ -169,12 +169,12 @@ pub fn ensure(
     now: DateTime<Utc>,
 ) -> Result<Catalog, String> {
     let cached = load_file(path)?;
-    if let Some(c) = cached.as_ref() {
-        if now >= c.fetched_at {
-            let age = (now - c.fetched_at).to_std().unwrap_or(Duration::ZERO);
-            if age < max_age {
-                return Ok(c.clone());
-            }
+    if let Some(c) = cached.as_ref()
+        && now >= c.fetched_at
+    {
+        let age = (now - c.fetched_at).to_std().unwrap_or(Duration::ZERO);
+        if age < max_age {
+            return Ok(c.clone());
         }
     }
     match fetch(feed_url, user_agent, timeout, now) {

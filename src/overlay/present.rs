@@ -149,22 +149,22 @@ pub fn from_view(v: &ModelView, cfg: &Config, groups: &Groups) -> View {
         },
         ..View::default()
     };
-    if !groups.hidden("session") {
-        if let Some(text) = session_line(v, cfg) {
-            out.clock = text;
-        }
+    if !groups.hidden("session")
+        && let Some(text) = session_line(v, cfg)
+    {
+        out.clock = text;
     }
-    if !groups.hidden("xp") {
-        if let Some((text, color)) = xp_line(v, cfg) {
-            out.xp = text;
-            out.xp_color = color;
-        }
+    if !groups.hidden("xp")
+        && let Some((text, color)) = xp_line(v, cfg)
+    {
+        out.xp = text;
+        out.xp_color = color;
     }
-    if !groups.hidden("block") {
-        if let Some((head, sub)) = block_lines(v, cfg) {
-            out.block = head;
-            out.block_sub = sub;
-        }
+    if !groups.hidden("block")
+        && let Some((head, sub)) = block_lines(v, cfg)
+    {
+        out.block = head;
+        out.block_sub = sub;
     }
     if !groups.hidden("challenges") {
         out.challenges = challenge_lines(v, cfg);
@@ -279,13 +279,13 @@ fn boss_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
             });
         }
     }
-    if cfg.widget.bosses.show_nearest {
-        if let Some(text) = nearest_line(v) {
-            rows.push(Line {
-                text,
-                ..Line::default()
-            });
-        }
+    if cfg.widget.bosses.show_nearest
+        && let Some(text) = nearest_line(v)
+    {
+        rows.push(Line {
+            text,
+            ..Line::default()
+        });
     }
     rows
 }
@@ -314,22 +314,21 @@ fn onslaught_panel(v: &ModelView) -> Option<Vec<Line>> {
         rgb(0xb5, 0xb5, 0xb5),
         "cleared",
     ));
-    if let Some(past) = v.block_events_past.as_deref().and_then(|e| e.first()) {
-        if let Some(end) = onslaught_cycle_end(past) {
-            if v.now >= end {
-                let since = v.now - end;
-                let text = if since.num_minutes() >= 1 {
-                    format!("ended {}m ago", since.num_minutes())
-                } else {
-                    "ended just now".into()
-                };
-                rows.push(Line {
-                    text,
-                    color: Some(rgb(0x6f, 0x6f, 0x6f)),
-                    ..Line::default()
-                });
-            }
-        }
+    if let Some(past) = v.block_events_past.as_deref().and_then(|e| e.first())
+        && let Some(end) = onslaught_cycle_end(past)
+        && v.now >= end
+    {
+        let since = v.now - end;
+        let text = if since.num_minutes() >= 1 {
+            format!("ended {}m ago", since.num_minutes())
+        } else {
+            "ended just now".into()
+        };
+        rows.push(Line {
+            text,
+            color: Some(rgb(0x6f, 0x6f, 0x6f)),
+            ..Line::default()
+        });
     }
     rows.extend(onslaught_section(
         "now",
@@ -847,18 +846,21 @@ fn map_view(v: &ModelView, cfg: &Config) -> MapView {
     }
     let mut markers = Vec::new();
     for o in citymap::outposts() {
-        if o.x >= origin_x && o.x < origin_x + w && o.y >= origin_y && o.y < origin_y + h {
-            if let Some(letter) = outpost_letter(o.name) {
-                let outpost = [0.75, 1.0, 0.75, 1.0];
-                markers.push(MapMarker {
-                    x: o.x,
-                    y: o.y,
-                    text: letter.into(),
-                    ink: outpost,
-                    color: outpost,
-                    ring: false,
-                });
-            }
+        if o.x >= origin_x
+            && o.x < origin_x + w
+            && o.y >= origin_y
+            && o.y < origin_y + h
+            && let Some(letter) = outpost_letter(o.name)
+        {
+            let outpost = [0.75, 1.0, 0.75, 1.0];
+            markers.push(MapMarker {
+                x: o.x,
+                y: o.y,
+                text: letter.into(),
+                ink: outpost,
+                color: outpost,
+                ring: false,
+            });
         }
     }
     let mut list = Vec::new();
@@ -2300,17 +2302,21 @@ mod tests {
             ..ModelView::default()
         };
         assert_eq!(onslaught_header_timer(&v).as_deref(), Some("3:59"));
-        assert!(onslaught_header_timer(&ModelView {
-            have_data: true,
-            ..ModelView::default()
-        })
-        .is_none());
-        assert!(onslaught_header_timer(&ModelView {
-            has_onslaught_countdown: true,
-            onslaught_countdown: Ns::from_std(Duration::from_secs(60)),
-            ..ModelView::default()
-        })
-        .is_none());
+        assert!(
+            onslaught_header_timer(&ModelView {
+                have_data: true,
+                ..ModelView::default()
+            })
+            .is_none()
+        );
+        assert!(
+            onslaught_header_timer(&ModelView {
+                has_onslaught_countdown: true,
+                onslaught_countdown: Ns::from_std(Duration::from_secs(60)),
+                ..ModelView::default()
+            })
+            .is_none()
+        );
     }
 
     #[test]

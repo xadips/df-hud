@@ -1,7 +1,7 @@
 //! Process-wide minimum gap between reserved request slots.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::wake::Notify;
@@ -38,11 +38,7 @@ impl Gate {
             let slot = match *last {
                 Some(prev) => {
                     let earliest = prev + self.min;
-                    if earliest > now {
-                        earliest
-                    } else {
-                        now
-                    }
+                    if earliest > now { earliest } else { now }
                 }
                 None => now,
             };

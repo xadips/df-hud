@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::config::{parse_color, Config};
+use crate::config::{Config, parse_color};
 use crate::overlay::layout::{Transform, Viewport};
 
 const PT_TO_PX: f32 = 4.0 / 3.0;

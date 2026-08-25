@@ -279,7 +279,7 @@ impl PlayerPoller {
                         vars: Default::default(),
                         err: Some("no credentials".into()),
                         scheduled,
-                    }
+                    };
                 }
             },
         };
@@ -636,10 +636,10 @@ impl Schedule for ChallengePoller {
     }
 
     fn apply_floor(&self, next: &mut Instant) {
-        if let Some(floor) = self.gate.reserved() {
-            if *next < floor {
-                *next = floor;
-            }
+        if let Some(floor) = self.gate.reserved()
+            && *next < floor
+        {
+            *next = floor;
         }
     }
 

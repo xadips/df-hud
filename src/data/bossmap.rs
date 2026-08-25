@@ -118,18 +118,17 @@ impl BossMap {
                 let mut walk = Walk::default();
                 let mut reachable = false;
                 let off_map = loc[0] == ONSLAUGHT_COORD && loc[1] == ONSLAUGHT_COORD;
-                if !off_map {
-                    if let Some(w) = crate::data::citymap::default()
+                if !off_map
+                    && let Some(w) = crate::data::citymap::default()
                         .route_from(dist, from[0], from[1], loc[0], loc[1])
-                    {
-                        walk = crate::model::Walk {
-                            blocks: w.blocks,
-                            dx: w.dx,
-                            dy: w.dy,
-                            detour: w.detour,
-                        };
-                        reachable = true;
-                    }
+                {
+                    walk = crate::model::Walk {
+                        blocks: w.blocks,
+                        dx: w.dx,
+                        dy: w.dy,
+                        detour: w.detour,
+                    };
+                    reachable = true;
                 }
                 marks.push(CityMark {
                     marker: marker.clone(),
@@ -380,11 +379,7 @@ fn split_enemy_types(s: &str) -> Vec<String> {
     s.split('\n')
         .filter_map(|part| {
             let t = html_unescape(part.trim());
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
+            if t.is_empty() { None } else { Some(t) }
         })
         .collect()
 }

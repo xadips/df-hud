@@ -268,7 +268,7 @@ pub fn oldest_matching<'a>(procs: &'a [Proc], exe: &str, self_pid: u32) -> Optio
 
 #[cfg(target_os = "linux")]
 pub mod linux {
-    use super::{base_name, DateTime, GameState, Scanner, Utc, DEFAULT_PROCESS};
+    use super::{DEFAULT_PROCESS, DateTime, GameState, Scanner, Utc, base_name};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -459,7 +459,7 @@ pub mod windows {
     use std::mem::{size_of, zeroed};
     use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::System::Threading::{
@@ -678,9 +678,9 @@ mod linux_tests {
     use chrono::{DateTime, Utc};
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
     use std::sync::mpsc;
-    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
 

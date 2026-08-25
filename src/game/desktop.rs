@@ -251,15 +251,34 @@ pub fn set_hypr_dirs_for_testing(dirs: Option<Vec<PathBuf>>) {
 }
 
 #[cfg(any(test, target_os = "linux"))]
+static HYPR_SIG_OVERRIDE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Tests cannot reach for `env::set_var`: the harness runs them on threads, and
+/// mutating the environment races every other thread that reads it. Edition 2024
+/// makes that unsafe, correctly.
+#[cfg(test)]
+pub fn set_hypr_signature_for_testing(sig: Option<&str>) {
+    *HYPR_SIG_OVERRIDE.lock().unwrap() = sig.map(str::to_owned);
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn hypr_signature() -> Option<String> {
+    if let Some(sig) = HYPR_SIG_OVERRIDE.lock().unwrap().clone() {
+        return Some(sig);
+    }
+    std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()
+}
+
+#[cfg(any(test, target_os = "linux"))]
 fn hypr_dirs() -> Vec<PathBuf> {
     if let Some(dirs) = HYPR_DIRS_OVERRIDE.lock().unwrap().clone() {
         return dirs;
     }
     let mut dirs = Vec::new();
-    if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") {
-        if !runtime.is_empty() {
-            dirs.push(PathBuf::from(runtime).join("hypr"));
-        }
+    if let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR")
+        && !runtime.is_empty()
+    {
+        dirs.push(PathBuf::from(runtime).join("hypr"));
     }
     dirs.push(PathBuf::from("/tmp/hypr"));
     dirs
@@ -269,11 +288,11 @@ fn hypr_dirs() -> Vec<PathBuf> {
 pub fn hypr_socket_path(name: &str) -> Result<PathBuf, String> {
     let dirs = hypr_dirs();
     let mut candidates = Vec::new();
-    if let Ok(sig) = std::env::var("HYPRLAND_INSTANCE_SIGNATURE") {
-        if !sig.is_empty() {
-            for dir in &dirs {
-                candidates.push(dir.join(&sig).join(name));
-            }
+    if let Some(sig) = hypr_signature()
+        && !sig.is_empty()
+    {
+        for dir in &dirs {
+            candidates.push(dir.join(&sig).join(name));
         }
     }
     for path in &candidates {
@@ -324,7 +343,7 @@ fn lone_hypr_socket(dirs: &[PathBuf], name: &str) -> Result<Option<PathBuf>, Str
             n => {
                 return Err(format!(
                     "{n} Hyprland instances are running, so which one to ask is ambiguous"
-                ))
+                ));
             }
         }
     }
@@ -625,16 +644,16 @@ pub fn find_windows_game_window(
         }
         best_i.map(|i| &windows[i])
     };
-    if pid > 0 {
-        if let Some(w) = best(&|w| w.pid == pid as u32) {
-            return place(w, "process id");
-        }
+    if pid > 0
+        && let Some(w) = best(&|w| w.pid == pid as u32)
+    {
+        return place(w, "process id");
     }
     let want = normalize_class(&m.class);
-    if !want.is_empty() {
-        if let Some(w) = best(&|w| normalize_class(&w.class) == want) {
-            return place(w, "window class");
-        }
+    if !want.is_empty()
+        && let Some(w) = best(&|w| normalize_class(&w.class) == want)
+    {
+        return place(w, "window class");
     }
     Placement {
         launcher_only: launcher,
@@ -660,12 +679,11 @@ pub fn windows_virtual_key(key: &str) -> Option<u16> {
             return Some(c as u16);
         }
     }
-    if let Some(rest) = upper.strip_prefix('F') {
-        if let Ok(n) = rest.parse::<u16>() {
-            if (1..=24).contains(&n) {
-                return Some(0x70 + n - 1);
-            }
-        }
+    if let Some(rest) = upper.strip_prefix('F')
+        && let Ok(n) = rest.parse::<u16>()
+        && (1..=24).contains(&n)
+    {
+        return Some(0x70 + n - 1);
     }
     Some(match upper.as_str() {
         "BACKSPACE" => 0x08,
@@ -756,60 +774,62 @@ fn parse_windows_address(address: &str) -> Result<windows_sys::Win32::Foundation
 #[cfg(windows)]
 fn enumerate_windows() -> Result<Vec<WinWindow>, String> {
     use std::mem::size_of;
-    use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
-    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFOEXW};
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFOEXW, MonitorFromWindow};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
         GetWindowThreadProcessId, IsIconic, IsWindowVisible,
     };
+    use windows_sys::core::BOOL;
 
     struct State {
         windows: Vec<WinWindow>,
     }
     unsafe extern "system" fn cb(hwnd: HWND, lp: LPARAM) -> BOOL {
-        let state = &mut *(lp as *mut State);
-        if IsWindowVisible(hwnd) == 0 {
-            return 1;
+        unsafe {
+            let state = &mut *(lp as *mut State);
+            if IsWindowVisible(hwnd) == 0 {
+                return 1;
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid == 0 {
+                return 1;
+            }
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            GetWindowRect(hwnd, &mut rect);
+            let mut class = [0u16; 256];
+            let n = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
+            let class = String::from_utf16_lossy(&class[..n.max(0) as usize]);
+            let len = GetWindowTextLengthW(hwnd);
+            let title = if len <= 0 {
+                String::new()
+            } else {
+                let mut buf = vec![0u16; len as usize + 1];
+                let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+                String::from_utf16_lossy(&buf[..n.max(0) as usize])
+            };
+            state.windows.push(WinWindow {
+                handle: hwnd as usize,
+                class,
+                title,
+                pid,
+                minimized: IsIconic(hwnd) != 0,
+                width: rect.right - rect.left,
+                height: rect.bottom - rect.top,
+            });
+            let _ = (
+                GetMonitorInfoW,
+                MonitorFromWindow,
+                size_of::<MONITORINFOEXW>(),
+            );
+            1
         }
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(hwnd, &mut pid);
-        if pid == 0 {
-            return 1;
-        }
-        let mut rect = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        GetWindowRect(hwnd, &mut rect);
-        let mut class = [0u16; 256];
-        let n = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
-        let class = String::from_utf16_lossy(&class[..n.max(0) as usize]);
-        let len = GetWindowTextLengthW(hwnd);
-        let title = if len <= 0 {
-            String::new()
-        } else {
-            let mut buf = vec![0u16; len as usize + 1];
-            let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-            String::from_utf16_lossy(&buf[..n.max(0) as usize])
-        };
-        state.windows.push(WinWindow {
-            handle: hwnd as usize,
-            class,
-            title,
-            pid,
-            minimized: IsIconic(hwnd) != 0,
-            width: rect.right - rect.left,
-            height: rect.bottom - rect.top,
-        });
-        let _ = (
-            GetMonitorInfoW,
-            MonitorFromWindow,
-            size_of::<MONITORINFOEXW>(),
-        );
-        1
     }
     let mut state = State {
         windows: Vec::new(),
@@ -1147,17 +1167,18 @@ mod tests {
             std::fs::write(&path, []).unwrap();
             path
         };
-        std::env::set_var("HYPRLAND_INSTANCE_SIGNATURE", "");
+        set_hypr_signature_for_testing(Some(""));
         assert!(hypr_socket_path(".socket2.sock").is_err());
         let want = instance("real-signature");
-        std::env::set_var("HYPRLAND_INSTANCE_SIGNATURE", "real-signature");
+        set_hypr_signature_for_testing(Some("real-signature"));
         assert_eq!(hypr_socket_path(".socket2.sock").unwrap(), want);
-        std::env::set_var("HYPRLAND_INSTANCE_SIGNATURE", "last-time-i-was-started");
+        set_hypr_signature_for_testing(Some("last-time-i-was-started"));
         assert_eq!(hypr_socket_path(".socket2.sock").unwrap(), want);
         instance("a-second-compositor");
         assert!(hypr_socket_path(".socket2.sock").is_err());
-        std::env::set_var("HYPRLAND_INSTANCE_SIGNATURE", "a-second-compositor");
+        set_hypr_signature_for_testing(Some("a-second-compositor"));
         assert!(hypr_socket_path(".socket2.sock").is_ok());
+        set_hypr_signature_for_testing(None);
         set_hypr_dirs_for_testing(None);
         let _ = std::fs::remove_dir_all(&root);
     }

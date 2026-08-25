@@ -211,29 +211,27 @@ where
     } else {
         None
     };
-    if overlay_only {
-        if let Some(mode) = mode {
-            let mut flags = Vec::new();
-            if duration_set {
-                flags.push("--duration");
-            }
-            if output_set {
-                flags.push("--output");
-            }
-            if namespace_set {
-                flags.push("--namespace");
-            }
-            if list_outputs {
-                flags.push("--list-outputs");
-            }
-            if monitor_set {
-                flags.push("--monitor");
-            }
-            if list_monitors {
-                flags.push("--list-monitors");
-            }
-            return Err(format!("{} cannot be used with {mode}", flags.join(", ")).into());
+    if overlay_only && let Some(mode) = mode {
+        let mut flags = Vec::new();
+        if duration_set {
+            flags.push("--duration");
         }
+        if output_set {
+            flags.push("--output");
+        }
+        if namespace_set {
+            flags.push("--namespace");
+        }
+        if list_outputs {
+            flags.push("--list-outputs");
+        }
+        if monitor_set {
+            flags.push("--monitor");
+        }
+        if list_monitors {
+            flags.push("--list-monitors");
+        }
+        return Err(format!("{} cannot be used with {mode}", flags.join(", ")).into());
     }
 
     if version {

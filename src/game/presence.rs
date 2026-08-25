@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -521,13 +521,14 @@ fn listen_unix(path: &str) -> io::Result<Listener> {
         std::fs::remove_file(path)
             .map_err(|e| io::Error::other(format!("removing the stale socket at {path}: {e}")))?;
     }
-    if let Some(dir) = p.parent() {
-        if !dir.as_os_str().is_empty() && !dir.exists() {
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .recursive(true)
-                .create(dir)?;
-        }
+    if let Some(dir) = p.parent()
+        && !dir.as_os_str().is_empty()
+        && !dir.exists()
+    {
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .recursive(true)
+            .create(dir)?;
     }
     let unix = UnixListener::bind(path)?;
     unix.set_nonblocking(true)?;
@@ -577,7 +578,7 @@ fn listen_windows(path: &str) -> io::Result<Listener> {
 
 #[cfg(windows)]
 fn create_pipe(path: &str, first: bool) -> io::Result<windows_sys::Win32::Foundation::HANDLE> {
-    use windows_sys::Win32::Foundation::{LocalFree, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, LocalFree};
     use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -702,7 +703,7 @@ impl Drop for WindowsPipe {
 impl WindowsListener {
     fn accept(&self, stop: &AtomicBool) -> io::Result<IpcStream> {
         use windows_sys::Win32::Foundation::{
-            GetLastError, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE,
+            ERROR_PIPE_CONNECTED, GetLastError, INVALID_HANDLE_VALUE,
         };
         use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
 
@@ -733,7 +734,7 @@ impl WindowsListener {
 impl Drop for WindowsListener {
     fn drop(&mut self) {
         use windows_sys::Win32::Foundation::{
-            CloseHandle, GetLastError, ERROR_PIPE_BUSY, GENERIC_READ, GENERIC_WRITE,
+            CloseHandle, ERROR_PIPE_BUSY, GENERIC_READ, GENERIC_WRITE, GetLastError,
             INVALID_HANDLE_VALUE,
         };
         use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING};

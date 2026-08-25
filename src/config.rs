@@ -6,7 +6,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::time::{Duration as StdDuration, SystemTime};
 
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use crate::app::hotkeys;
 
@@ -283,17 +283,17 @@ pub fn default_data_dir() -> String {
     {
         let local = std::env::var("LOCALAPPDATA").ok();
         let home = std::env::var("USERPROFILE").ok();
-        return windows_app_dir(local.as_deref(), home.as_deref(), "Local")
+        windows_app_dir(local.as_deref(), home.as_deref(), "Local")
             .join("df-hud")
             .to_string_lossy()
-            .into_owned();
+            .into_owned()
     }
     #[cfg(not(windows))]
     {
-        if let Ok(dir) = std::env::var("XDG_DATA_HOME") {
-            if !dir.is_empty() {
-                return format!("{dir}/df-hud");
-            }
+        if let Ok(dir) = std::env::var("XDG_DATA_HOME")
+            && !dir.is_empty()
+        {
+            return format!("{dir}/df-hud");
         }
         match std::env::var("HOME") {
             Ok(home) if !home.is_empty() => format!("{home}/.local/share/df-hud"),
@@ -307,16 +307,16 @@ pub fn default_path() -> PathBuf {
     {
         let appdata = std::env::var("APPDATA").ok();
         let home = std::env::var("USERPROFILE").ok();
-        return windows_app_dir(appdata.as_deref(), home.as_deref(), "Roaming")
+        windows_app_dir(appdata.as_deref(), home.as_deref(), "Roaming")
             .join("df-hud")
-            .join("config.toml");
+            .join("config.toml")
     }
     #[cfg(not(windows))]
     {
-        if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
-            if !dir.is_empty() {
-                return PathBuf::from(dir).join("df-hud/config.toml");
-            }
+        if let Ok(dir) = std::env::var("XDG_CONFIG_HOME")
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir).join("df-hud/config.toml");
         }
         match std::env::var("HOME") {
             Ok(home) if !home.is_empty() => PathBuf::from(home).join(".config/df-hud/config.toml"),
@@ -787,10 +787,10 @@ impl Config {
             FLOOR_TIMEOUT,
             CEIL_TIMEOUT,
         );
-        if self.bridge.enabled {
-            if let Err(e) = validate_loopback(&self.bridge.listen) {
-                errs.push(format!("bridge.listen: {e}"));
-            }
+        if self.bridge.enabled
+            && let Err(e) = validate_loopback(&self.bridge.listen)
+        {
+            errs.push(format!("bridge.listen: {e}"));
         }
         push_floor(
             &mut errs,
@@ -1005,10 +1005,10 @@ impl Config {
                     "widget.{name}.font_size {font} cannot be negative (0 inherits from [hud])"
                 ));
             }
-            if !color.is_empty() {
-                if let Err(e) = validate_color(color) {
-                    errs.push(format!("widget.{name}.color: {e}"));
-                }
+            if !color.is_empty()
+                && let Err(e) = validate_color(color)
+            {
+                errs.push(format!("widget.{name}.color: {e}"));
             }
         }
         let mut used = std::collections::HashMap::new();
@@ -1122,10 +1122,10 @@ pub(crate) fn expand_home(p: &str) -> String {
     if p == "~" {
         return std::env::var("HOME").unwrap_or_else(|_| p.into());
     }
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{home}/{rest}");
-        }
+    if let Some(rest) = p.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return format!("{home}/{rest}");
     }
     p.to_string()
 }

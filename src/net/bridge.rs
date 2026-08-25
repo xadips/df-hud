@@ -1,6 +1,6 @@
 //! Loopback HTTP/1.1 bridge. Request bodies are never logged.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(test)]
 use std::net::SocketAddr;
