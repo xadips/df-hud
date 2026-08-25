@@ -629,7 +629,7 @@ fn dump_challenges(config: Option<&Path>, raw: bool) -> Result<(), Box<dyn Error
     if salt.is_empty() {
         return Err(
             "no signing salt: the bridge has not reported one, and df.skeygen is empty. \
-Load the Outpost home page with the bridge userscript or the the bridge userscript installed."
+Load the Outpost home page with the bridge userscript installed."
                 .into(),
         );
     }

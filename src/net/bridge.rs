@@ -609,15 +609,15 @@ mod tests {
 
     #[test]
     fn validate_loopback_addrs() {
-        for addr in ["127.0.0.1:9275", "localhost:9275", "[::1]:9275"] {
+        for addr in ["127.0.0.1:9310", "localhost:9310", "[::1]:9310"] {
             config::validate_loopback(addr).unwrap();
         }
         for addr in [
-            ":9275",
-            "0.0.0.0:9275",
-            "192.168.1.2:9275",
-            "example.com:9275",
-            "9275",
+            ":9310",
+            "0.0.0.0:9310",
+            "192.168.1.2:9310",
+            "example.com:9310",
+            "9310",
         ] {
             assert!(config::validate_loopback(addr).is_err(), "{addr}");
         }

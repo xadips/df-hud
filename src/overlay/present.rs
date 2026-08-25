@@ -1632,12 +1632,12 @@ mod tests {
 
         let empty = ModelView {
             now,
-            challenge_status: "no signing salt yet".into(),
+            challenge_status: "bridge script sends no salt - update it".into(),
             ..ModelView::default()
         };
         let lines = challenge_lines(&empty, &all_on());
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].text.contains("no signing salt"));
+        assert!(lines[0].text.contains("sends no salt"));
     }
 
     #[test]

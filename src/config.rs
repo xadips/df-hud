@@ -13,7 +13,10 @@ use crate::app::hotkeys;
 const DEFAULT_BASE_URL: &str = "https://fairview.deadfrontier.com/onlinezombiemmo";
 const DEFAULT_ALLSTATS_URL: &str =
     "https://fairview.deadfrontier.com/onlinezombiemmo/dfdata/get_allstats.php?printvars=1";
-const DEFAULT_LISTEN: &str = "127.0.0.1:9275";
+// Deliberately not 9275: SilverOverlays listens there, and its userscript sends
+// a payload df-hud cannot use for the challenge board. Sharing the port would
+// mean whichever started first wins the bind.
+const DEFAULT_LISTEN: &str = "127.0.0.1:9310";
 const DEFAULT_GAME_PROCESS: &str = "DeadFrontier.exe";
 const DEFAULT_BOSSMAP_URL: &str = "https://www.dfprofiler.com/bossmap/json/";
 
@@ -76,6 +79,10 @@ pub struct Df {
     pub user_agent: String,
     pub timeout: Duration,
     pub skeygen: String,
+    /// Numeric account id for the unauthenticated `get_values` call. Only used
+    /// until the bridge delivers a real session; it cannot reach challenges.
+    #[serde(default)]
+    pub user_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -353,6 +360,7 @@ impl Default for Config {
                 user_agent: default_user_agent(),
                 timeout: Duration::from_secs(10),
                 skeygen: String::new(),
+                user_id: String::new(),
             },
             bridge: Bridge {
                 enabled: true,
@@ -764,6 +772,13 @@ impl Config {
         }
         if self.df.user_agent.trim().is_empty() {
             errs.push("df.user_agent is empty: identify this tool honestly to the server".into());
+        }
+        self.df.user_id = self.df.user_id.trim().to_string();
+        if !self.df.user_id.is_empty() && !crate::net::dfclient::numeric_id(&self.df.user_id) {
+            errs.push(format!(
+                "df.user_id {:?} must be digits only: it is the numeric account id, not a name",
+                self.df.user_id
+            ));
         }
         push_range(
             &mut errs,
@@ -1514,7 +1529,7 @@ mod tests {
 
     #[test]
     fn loopback_only_bridge() {
-        let err = Config::parse("[bridge]\nlisten = \"0.0.0.0:9275\"\n").unwrap_err();
+        let err = Config::parse("[bridge]\nlisten = \"0.0.0.0:9310\"\n").unwrap_err();
         assert!(err.to_string().contains("loopback"), "{err}");
     }
 
@@ -1522,6 +1537,23 @@ mod tests {
     fn https_base_url() {
         let err = Config::parse("[df]\nbase_url = \"http://example.com\"\n").unwrap_err();
         assert!(err.to_string().contains("https"), "{err}");
+    }
+
+    #[test]
+    fn user_id_defaults_to_empty_and_accepts_digits() {
+        assert!(Config::default().df.user_id.is_empty());
+        let cfg = Config::parse("[df]\nuser_id = \" 1234567 \"\n").unwrap();
+        assert_eq!(cfg.df.user_id, "1234567", "surrounding space is trimmed");
+    }
+
+    #[test]
+    fn a_non_numeric_user_id_is_an_error() {
+        for bad in ["notanid", "123-456", "12 34"] {
+            let err = Config::parse(&format!("[df]\nuser_id = {bad:?}\n"))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("df.user_id"), "{bad:?} gave {err}");
+        }
     }
 
     #[test]
@@ -1660,11 +1692,11 @@ window = 120
 
     #[test]
     fn extra_loopback_and_disabled_bridge() {
-        for listen in ["192.168.1.50:9275", ":9275"] {
+        for listen in ["192.168.1.50:9310", ":9310"] {
             let body = format!("[bridge]\nlisten = \"{listen}\"\n");
             assert!(Config::parse(&body).is_err(), "{listen}");
         }
-        Config::parse("[bridge]\nenabled = false\nlisten = \"0.0.0.0:9275\"\n").unwrap();
+        Config::parse("[bridge]\nenabled = false\nlisten = \"0.0.0.0:9310\"\n").unwrap();
     }
 
     #[test]

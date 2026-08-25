@@ -145,7 +145,9 @@ fn excerpt(body: &str, max: usize) -> String {
     }
 }
 
-fn numeric_id(id: &str) -> bool {
+/// What `get_values` accepts as an account id. Config validation shares this so
+/// a rejected id is a startup error rather than a puzzling poll failure.
+pub fn numeric_id(id: &str) -> bool {
     let n = id.len();
     (1..=20).contains(&n) && id.bytes().all(|b| b.is_ascii_digit())
 }
@@ -258,7 +260,7 @@ impl Client {
 
     pub fn get_values(&self, cr: &Credentials) -> Result<Vars, Box<dyn std::error::Error>> {
         if !self.public_failed.load(Ordering::SeqCst) {
-            match self.get_values_public(&cr.user_id) {
+            match self.fetch_public(&cr.user_id) {
                 Ok(vars) if record_looks_real(&vars) => return Ok(vars),
                 Ok(_) | Err(_) => {
                     self.public_failed.store(true, Ordering::SeqCst);
@@ -286,7 +288,26 @@ impl Client {
         )
     }
 
-    fn get_values_public(&self, user_id: &str) -> Result<Vars, Box<dyn std::error::Error>> {
+    /// `get_values` for a bare account id, with no session behind it. This is
+    /// what `df.user_id` buys before the bridge has delivered anything: a real
+    /// record, but a public one, so challenges stay out of reach.
+    ///
+    /// Unlike [`Self::get_values`] this ignores the `public_failed` latch. There
+    /// is no authenticated call to fall back to here, so a failure is just a
+    /// failure and the next poll should try again. An empty record is an error
+    /// rather than a blank HUD, since the usual cause is a wrong `df.user_id`.
+    pub fn get_values_public(&self, user_id: &str) -> Result<Vars, Box<dyn std::error::Error>> {
+        let vars = self.fetch_public(user_id)?;
+        if !record_looks_real(&vars) {
+            return Err(format!(
+                "df: {GET_VALUES}: no public record for user id {user_id:?}; check df.user_id"
+            )
+            .into());
+        }
+        Ok(vars)
+    }
+
+    fn fetch_public(&self, user_id: &str) -> Result<Vars, Box<dyn std::error::Error>> {
         if !numeric_id(user_id) {
             return Err(format!("{user_id:?} is not a user id").into());
         }

@@ -33,6 +33,14 @@ timeout = 10
 # rotating it heals itself. Set it only to work without the bridge script.
 skeygen = ""
 
+# Your numeric account id, digits only. This is a fallback, not a login: it
+# reads the same public record DFProfiler does, so block info, the map ring and
+# XP/hr work before you have installed the bridge userscript. The challenge
+# board still needs a real session and says so next to the board, not in the
+# status banner. As soon as the bridge delivers a session it takes over and this
+# is ignored. Empty means the HUD waits for the bridge, as it always has.
+user_id = ""
+
 [bridge]
 # The loopback listener the bridge userscript POSTs your session to. Both keys
 # need a RESTART to change.
@@ -40,7 +48,7 @@ skeygen = ""
 # This endpoint receives account-equivalent credentials, so a non-loopback
 # address is refused at startup. Request bodies are never logged.
 enabled = true
-listen = "127.0.0.1:9275"
+listen = "127.0.0.1:9310"
 
 [poll]
 # How often df-hud asks the game for your player record. active applies while the
@@ -533,8 +541,8 @@ urgent_within = 7200
 # The listener also exposes the two corrections the tray menu offers, so a key
 # can do them without taking a hand off the mouse:
 #
-#   bind = SUPER, F2, exec, curl -fsS -X POST http://127.0.0.1:9275/api/run/start
-#   bind = SUPER, F3, exec, curl -fsS -X POST http://127.0.0.1:9275/api/xp/reset
+#   bind = SUPER, F2, exec, curl -fsS -X POST http://127.0.0.1:9310/api/run/start
+#   bind = SUPER, F3, exec, curl -fsS -X POST http://127.0.0.1:9310/api/xp/reset
 #
 # /api/run/start is deliberately a trigger rather than a detector. To catch the
 # click itself, Hyprland can do it without df-hud watching your input - bindn

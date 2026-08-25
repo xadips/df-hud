@@ -67,6 +67,11 @@ Top left by default (`[widget.status]`). Amber when you can fix it (no session
 yet, or it expired: load a Dead Frontier page with the bridge script). Red when
 you cannot (the game server is not answering). No `enabled` or `color` key.
 
+Group-specific trouble stays with its group rather than coming up here. An
+empty challenge board explains itself where the board would be, so turning
+challenges off with `T` or `enabled = false` takes that message with it. The
+banner is for what stops df-hud as a whole.
+
 ## Position lag under Proton
 
 The map ring and block info prefer the game client's own position (Discord rich

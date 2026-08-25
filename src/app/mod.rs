@@ -185,6 +185,8 @@ impl Handle {
         }
         self.gamekeys.apply_config(&cfg.game_keys);
         self.store.set_xp_min_samples(cfg.widget.xp.min_samples);
+        self.store
+            .set_public_id_configured(!cfg.df.user_id.is_empty());
         *self.cfg.lock().unwrap() = cfg.clone();
         if rebuild_clients {
             self.player.replace_client(df_client(&cfg));
@@ -351,6 +353,7 @@ pub fn start_with(
         eprintln!("catalog: {}", c.summary());
     }
     let store = Arc::new(Store::new(catalog));
+    store.set_public_id_configured(!cfg.df.user_id.is_empty());
     if let Some(at) = creds.updated_at() {
         store.set_credentials_at(at);
     }

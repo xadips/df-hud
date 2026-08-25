@@ -20,6 +20,15 @@ pub const MIN_REQUEST_GAP: Duration = Duration::from_secs(1);
 const PAUSE_RECHECK: Duration = Duration::from_secs(2);
 type TickHandler = Arc<dyn Fn(Tick) + Send + Sync>;
 
+/// Why the board is empty. These print beside it as `challenges: <reason>`, on
+/// one line that clips rather than wraps, so they name the next move in the
+/// words the docs use and leave the rest to docs/install.md.
+const NEED_SCRIPT: &str = "no session yet - install the bridge script";
+const SESSION_EXPIRED: &str = "session expired - open any Dead Frontier page";
+const SCRIPT_TOO_OLD: &str = "bridge script sends no salt - update it";
+const NEED_COOKIE: &str = "load any Dead Frontier page to send the session";
+const BOARD_RETRY: &str = "could not load the board (retrying)";
+
 #[derive(Clone)]
 pub struct PollerRuntime {
     pub creds: Arc<Creds>,
@@ -127,6 +136,13 @@ fn run_loop(s: &impl Schedule) {
     }
 }
 
+/// Who we are polling as. A bridge session can reach everything; a bare
+/// `df.user_id` only reaches the public record.
+enum Identity {
+    Session(Box<crate::net::creds::Credentials>),
+    PublicId(String),
+}
+
 pub struct PlayerPoller {
     client: Arc<Mutex<Client>>,
     creds: Arc<Creds>,
@@ -199,8 +215,18 @@ impl PlayerPoller {
         self.status.lock().unwrap().clone()
     }
 
+    /// The configured account id, when it is the only identity we have. Real
+    /// bridge credentials always win, so this goes quiet the moment they land.
+    fn public_only_id(&self) -> Option<String> {
+        if self.creds.get().is_some() {
+            return None;
+        }
+        let id = self.cfg.lock().unwrap().df.user_id.clone();
+        (!id.is_empty()).then_some(id)
+    }
+
     fn pause_reason(&self) -> Option<String> {
-        if self.creds.get().is_none() {
+        if self.creds.get().is_none() && self.public_only_id().is_none() {
             return Some("waiting for the browser bridge to deliver a session".into());
         }
         {
@@ -243,13 +269,19 @@ impl PlayerPoller {
     }
 
     pub fn poll_once(&self, scheduled: bool) -> Tick {
-        let Some((cr, _)) = self.creds.get() else {
-            return Tick {
-                at: Utc::now(),
-                vars: Default::default(),
-                err: Some("no credentials".into()),
-                scheduled,
-            };
+        let identity = match self.creds.get() {
+            Some((cr, _)) => Identity::Session(Box::new(cr)),
+            None => match self.public_only_id() {
+                Some(id) => Identity::PublicId(id),
+                None => {
+                    return Tick {
+                        at: Utc::now(),
+                        vars: Default::default(),
+                        err: Some("no credentials".into()),
+                        scheduled,
+                    }
+                }
+            },
         };
         {
             let mut st = self.status.lock().unwrap();
@@ -265,7 +297,13 @@ impl PlayerPoller {
                 scheduled,
             };
         }
-        let result = self.client.lock().unwrap().get_values(&cr.to_df());
+        let result = {
+            let client = self.client.lock().unwrap();
+            match &identity {
+                Identity::Session(cr) => client.get_values(&cr.to_df()),
+                Identity::PublicId(id) => client.get_values_public(id),
+            }
+        };
         let tick = match result {
             Ok(vars) => Tick {
                 at: Utc::now(),
@@ -494,26 +532,16 @@ impl ChallengePoller {
             return Some("the challenge widget is disabled".into());
         }
         let Some((cr, salt)) = self.creds.get() else {
-            return Some("waiting for the browser bridge to deliver a session".into());
+            return Some(NEED_SCRIPT.into());
         };
         if self.session_stale.load(Ordering::SeqCst) || self.stale.load(Ordering::SeqCst) {
-            return Some(
-                "credentials were rejected; open any Dead Frontier page to refresh them".into(),
-            );
+            return Some(SESSION_EXPIRED.into());
         }
         if cfg.signing_salt(|| salt.clone()).is_empty() {
-            return Some(
-                "no signing salt yet - load the Outpost page with the bridge userscript \
-                 (***+) or the the bridge userscript installed"
-                    .into(),
-            );
+            return Some(SCRIPT_TOO_OLD.into());
         }
         if cr.cookie.is_empty() {
-            return Some(
-                "no session cookie yet - the challenge board needs one; load any \
-                 Dead Frontier page to send it"
-                    .into(),
-            );
+            return Some(NEED_COOKIE.into());
         }
         if cfg.poll.only_when_game_running && !self.game_running.load(Ordering::SeqCst) {
             return Some("the game is not running (poll.only_when_game_running)".into());
@@ -566,8 +594,7 @@ impl ChallengePoller {
                     self.session_stale.store(true, Ordering::SeqCst);
                 } else {
                     *self.failures.lock().unwrap() += 1;
-                    self.store
-                        .set_challenge_status("could not load the board (retrying)".into());
+                    self.store.set_challenge_status(BOARD_RETRY.into());
                 }
                 let n = *self.failures.lock().unwrap();
                 if n == 1 || n % 10 == 0 || err.contains("credentials rejected") {
@@ -774,6 +801,75 @@ mod tests {
         (p, stop, shutdown)
     }
 
+    /// What the unauthenticated `get_values.php?userID=` reply looks like. The
+    /// public endpoint carries `id_member`, which is how a real record is told
+    /// apart from a reply for an account that does not exist.
+    fn public_record() -> &'static str {
+        "&id_member=1234567&df_level=415&df_exp=10000&df_positionx=1100&df_positiony=1100&df_tradezone=5&df_inoutpost=0"
+    }
+
+    /// No bridge session, only `df.user_id`. The public endpoint is left
+    /// enabled because it is the only way out.
+    fn public_only_poller(base: &str, user_id: &str) -> Arc<PlayerPoller> {
+        let mut cfg = Config::default();
+        cfg.poll.only_when_game_running = false;
+        cfg.df.timeout = crate::config::Duration(Duration::from_secs(2));
+        cfg.df.user_id = user_id.into();
+        let agent = ureq::AgentBuilder::new().timeout(cfg.df.timeout.0).build();
+        let p = PlayerPoller::new(
+            Arc::new(Mutex::new(Client::with_agent(agent, base, "df-hud-test"))),
+            PollerRuntime {
+                creds: Arc::new(Creds::new("")),
+                store: Arc::new(Store::new(None)),
+                cfg: Arc::new(Mutex::new(cfg)),
+                gate: Arc::new(Gate::new(Duration::from_millis(5))),
+                stop: Arc::new(AtomicBool::new(false)),
+                shutdown: Arc::new(Notify::new()),
+                game_running: Arc::new(AtomicBool::new(true)),
+                session_stale: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        p.set_min_gap(Duration::from_millis(0));
+        p
+    }
+
+    #[test]
+    fn configured_user_id_polls_without_a_session() {
+        let (base, hits) = spawn_df(|_| (200, public_record().into()));
+        let p = public_only_poller(&base, "1234567");
+        assert!(p.pause_reason().is_none(), "a user id is enough to poll");
+        let tick = p.poll_once(false);
+        assert!(tick.err.is_none(), "{:?}", tick.err);
+        assert_eq!(tick.vars.get("df_level").map(String::as_str), Some("415"));
+        assert_eq!(*hits.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_session_wins_over_a_configured_user_id() {
+        let (p, _stop, _) = test_poller("http://127.0.0.1:1");
+        p.cfg.lock().unwrap().df.user_id = "7654321".into();
+        assert!(
+            p.public_only_id().is_none(),
+            "bridge credentials must not be displaced by df.user_id"
+        );
+    }
+
+    #[test]
+    fn without_either_identity_the_poller_waits_for_the_bridge() {
+        let p = public_only_poller("http://127.0.0.1:1", "");
+        assert!(p.public_only_id().is_none());
+        let reason = p.pause_reason().expect("paused");
+        assert!(reason.contains("bridge"), "{reason}");
+    }
+
+    #[test]
+    fn a_configured_user_id_with_no_record_is_an_error() {
+        let (base, _) = spawn_df(|_| (200, "&df_level=&df_exp=".into()));
+        let p = public_only_poller(&base, "1234567");
+        let err = p.poll_once(false).err.expect("empty record must not pass");
+        assert!(err.contains("df.user_id"), "{err}");
+    }
+
     #[test]
     fn polls_and_reports_ticks() {
         let (base, hits) = spawn_df(|_| (200, player_record().into()));
@@ -883,12 +979,36 @@ mod tests {
         (p, store, cfg)
     }
 
+    /// The board prints one of these on a single line that clips. Keeping them
+    /// short is the whole reason they are named constants.
+    #[test]
+    fn challenge_reasons_fit_on_one_line() {
+        for reason in [
+            NEED_SCRIPT,
+            SESSION_EXPIRED,
+            SCRIPT_TOO_OLD,
+            NEED_COOKIE,
+            BOARD_RETRY,
+        ] {
+            let rendered = format!("challenges: {reason}");
+            assert!(
+                rendered.len() <= 64,
+                "{} chars will clip: {rendered}",
+                rendered.len()
+            );
+            assert!(
+                !reason.contains("browser bridge") && !reason.contains("signing salt"),
+                "say it the way docs/install.md does: {reason}"
+            );
+        }
+    }
+
     #[test]
     fn challenge_pauses_when_player_session_is_stale() {
         let stale = Arc::new(AtomicBool::new(true));
         let (p, _, _) = test_challenge_poller(stale);
         let reason = p.pause_reason_for_test().expect("paused");
-        assert!(reason.contains("credentials were rejected"), "{reason}");
+        assert!(reason.contains("session expired"), "{reason}");
     }
 
     #[test]
