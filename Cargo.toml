@@ -12,7 +12,7 @@ description = "Dead Frontier overlay (GLES / WGL)"
 [dependencies]
 # serde + toml only; no notify, no toml_edit.
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1"
 serde_json = "1"
 md-5 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }

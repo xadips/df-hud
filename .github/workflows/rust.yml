@@ -40,10 +40,14 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Supply chain (advisories, licenses, bans, sources)
-        uses: EmbarkStudios/cargo-deny-action@v2
+      # A prebuilt binary, not the Docker action: that one ships its own older
+      # toolchain and re-downloads stable plus the Windows std on every run.
+      - uses: taiki-e/install-action@v2
         with:
-          command: check
+          tool: cargo-deny
+
+      - name: Supply chain (advisories, licenses, bans, sources)
+        run: cargo deny check
 
       # deny.toml owns the crate bans. Only per-target rules live here.
       - name: Check the resolved tree per target
