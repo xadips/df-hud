@@ -64,7 +64,9 @@ from `cmd`, `--version` and friends still print. Otherwise logs go to
 `%LOCALAPPDATA%\df-hud\df-hud.log`.
 
 Right-click the tray icon and tick **Start df-hud with Windows** if you want it
-at login. **Open config file** opens the TOML, and creates it if it is missing.
+at login. The first start writes `%APPDATA%\df-hud\config.toml` if it is missing.
+**Open config file** opens that TOML (and writes the defaults if you deleted it).
+**Open log file** opens `%LOCALAPPDATA%\df-hud\df-hud.log`.
 
 ## Session script
 

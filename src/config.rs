@@ -278,6 +278,10 @@ fn default_user_agent() -> String {
     )
 }
 
+pub fn default_log_path() -> PathBuf {
+    PathBuf::from(default_data_dir()).join("df-hud.log")
+}
+
 pub fn default_data_dir() -> String {
     #[cfg(windows)]
     {
@@ -1182,6 +1186,8 @@ fn secs_label(d: StdDuration) -> String {
     format!("{}s", d.as_secs())
 }
 
+const DEFAULT_TOML: &str = include_str!("../df-hud.example.toml");
+
 fn write_config_atomically(path: &Path, body: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
@@ -1190,6 +1196,18 @@ fn write_config_atomically(path: &Path, body: &str) -> Result<(), String> {
     std::fs::write(&tmp, body.as_bytes()).map_err(|err| format!("{}: {err}", tmp.display()))?;
     std::fs::rename(&tmp, path).map_err(|err| format!("{}: {err}", path.display()))?;
     Ok(())
+}
+
+/// Write the example defaults when `path` does not exist. `true` if a file was created.
+pub fn write_defaults_if_missing(path: &Path) -> Result<bool, String> {
+    match std::fs::metadata(path) {
+        Ok(_) => Ok(false),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            write_config_atomically(path, DEFAULT_TOML)?;
+            Ok(true)
+        }
+        Err(err) => Err(format!("{}: {err}", path.display())),
+    }
 }
 
 /// Stat-and-reload a config path. No `notify`.
@@ -1203,6 +1221,12 @@ pub struct Watch {
 impl Watch {
     pub fn open(path: Option<PathBuf>) -> Result<Self, Box<dyn Error>> {
         let path = path.unwrap_or_else(default_path);
+        #[cfg(not(test))]
+        match write_defaults_if_missing(&path) {
+            Ok(true) => eprintln!("config: wrote defaults to {}", path.display()),
+            Ok(false) => {}
+            Err(err) => eprintln!("config: could not write defaults: {err}"),
+        }
         let cfg = Config::load(&path)?;
         let mtime = std::fs::metadata(&path)
             .ok()
@@ -1461,6 +1485,20 @@ mod tests {
         let cfg = Config::load(Path::new("/no/such/df-hud-config.toml")).unwrap();
         assert!(cfg.source.is_none());
         assert_eq!(cfg.poll.active_interval, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn writes_example_defaults_when_missing() {
+        let dir = std::env::temp_dir().join(format!("df-hud-seed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        assert!(write_defaults_if_missing(&path).unwrap());
+        assert!(!write_defaults_if_missing(&path).unwrap());
+        let mut cfg = Config::load(&path).unwrap();
+        cfg.source = None;
+        assert_eq!(cfg, Config::default());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1870,5 +1908,18 @@ window = 120
                 .join("Local")
         );
         assert_eq!(windows_app_dir(None, None, "Roaming"), PathBuf::from("."));
+    }
+
+    #[test]
+    fn default_log_path_sits_in_the_data_dir() {
+        let path = default_log_path();
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("df-hud.log")
+        );
+        assert_eq!(
+            path.parent().map(PathBuf::from),
+            Some(PathBuf::from(default_data_dir()))
+        );
     }
 }

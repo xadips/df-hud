@@ -1,19 +1,19 @@
 # Configuration
 
-You do not need a config file. With none, you get the built-in defaults.
-
-Copy [df-hud.example.toml](../df-hud.example.toml) and keep only the lines you
-change. That file matches the built-in defaults (a test checks the values) and
-comments most keys. A few sample lines stay commented so they pick up the
-current version or path.
+The first overlay start writes [df-hud.example.toml](../df-hud.example.toml) to
+the path below if that file is missing. Those are the built-in defaults (a test
+checks the values). After that, keys you leave in the file stay pinned; delete
+the file to get a fresh copy of the current defaults.
 
 | | Linux | Windows |
 | --- | --- | --- |
 | Config | `~/.config/df-hud/config.toml` | `%APPDATA%\df-hud\config.toml` |
 | Data (`credentials.json`, `state.json`, `catalog.json`) | `~/.local/share/df-hud` | `%LOCALAPPDATA%\df-hud` |
+| Log (Explorer launch) | journalctl / stderr | `%LOCALAPPDATA%\df-hud\df-hud.log` |
 
 `--config` picks a different file. On Windows, tray **Open config file** opens
-the TOML, and creates it if it is missing.
+the TOML, and creates it if it is missing. **Open log file** opens the Explorer
+stderr log.
 
 A typo in a key name is a startup error, not a silent ignore. An interval below
 its floor is an error too, not a quiet bump.

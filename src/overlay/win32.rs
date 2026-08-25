@@ -196,12 +196,7 @@ fn write_fatal_log(err: &str) -> Option<PathBuf> {
 }
 
 fn fatal_log_path() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("LOCALAPPDATA")
-        && !dir.is_empty()
-    {
-        return Some(PathBuf::from(dir).join("df-hud").join("df-hud.log"));
-    }
-    Some(config::default_path().parent()?.join("df-hud.log"))
+    Some(config::default_log_path())
 }
 
 fn show_fatal_task_dialog(err: &str, log: &Path, headline: &str) -> bool {
