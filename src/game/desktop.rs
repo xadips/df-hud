@@ -590,6 +590,7 @@ pub struct WinWindow {
     pub minimized: bool,
     pub width: i32,
     pub height: i32,
+    pub monitor: String,
 }
 
 #[cfg(any(test, windows))]
@@ -619,6 +620,7 @@ pub fn find_windows_game_window(
             minimized: w.minimized,
             foreground_rule: true,
             matched_by: how.to_string(),
+            monitor: w.monitor.clone(),
             ..Placement::default()
         }
     };
@@ -772,10 +774,32 @@ fn parse_windows_address(address: &str) -> Result<windows_sys::Win32::Foundation
 }
 
 #[cfg(windows)]
-fn enumerate_windows() -> Result<Vec<WinWindow>, String> {
+fn windows_monitor_name(hwnd: windows_sys::Win32::Foundation::HWND) -> String {
     use std::mem::size_of;
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, MonitorFromWindow,
+    };
+
+    let hmon = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    if hmon.is_null() {
+        return String::new();
+    }
+    let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+    info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+    if unsafe { GetMonitorInfoW(hmon, &mut info as *mut _ as *mut _) } == 0 {
+        return String::new();
+    }
+    let end = info
+        .szDevice
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(info.szDevice.len());
+    String::from_utf16_lossy(&info.szDevice[..end])
+}
+
+#[cfg(windows)]
+fn enumerate_windows() -> Result<Vec<WinWindow>, String> {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
-    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFOEXW, MonitorFromWindow};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
         GetWindowThreadProcessId, IsIconic, IsWindowVisible,
@@ -822,12 +846,8 @@ fn enumerate_windows() -> Result<Vec<WinWindow>, String> {
                 minimized: IsIconic(hwnd) != 0,
                 width: rect.right - rect.left,
                 height: rect.bottom - rect.top,
+                monitor: windows_monitor_name(hwnd),
             });
-            let _ = (
-                GetMonitorInfoW,
-                MonitorFromWindow,
-                size_of::<MONITORINFOEXW>(),
-            );
             1
         }
     }
@@ -1194,6 +1214,7 @@ mod tests {
                 minimized: false,
                 width: 800,
                 height: 600,
+                monitor: r"\\.\DISPLAY1".into(),
             },
             WinWindow {
                 handle: 0x20,
@@ -1203,12 +1224,14 @@ mod tests {
                 minimized: false,
                 width: 2560,
                 height: 1440,
+                monitor: r"\\.\DISPLAY2".into(),
             },
         ];
         let got = find_windows_game_window(&windows, 0x20, 42, &Match::default());
         assert!(got.known && got.foreground_rule && got.on_active_workspace && got.foreground);
         assert_eq!(got.address, "0x20");
         assert_eq!(got.matched_by, "process id");
+        assert_eq!(got.monitor, r"\\.\DISPLAY2");
         let got = find_windows_game_window(&windows, 0x10, 42, &Match::default());
         assert!(got.on_active_workspace);
         assert!(!can_start_run(&got) || cfg!(windows) && !got.foreground);
@@ -1228,6 +1251,7 @@ mod tests {
                 minimized: false,
                 width: 640,
                 height: 480,
+                monitor: String::new(),
             },
             WinWindow {
                 handle: 0x31,
@@ -1237,6 +1261,7 @@ mod tests {
                 minimized: false,
                 width: 180,
                 height: 120,
+                monitor: String::new(),
             },
         ];
         let m = Match {
@@ -1260,6 +1285,7 @@ mod tests {
                 minimized: false,
                 width: 640,
                 height: 480,
+                monitor: String::new(),
             },
             WinWindow {
                 handle: 0x31,
@@ -1269,6 +1295,7 @@ mod tests {
                 minimized: false,
                 width: 180,
                 height: 120,
+                monitor: String::new(),
             },
         ];
         let m = Match {
@@ -1285,6 +1312,7 @@ mod tests {
             minimized: false,
             width: 2560,
             height: 1440,
+            monitor: r"\\.\DISPLAY1".into(),
         });
         let got = find_windows_game_window(&windows, 0x32, 42, &m);
         assert!(got.known);
