@@ -1,18 +1,19 @@
 # Block info
 
-`[widget.block]` — where you are.
+`[widget.block]`. Where you are. Top right by default.
 
 Inside an outpost it shows the outpost name. In the city it shows the region
-(the game does not print that itself). Block-support countdown sits on the same
-group when it is running.
+(the game does not print that). Block-support countdown sits on the same group
+when it is running.
 
-Coordinates are off by default (`show_position = false`) because the game already
-shows them under its minimap. Turn them on to check df-hud against the client.
+Coordinates are off by default (`show_position = false`) because the game
+already shows them under the minimap. Turn them on if you want to check df-hud
+against the client.
 
 | Key | Default | |
 | --- | --- | --- |
-| `enabled` | `true` | Lasting on/off |
-| `x`, `y` | `2340`, `300` | Top-left in the [reference resolution](../configuration.md#placement) |
+| `enabled` | `true` | On or off |
+| `x`, `y` | `2340`, `300` | Position at 2560x1440. Top right. |
 | `color` | `#9ecbff` | Normal colour |
 | `show_position` | `false` | Print `x, y` next to the name |
 
