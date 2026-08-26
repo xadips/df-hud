@@ -13,6 +13,9 @@ const MAP_MAX_CELL: i32 = 96;
 const MAP_BASE_SIZE: f32 = 1180.0;
 const MAP_LIST_GAP: f32 = 10.0;
 const MAP_MARKER_FONT: f32 = 0.72;
+/// Legend size vs design-space cell. 0.52 is 0.8 × the old 0.65, so a default
+/// 27px cell yields ~14pt instead of tracking the grid 1:1.
+const MAP_LIST_FROM_CELL: f32 = 0.52;
 const LINE_HEIGHT: f32 = 1.25;
 
 #[derive(Clone, Debug, Default)]
@@ -600,7 +603,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
         let list_pt = if cfg.widget.map.font_size > 0.0 {
             cfg.widget.map.font_size
         } else {
-            (0.65 * cell_auth).mul_add(10.0, 0.0).round() / 10.0
+            (MAP_LIST_FROM_CELL * cell_auth).mul_add(10.0, 0.0).round() / 10.0
         };
         let list_pt = list_pt.clamp(8.0, 30.0);
         let list_px = xf.size(list_pt * PT_TO_PX);
