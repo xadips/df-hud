@@ -24,3 +24,6 @@ positions.ndjson
 .cursor/plans/
 .cursor/rules/
 .vscode/
+
+# Forum draft. Paste from the file; do not publish it from the repo.
+docs/forum_post.bbcode

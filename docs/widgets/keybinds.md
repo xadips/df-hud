@@ -11,9 +11,13 @@ K - Run clock
 U - XP/hr
 ```
 
-The letters follow whatever is in the config. An empty binding is left off. It
-sits on the right, under [block info](block.md) / [bosses](bosses.md), away from
-the native XP and IC Time UI and away from the [challenge board](challenges.md).
+The letters follow whatever is in the config. An empty binding is left off.
+
+![Keybinds](../images/keybinds.png)
+
+It sits on the right, under [block info](block.md) / [bosses](bosses.md), away
+from the native XP and IC Time UI and away from the
+[challenge board](challenges.md).
 
 It starts **shown**. The [city map](map.md) is the group that starts hidden.
 There is no hotkey for this list. Tray **Show keybinds** and

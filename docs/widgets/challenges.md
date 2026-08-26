@@ -1,6 +1,10 @@
 # Challenge board
 
 `[widget.challenges]`. The board grouped by category: event, yours, then clan.
+The [Bridge script](../install.md#session-script) is what fills it; `df.user_id`
+does not.
+
+![Challenge board](../images/challenges.png)
 
 Each category is a switch, not a row limit:
 

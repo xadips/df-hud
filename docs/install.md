@@ -1,11 +1,13 @@
 # Install
 
-You need the overlay binary and
-[DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge), the
-userscript that gives df-hud your session. Without the script you get a tray
-icon and nothing on screen, unless you set
-[`df.user_id`](#without-the-script), which lights up everything except the
-challenge board.
+You need the overlay binary, and you should install
+[DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge). The
+userscript is the recommended way to feed df-hud: it syncs your session on its
+own, and the challenge board will not work without it.
+
+[`df.user_id`](#without-the-script) is the fallback if you do not want the
+script. It is a real option, documented below; it is not a substitute for the
+board.
 
 ## Download
 
@@ -70,10 +72,11 @@ at login. The first start writes `%APPDATA%\df-hud\config.toml` if it is missing
 
 ## Session script
 
-df-hud listens on `127.0.0.1:9310`. A userscript in the browser posts your
-session there. Install
+df-hud listens on `127.0.0.1:9310`. Install
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge) in
-Tampermonkey or Violentmonkey.
+Tampermonkey or Violentmonkey. That is the recommended setup: the script posts
+your session on the loopback, keeps it in sync when you log in again, and is
+what the challenge board needs.
 
 It is the only script that feeds df-hud. Three values live solely inside a
 logged-in page's JavaScript (`userID`, a per-session `password` hash that is
@@ -83,16 +86,17 @@ the salt from page context is what lets the board keep working when the game
 rotates it, with no config edit.
 
 Load the Outpost home page once after you install it. df-hud will not poll
-until that arrives, unless you have set `df.user_id`. The script re-posts every
-five minutes, so logging in again is picked up on its own.
+until that arrives. The script re-posts every five minutes, so logging in
+again is picked up on its own.
 
 The destination is hardcoded to `127.0.0.1`. Nothing leaves your machine, and
 if df-hud is not running the POST just fails and the script goes quiet.
 
 ### Without the script
 
-The game answers `get_values.php?userID=<id>` for anyone, with no session. That
-is the same public record DFProfiler reads. Point df-hud at it:
+If you do not want the userscript, the game still answers
+`get_values.php?userID=<id>` for anyone, with no session. That is the same
+public record DFProfiler reads. Point df-hud at it:
 
 ```toml
 [df]
@@ -113,8 +117,9 @@ df-hud uses that instead, and you can leave the key in place.
 
 1. Start df-hud. You should see a tray icon (waybar's tray module, or the
    Windows notification area).
-2. Load the Outpost page with the userscript installed. If you set `df.user_id`
-   instead, skip this and expect an amber banner about the challenge board.
+2. Load the Outpost page with the userscript installed. If you are using
+   `df.user_id` instead of the script, skip this and expect an amber banner
+   about the challenge board.
 3. Launch Dead Frontier. The overlay shows while the game is running.
 
 If nothing appears, [How to use](usage.md) covers visibility and keys.
