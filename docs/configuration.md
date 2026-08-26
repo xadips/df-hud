@@ -85,4 +85,5 @@ pages. The example TOML comments them in place.
 | `game_keys.dismiss_launcher` | `false` | Press Play on the configuration dialog. Tray **Skip the launcher**. Off when you need the Input tab. |
 
 Hotkeys, tray, poll intervals, and the rest of the file are in the example TOML.
-See [How to use](usage.md) for the default keys.
+See [How to use](usage.md) for the default keys. Compositors that are not
+Hyprland: [Manual wiring](manual-wiring.md).

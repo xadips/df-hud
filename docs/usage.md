@@ -13,6 +13,28 @@ toggle cannot override that.
 If Hyprland or the game window cannot be found, the HUD stays up rather than
 disappearing.
 
+## Widgets
+
+Each group sits where you put it. Placement, colours, and `enabled` are on
+[Configuration](configuration.md). What each line means is on the page in the
+table.
+
+| Group | Starts | Key | Page |
+| --- | --- | --- | --- |
+| Block info | shown | — | [block](widgets/block.md) |
+| Bosses | shown | — | [bosses](widgets/bosses.md) |
+| Keybinds | shown | tray only | [keybinds](widgets/keybinds.md) |
+| Run clock | shown | `K` restarts | [session](widgets/session.md) |
+| XP/hr | shown | `U` resets | [xp](widgets/xp.md) |
+| City map | hidden | `G` | [map](widgets/map.md) |
+| Challenge board | shown | `Z` | [challenges](widgets/challenges.md) |
+| Status banner | always | cannot hide | [Status banner](#status-banner) |
+
+A key or the tray toggles a group. That is not saved to the file. Restart puts
+groups back to how they start (map hidden, the rest shown). `enabled` in the
+config is what stays. The status banner cannot be hidden. That is how df-hud
+tells you it cannot do its job.
+
 ## Keys
 
 df-hud grabs the keys in `[hotkeys]` only while the game window is focused, and
@@ -32,8 +54,6 @@ defaults are unmodified keys the game does not use. `hotkeys.enabled = false`
 turns the whole grab off.
 
 The [keybinds](widgets/keybinds.md) group prints these bindings on the overlay.
-It starts shown. Tray **Show keybinds** toggles it; `enabled = false`
-turns it off for good. There is no hotkey for that group.
 
 The keys only work while Dead Frontier is focused. So `J` does nothing if you
 have alt-tabbed away. The HUD itself hides by workspace, not by focus. A window
@@ -45,38 +65,8 @@ the number row, function keys, or a letter the game already uses (`e` `f` `q`
 [knowledge/game-keybinds.md](../knowledge/game-keybinds.md).
 
 Linux installs the same keys on Hyprland. Windows uses `RegisterHotKey`. Do not
-also bind them in the compositor or AutoHotkey.
-
-### Without Hyprland
-
-On any other layer-shell compositor df-hud grabs nothing, so bind keys yourself
-and POST to the loopback listener. Every action above is reachable, and so are
-five groups the keys do not cover:
-
-| Action | Request to `http://127.0.0.1:9310` |
-| --- | --- |
-| City map | `POST /api/widget/map/toggle` |
-| Challenge board | `POST /api/widget/challenges/toggle` |
-| Restart the run clock | `POST /api/run/start` |
-| Reset XP/hr | `POST /api/xp/reset` |
-| Show or hide the overlay | `POST /api/overlay/toggle` |
-| Other groups | `POST /api/widget/<name>/toggle`, where name is `block`, `bosses`, `session`, `xp`, or `keybinds` |
-
-```sh
-bind = SUPER, G, exec, curl -fsS -X POST http://127.0.0.1:9310/api/widget/map/toggle
-```
-
-One difference matters. The keys df-hud grabs only fire while Dead Frontier is
-focused, and it lets go when you alt-tab. A compositor binding fires wherever
-you are, so pick keys you will not want elsewhere.
-
-The [city map](widgets/map.md) starts hidden. Press `G` to bring it up. The
-[keybinds](widgets/keybinds.md) list starts shown.
-
-A key or the tray toggles a group. That is not saved to the file. Restart puts
-groups back to how they start (map hidden, the rest shown). `enabled` in the
-config is what stays. The status banner cannot be hidden. That is how df-hud
-tells you it cannot do its job.
+also bind them in the compositor or AutoHotkey. On any other compositor, bind
+them yourself: [Manual wiring](manual-wiring.md).
 
 ## Tray
 

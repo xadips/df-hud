@@ -28,8 +28,8 @@ Wayfire, labwc, Mir, phoc, Treeland, GameScope. The ones that do not are
 it, so df-hud cannot draw over the game there.
 
 df-hud only grabs keys itself on Hyprland. Everything else on that list runs the
-overlay fine, and [How to use](usage.md#without-hyprland) covers binding your own
-keys to the loopback API.
+overlay fine, and [Manual wiring](manual-wiring.md) covers binding your own keys
+to the loopback API.
 
 From a clone:
 
