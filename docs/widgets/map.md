@@ -34,6 +34,10 @@ A ring only when the letter is not enough: today's daily, a mission, either QRF.
 Bandits, bosses, and nests have no ring. The letter already says what they are.
 A nest that contains the daily keeps its `N` number and gets the ring.
 
+Two events on one block (a QRF over a boss or bandit camp) share the cell: each
+glyph is half size, stacked, the same as DFProfiler's map. The list still has
+one row per event.
+
 The list beside the grid is nearest first, one entry per event, not per block.
 The feed repeats the same pack on many tiles. Each row is the label and the
 enemy types, then a countdown to the right of the name when that event has its
