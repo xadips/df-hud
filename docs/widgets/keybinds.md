@@ -21,8 +21,8 @@ from the native XP and IC Time UI and away from the
 
 It starts **shown**. The [city map](map.md) is the group that starts hidden.
 There is no hotkey for this list. Tray **Show keybinds** and
-`POST /api/widget/keybinds/toggle` hide it until you restart. That is not
-saved. `enabled = false` turns it off for good.
+`POST /api/widget/keybinds/toggle` toggle it. That is not saved.
+Restart puts it back to shown. `enabled = false` turns it off for good.
 
 | Key | Default | |
 | --- | --- | --- |

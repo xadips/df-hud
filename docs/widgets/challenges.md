@@ -1,8 +1,8 @@
 # Challenge board
 
 `[widget.challenges]`. The board grouped by category: event, yours, then clan.
-The [Bridge script](../install.md#session-script) is what fills it; `df.user_id`
-does not.
+You need the [Bridge script](../install.md#session-script) for this one;
+`df.user_id` will not fill it.
 
 ![Challenge board](../images/challenges.png)
 
@@ -16,8 +16,9 @@ Each category is a switch, not a row limit:
 | `show_completed` | `true` | Finished rows from any of the three |
 | `show_sections` | `true` | A divider naming each category. Off keeps the groups, without the heading. |
 
-`Z` (`hotkeys.challenges`) and the tray item **Show challenges** hide the board
-until you restart. That is not saved. `enabled` in the file is what stays.
+`Z` (`hotkeys.challenges`) and the tray item **Show challenges** toggle it.
+That is not saved. Restart puts it back to shown. `enabled` in the file is
+what stays.
 
 A finished challenge or objective is green and struck through. An unfinished
 one with less than `urgent_within` left (default two hours) is red.

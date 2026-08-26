@@ -25,7 +25,7 @@ nearest 3 up 1 left, 8 blocks  1015, 1024
 Anything more than a dozen blocks away is left off. `show_nearest = false`
 turns the row off.
 
-In Onslaught this group becomes the cycle panel (last, now, and next)
+In Onslaught this group becomes the cycle panel (prev, now, and next)
 instead of the city list. The [city map](map.md) hides there. Onslaught is not
 on that grid.
 

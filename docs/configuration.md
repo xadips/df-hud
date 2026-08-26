@@ -66,8 +66,8 @@ HUD vanishes when you play.
 | `[widget.challenges]` | [Challenge board](widgets/challenges.md) |
 | `[widget.status]` | [How to use](usage.md#status-banner) |
 
-`enabled = false` turns a group off for good. Hiding it with a key or the tray
-lasts until restart. The city map starts hidden; the keybinds list starts
+`enabled = false` turns a group off for good. A key or the tray toggles it
+for this run only. The city map starts hidden; the keybinds list starts
 shown. The status banner has no `enabled` key.
 
 ## Switches

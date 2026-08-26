@@ -1,13 +1,13 @@
 # Install
 
-You need the overlay binary, and you should install
-[DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge). The
-userscript is the recommended way to feed df-hud: it syncs your session on its
-own, and the challenge board will not work without it.
+You need the overlay binary. You should also install
+[DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge). That's
+the usual setup: the script keeps your session in sync, and the challenge
+board won't work without it.
 
-[`df.user_id`](#without-the-script) is the fallback if you do not want the
-script. It is a real option, documented below; it is not a substitute for the
-board.
+If you'd rather not run the script, [`df.user_id`](#without-the-script) is
+documented below. It's a real option. It isn't the same as having a session,
+and it won't fill the board.
 
 ## Download
 
@@ -74,9 +74,9 @@ at login. The first start writes `%APPDATA%\df-hud\config.toml` if it is missing
 
 df-hud listens on `127.0.0.1:9310`. Install
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge) in
-Tampermonkey or Violentmonkey. That is the recommended setup: the script posts
-your session on the loopback, keeps it in sync when you log in again, and is
-what the challenge board needs.
+Tampermonkey or Violentmonkey. That is the usual setup: the script posts your
+session on the loopback, picks up a new login on its own, and is what the
+challenge board needs.
 
 It is the only script that feeds df-hud. Three values live solely inside a
 logged-in page's JavaScript (`userID`, a per-session `password` hash that is

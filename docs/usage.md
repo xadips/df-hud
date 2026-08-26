@@ -32,7 +32,7 @@ defaults are unmodified keys the game does not use. `hotkeys.enabled = false`
 turns the whole grab off.
 
 The [keybinds](widgets/keybinds.md) group prints these bindings on the overlay.
-It starts shown. Tray **Show keybinds** hides it until restart; `enabled = false`
+It starts shown. Tray **Show keybinds** toggles it; `enabled = false`
 turns it off for good. There is no hotkey for that group.
 
 The keys only work while Dead Frontier is focused. So `J` does nothing if you
@@ -73,9 +73,10 @@ you are, so pick keys you will not want elsewhere.
 The [city map](widgets/map.md) starts hidden. Press `G` to bring it up. The
 [keybinds](widgets/keybinds.md) list starts shown.
 
-Hiding a group with a key or the tray lasts until you restart. It is not saved
-to the file. `enabled` in the config is what stays. The status banner cannot be
-hidden. That is how df-hud tells you it cannot do its job.
+A key or the tray toggles a group. That is not saved to the file. Restart puts
+groups back to how they start (map hidden, the rest shown). `enabled` in the
+config is what stays. The status banner cannot be hidden. That is how df-hud
+tells you it cannot do its job.
 
 ## Tray
 
