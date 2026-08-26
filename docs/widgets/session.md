@@ -11,10 +11,8 @@ leave an outpost or move starts it instead.
 It stops if you die or the game closes (or relaunches). Restarting df-hud
 mid-run keeps the same clock. The run is tied to the game's process.
 
-**Grave** (backtick, `hotkeys.run_start`) and the tray item **Restart run clock**
-start it from now, for when it started before you did. On a default Dead
-Frontier install backtick is also chat. Rebind one of them. See
-[How to use](../usage.md#keys).
+**K** (`hotkeys.run_start`) and the tray item **Restart run clock**
+start it from now, for when it started before you did.
 
 | Key | Default | |
 | --- | --- | --- |

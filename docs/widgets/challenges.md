@@ -12,7 +12,7 @@ Each category is a switch, not a row limit:
 | `show_completed` | `true` | Finished rows from any of the three |
 | `show_sections` | `true` | A divider naming each category. Off keeps the groups, without the heading. |
 
-`T` (`hotkeys.challenges`) and the tray item **Show challenges** hide the board
+`Z` (`hotkeys.challenges`) and the tray item **Show challenges** hide the board
 until you restart. That is not saved. `enabled` in the file is what stays.
 
 A finished challenge or objective is green and struck through. An unfinished

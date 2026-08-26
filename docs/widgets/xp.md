@@ -7,7 +7,7 @@ window short enough to hold no kill reads as zero. The rate stays blank until
 `min_samples` polls have landed (default 3).
 
 Amber means a recent poll missed. Red means several have. Those colours win
-over `color`. After a challenge reward dumps a lump into the average, **X**
+over `color`. After a challenge reward dumps a lump into the average, **U**
 (`hotkeys.xp_reset`) or the tray item **Reset xp/hr** starts the window again.
 
 | Key | Default | |

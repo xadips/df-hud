@@ -377,6 +377,7 @@ mod linux {
 
         #[test]
         fn lua_keys_match_hl_bind() {
+            assert_eq!(hypr_lua_keys(&parse_binding("Alt+M").unwrap()), "ALT+m");
             assert_eq!(hypr_lua_keys(&parse_binding("V").unwrap()), "v");
             assert_eq!(hypr_lua_keys(&parse_binding("Grave").unwrap()), "grave");
             assert_eq!(
