@@ -18,6 +18,8 @@ const MAP_MARKER_FONT: f32 = 0.72;
 /// 27px cell yields ~14pt instead of tracking the grid 1:1.
 const MAP_LIST_FROM_CELL: f32 = 0.52;
 const LINE_HEIGHT: f32 = 1.25;
+/// Vertical gutter between legend chips (I5 / N5). Text size stays the same.
+const MAP_CHIP_GAP: f32 = 4.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct View {
@@ -658,7 +660,10 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
         let color = parse_color(&cfg.widget.map.color, hud_a);
         const CHIP_INK: [f32; 4] = [16.0 / 255.0, 16.0 / 255.0, 16.0 / 255.0, 1.0];
         let pad_x = xf.size(3.0).max(2.0);
-        let pad_y = xf.size(2.0).max(1.0);
+        let row_h = list_px * LINE_HEIGHT;
+        let chip_gap = xf.size(MAP_CHIP_GAP).max(4.0);
+        let gh = (row_h - chip_gap).max(list_px);
+        let chip_y_off = (row_h - gh) * 0.5;
         // Two-character chip (I5 / B4). Δ and ▼ sit in the same box so columns line up.
         let chip_w = mono_advance("MM", list_px) + pad_x * 2.0;
         let name_x = lx + chip_w + xf.size(MAP_CHIP_NAME_GAP);
@@ -676,10 +681,10 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
         for row in &view.map.list {
             if let Some(chip) = row.chip {
                 let (glyph, name) = map_chip_parts(&row.text);
-                let gh = list_px + pad_y * 2.0;
+                let chip_y = ly + chip_y_off;
                 scene.fills.push(Fill {
                     x: lx,
-                    y: ly - pad_y,
+                    y: chip_y,
                     w: chip_w,
                     h: gh,
                     color: [chip[0], chip[1], chip[2], chip[3] * hud_a],
@@ -688,20 +693,26 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
                     stroke_rect(
                         scene,
                         lx,
-                        ly - pad_y,
+                        chip_y,
                         chip_w,
                         gh,
                         xf.size(1.5).max(1.0),
                         [chip[0], chip[1], chip[2], chip[3] * hud_a],
                     );
                 }
-                let glyph_w = mono_advance(glyph, list_px);
+                // Δ is a heavier letter than I5 / ▼ at the same px; pull it in a hair.
+                let glyph_px = if glyph == crate::data::bossmap::QRF_MARKER {
+                    list_px * 0.88
+                } else {
+                    list_px
+                };
+                let glyph_w = mono_advance(glyph, glyph_px);
                 scene.labels.push(Text {
                     x: lx + (chip_w - glyph_w) * 0.5,
-                    y: ly - pad_y,
+                    y: chip_y,
                     color: [CHIP_INK[0], CHIP_INK[1], CHIP_INK[2], hud_a],
                     text: glyph.to_string(),
-                    font_px: list_px,
+                    font_px: glyph_px,
                     outline: false,
                     outline_color: None,
                     lcd: false,
@@ -712,7 +723,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
                     let dim = [color[0] * 0.78, color[1] * 0.78, color[2] * 0.78, color[3]];
                     scene.labels.push(Text {
                         x: timer_x,
-                        y: ly - pad_y,
+                        y: chip_y,
                         color: dim,
                         text: row.timer.clone(),
                         font_px: list_px,
@@ -724,7 +735,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
                 }
                 scene.labels.push(Text {
                     x: name_x,
-                    y: ly - pad_y,
+                    y: chip_y,
                     color,
                     text: name.to_string(),
                     font_px: list_px,
@@ -1262,6 +1273,27 @@ mod tests {
             "chip widths {} vs {}",
             green.w,
             blue.w
+        );
+        let gap = blue.y - (green.y + green.h);
+        assert!(
+            (gap - 4.0).abs() < 0.15,
+            "legend chips should sit 4px apart, got {gap}"
+        );
+        let delta = scene
+            .labels
+            .iter()
+            .find(|t| t.text == "Δ" && !t.outline)
+            .expect("Δ chip letter");
+        let i5 = scene
+            .labels
+            .iter()
+            .find(|t| t.text == "I5" && !t.outline)
+            .expect("I5 chip letter");
+        assert!(
+            delta.font_px < i5.font_px,
+            "Δ {} should sit lighter than I5 {}",
+            delta.font_px,
+            i5.font_px
         );
     }
 
