@@ -828,7 +828,15 @@ mod tests {
     #[test]
     fn parse_snapshot_at_the_level_cap() {
         let c = load_fixture_catalog();
-        let snap = parse_snapshot(&sample_player_record(), Utc::now(), Some(&c));
+        let snap = parse_snapshot(
+            &HashMap::from([
+                ("df_level".into(), c.max_level.to_string()),
+                ("df_exp".into(), "200000000".into()),
+                ("df_exptotal".into(), "20000000000".into()),
+            ]),
+            Utc::now(),
+            Some(&c),
+        );
         assert_eq!(snap.level, 415);
         assert_eq!(snap.exp_needed, 0);
         assert_eq!(snap.pending_levels, 0);

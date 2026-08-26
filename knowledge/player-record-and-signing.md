@@ -143,11 +143,11 @@ Observed mid-run, out in the city:
 
 ```
 df_exptotal = 10,000,000
-df_expstart = 9,000,000
-difference  =      1,000,000
+df_expstart =  9,000,000
+difference  =  1,000,000
 ```
 
-A million XP is a plausible amount for one trip into the city at level 415, so
+A million XP is a plausible amount for one trip into the city, so
 this looks like the cumulative total at the moment the run began — which would
 make "XP this run" free, with no averaging window at all.
 
