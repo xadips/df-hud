@@ -265,17 +265,12 @@ fn block_lines(v: &ModelView, cfg: &Config) -> Option<(String, String)> {
         v.outpost_name.clone()
     } else if v.in_outpost {
         "Outpost".into()
-    } else if cfg.widget.block.show_position {
-        format::position(v.position_x, v.position_y, v.position_z)
     } else {
         v.zone_name.clone()
     };
     let mut parts = Vec::new();
-    if v.in_outpost && cfg.widget.block.show_position {
+    if cfg.widget.block.show_position {
         parts.push(format::position(v.position_x, v.position_y, v.position_z));
-    }
-    if !v.in_outpost && !v.zone_name.is_empty() && head != v.zone_name {
-        parts.push(v.zone_name.clone());
     }
     let support = format::countdown(v.block_support.std());
     if !support.is_empty() {
@@ -1339,6 +1334,45 @@ mod tests {
                 "U - XP/hr",
             ]
         );
+    }
+
+    #[test]
+    fn show_position_prints_coords_beside_the_name() {
+        let city = ModelView {
+            have_data: true,
+            has_position: true,
+            position_x: 1054,
+            position_y: 1015,
+            zone_name: "South Eastern".into(),
+            ..ModelView::default()
+        };
+        let mut cfg = Config::default();
+        let g = Groups::new();
+        let hidden = from_view(&city, &cfg, &g);
+        assert_eq!(hidden.block, "South Eastern");
+        assert!(hidden.block_sub.is_empty());
+        cfg.widget.block.show_position = true;
+        let shown = from_view(&city, &cfg, &g);
+        assert_eq!(shown.block, "South Eastern");
+        assert_eq!(shown.block_sub, "1054, 1015");
+
+        let outpost = ModelView {
+            in_outpost: true,
+            outpost_name: "Nastya's Holdout".into(),
+            have_data: true,
+            has_position: true,
+            position_x: 1058,
+            position_y: 1019,
+            ..ModelView::default()
+        };
+        cfg.widget.block.show_position = false;
+        let hidden = from_view(&outpost, &cfg, &g);
+        assert_eq!(hidden.block, "Nastya's Holdout");
+        assert!(hidden.block_sub.is_empty());
+        cfg.widget.block.show_position = true;
+        let shown = from_view(&outpost, &cfg, &g);
+        assert_eq!(shown.block, "Nastya's Holdout");
+        assert_eq!(shown.block_sub, "1058, 1019");
     }
 
     #[test]
