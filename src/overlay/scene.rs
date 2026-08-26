@@ -746,10 +746,14 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
                 });
             } else {
                 let nested = row.text.starts_with("        ");
+                let mut ink = color;
+                if let Some(run) = row.runs.first() {
+                    ink[3] *= run.alpha;
+                }
                 scene.labels.push(Text {
                     x: if nested { name_x } else { lx },
                     y: ly,
-                    color,
+                    color: ink,
                     text: row.text.trim_start().to_string(),
                     font_px: list_px,
                     outline: true,
@@ -1294,6 +1298,43 @@ mod tests {
             "Δ {} should sit lighter than I5 {}",
             delta.font_px,
             i5.font_px
+        );
+    }
+
+    #[test]
+    fn map_list_dims_mission_objectives() {
+        let mut view = dummy_view();
+        view.map.list = vec![
+            Line {
+                text: "M2  Disarmed".into(),
+                chip: Some([1.0, 0.33, 0.33, 1.0]),
+                ..Line::default()
+            },
+            Line {
+                text: "        Find arms".into(),
+                runs: vec![TextRun {
+                    text: "        Find arms".into(),
+                    alpha: 0.78,
+                }],
+                ..Line::default()
+            },
+        ];
+        let scene = build(&view, &Config::default(), vp_1440());
+        let name = scene
+            .labels
+            .iter()
+            .find(|t| t.text == "Disarmed")
+            .expect("title");
+        let obj = scene
+            .labels
+            .iter()
+            .find(|t| t.text == "Find arms")
+            .expect("objective");
+        assert!(
+            (obj.color[3] - name.color[3] * 0.78).abs() < 1e-4,
+            "objective {} vs title {}",
+            obj.color[3],
+            name.color[3]
         );
     }
 

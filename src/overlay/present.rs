@@ -300,12 +300,15 @@ fn boss_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
         // across every type; repeating it would print the same number down the
         // group. A missing or already-passed end shows nothing, not a placeholder.
         let timer = event_time_left(e, v.now);
-        for (i, text) in event_rows(e, "").into_iter().enumerate() {
+        for (i, text) in event_body_rows(e, "").into_iter().enumerate() {
             rows.push(Line {
                 text,
                 timer: if i == 0 { timer.clone() } else { String::new() },
                 ..Line::default()
             });
+        }
+        for text in event_objective_rows(e, "") {
+            rows.push(objective_line(text));
         }
     }
     if cfg.widget.bosses.show_nearest
@@ -422,6 +425,12 @@ fn onslaught_event_rows(e: &CityEvent) -> Vec<String> {
 }
 
 fn event_rows(e: &CityEvent, prefix: &str) -> Vec<String> {
+    let mut rows = event_body_rows(e, prefix);
+    rows.extend(event_objective_rows(e, prefix));
+    rows
+}
+
+fn event_body_rows(e: &CityEvent, prefix: &str) -> Vec<String> {
     let mut rows = Vec::new();
     if e.kind != CityEventKind::Spawn || e.enemies.is_empty() {
         rows.push(format!("{prefix}{}", e.title));
@@ -429,10 +438,25 @@ fn event_rows(e: &CityEvent, prefix: &str) -> Vec<String> {
     for enemy in &e.enemies {
         rows.push(format!("{prefix}{enemy}"));
     }
-    if !e.objectives.is_empty() {
-        rows.push(format!("{prefix}({})", e.objectives.join(", ")));
-    }
     rows
+}
+
+fn event_objective_rows(e: &CityEvent, prefix: &str) -> Vec<String> {
+    e.objectives
+        .iter()
+        .map(|o| format!("{prefix}{o}"))
+        .collect()
+}
+
+fn objective_line(text: String) -> Line {
+    Line {
+        runs: vec![TextRun {
+            text: text.clone(),
+            alpha: OBJECTIVE_ALPHA,
+        }],
+        text,
+        ..Line::default()
+    }
 }
 
 fn event_time_left(e: &CityEvent, now: DateTime<Utc>) -> String {
@@ -1134,9 +1158,6 @@ fn map_list(marks: &[&CityMark], max_listed: i32, in_onslaught: bool) -> Vec<Lin
             if !heading.is_empty() {
                 names.push(heading.as_str());
             }
-            if m.kind == CityEventKind::Mission {
-                names.extend(m.objectives.iter().map(String::as_str));
-            }
             names.extend(
                 m.enemies
                     .iter()
@@ -1164,6 +1185,11 @@ fn map_list(marks: &[&CityMark], max_listed: i32, in_onslaught: bool) -> Vec<Lin
             timer: extra.to_string(),
             ..Line::default()
         });
+        if m.kind == CityEventKind::Mission {
+            for o in &m.objectives {
+                rows.push(objective_line(format!("        {o}")));
+            }
+        }
         for n in names.iter().skip(1) {
             rows.push(Line {
                 text: format!("        {n}"),
@@ -1452,6 +1478,35 @@ mod tests {
             &Config::default(),
         );
         assert!(none.iter().all(|r| r.timer.is_empty()));
+    }
+
+    #[test]
+    fn mission_objective_is_dim_on_the_block() {
+        let now = DateTime::from_timestamp(10_000, 0).unwrap();
+        let mission = CityEvent {
+            kind: CityEventKind::Mission,
+            title: "Disarmed".into(),
+            enemies: vec!["3 x Flaming Titan".into()],
+            objectives: vec!["Find O'Connell's arms (2)".into()],
+            end: now + ChronoDuration::minutes(40),
+            ..CityEvent::default()
+        };
+        let rows = boss_lines(
+            &ModelView {
+                have_data: true,
+                now,
+                block_events: Some(vec![mission]),
+                ..ModelView::default()
+            },
+            &Config::default(),
+        );
+        assert_eq!(rows[0].text, "Disarmed");
+        assert!(rows[0].runs.is_empty());
+        assert_eq!(rows[1].text, "3 x Flaming Titan");
+        assert!(rows[1].runs.is_empty());
+        assert_eq!(rows[2].text, "Find O'Connell's arms (2)");
+        assert_eq!(rows[2].runs.len(), 1);
+        assert!((rows[2].runs[0].alpha - OBJECTIVE_ALPHA).abs() < 1e-5);
     }
 
     #[test]
@@ -2025,7 +2080,12 @@ mod tests {
             "objective under the title: {:?}",
             rows
         );
-        assert!(rows.iter().any(|r| r.text.contains("Flaming Titan")));
+        assert_eq!(rows[1].runs.len(), 1);
+        assert!((rows[1].runs[0].alpha - OBJECTIVE_ALPHA).abs() < 1e-5);
+        assert!(
+            rows.iter()
+                .any(|r| r.text.contains("Flaming Titan") && r.runs.is_empty())
+        );
 
         let dropped = [
             mark("1", 1, true, Duration::ZERO, &["a"]),
