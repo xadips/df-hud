@@ -7,8 +7,9 @@ lines heavier, a label on every active event, and a white ring on the block you
 are standing on. The mouse still reaches the game through it. There is no hover.
 The list beside the grid is the legend.
 
-It starts hidden. `G` (`hotkeys.map`) brings it up. Show it, pick a walk, hide
-it again. `enabled = false` turns the key off too.
+It starts hidden (the [keybinds](keybinds.md) list starts shown). `G`
+(`hotkeys.map`) brings it up. Show it, pick a walk, hide it again.
+`enabled = false` turns the key off too.
 
 Onslaught is not on this grid. The group hides there and the
 [bosses](bosses.md) panel covers it.

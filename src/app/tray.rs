@@ -460,6 +460,15 @@ mod linux {
                 }
                 .into(),
                 CheckmarkItem {
+                    label: "Show keybinds".into(),
+                    checked: self.handle.groups.shown("keybinds"),
+                    activate: Box::new(|this: &mut HudTray| {
+                        let _ = this.handle.toggle_group("keybinds");
+                    }),
+                    ..CheckmarkItem::default()
+                }
+                .into(),
+                CheckmarkItem {
                     label: "FPS display on launch".into(),
                     checked: self.handle.gamekeys.fps_display(),
                     activate: Box::new(|this: &mut HudTray| {
@@ -688,6 +697,7 @@ mod windows {
     const WM_TRAY: u32 = WM_APP + 1;
     const ID_OVERLAY: u16 = 1;
     const ID_CHALLENGES: u16 = 2;
+    const ID_KEYBINDS: u16 = 5;
     const ID_FPS: u16 = 3;
     const ID_LAUNCHER: u16 = 4;
     const ID_XP: u16 = 20;
@@ -885,6 +895,14 @@ mod windows {
                 ID_CHALLENGES as usize,
                 wide("Show challenges").as_ptr(),
             );
+            let keybinds = ctx.handle.groups.shown("keybinds");
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING | if keybinds { MF_CHECKED } else { MF_UNCHECKED },
+                ID_KEYBINDS as usize,
+                wide("Show keybinds").as_ptr(),
+            );
             let fps = ctx.handle.gamekeys.fps_display();
             InsertMenuW(
                 menu,
@@ -992,6 +1010,9 @@ mod windows {
             }
             ID_CHALLENGES => {
                 let _ = h.toggle_group("challenges");
+            }
+            ID_KEYBINDS => {
+                let _ = h.toggle_group("keybinds");
             }
             ID_FPS => h.set_fps_display(!h.gamekeys.fps_display()),
             ID_LAUNCHER => h.set_dismiss_launcher(!h.gamekeys.dismiss_launcher()),

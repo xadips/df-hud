@@ -8,6 +8,7 @@
 
 - [Block info](widgets/block.md)
 - [Bosses](widgets/bosses.md)
+- [Keybinds](widgets/keybinds.md)
 - [Run clock](widgets/session.md)
 - [XP/hr](widgets/xp.md)
 - [City map](widgets/map.md)

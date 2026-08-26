@@ -38,9 +38,9 @@ A bad edit keeps the running config. The HUD does not go down mid-game for that.
 Each group has its own `x` and `y` under `[widget.*]`, written for
 `hud.reference_width` x `hud.reference_height` (defaults 2560x1440), then
 scaled to your monitor. `y` is from the top. `x` is from the left unless
-`anchor = "right"`, then `x` is an inset from `reference_width`. Block info
-and the boss list use that so they stay on the right if you set the reference
-to your panel (1920x1200 and so on).
+`anchor = "right"`, then `x` is an inset from `reference_width`. Block info,
+the boss list, and the keybinds cheat sheet use that so they stay on the right if
+you set the reference to your panel (1920x1200 and so on).
 
 A group near the right edge is clipped, not wrapped. A wrapping line would make
 everything below it jump. Leave room for the longest string that group can show.
@@ -59,6 +59,7 @@ HUD vanishes when you play.
 | --- | --- |
 | `[widget.block]` | [Block info](widgets/block.md) |
 | `[widget.bosses]` | [Bosses](widgets/bosses.md) |
+| `[widget.keybinds]` | [Keybinds](widgets/keybinds.md) |
 | `[widget.session]` | [Run clock](widgets/session.md) |
 | `[widget.xp]` | [XP/hr](widgets/xp.md) |
 | `[widget.map]` | [City map](widgets/map.md) |
@@ -66,7 +67,8 @@ HUD vanishes when you play.
 | `[widget.status]` | [How to use](usage.md#status-banner) |
 
 `enabled = false` turns a group off for good. Hiding it with a key or the tray
-lasts until restart. The status banner has no `enabled` key.
+lasts until restart. The city map starts hidden; the keybinds list starts
+shown. The status banner has no `enabled` key.
 
 ## Switches
 

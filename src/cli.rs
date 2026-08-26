@@ -886,7 +886,15 @@ mod tests {
                 &Config::default(),
                 &crate::app::groups::Groups::new()
             ),
-            ["Xp/Hr: --", "Ground Zero"]
+            [
+                "Xp/Hr: --",
+                "Ground Zero",
+                "G - Minimap",
+                "Z - Challenges",
+                "J - Overlay",
+                "K - Run clock",
+                "U - XP/hr",
+            ]
         );
     }
 

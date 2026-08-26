@@ -192,6 +192,7 @@ pub struct Widget {
     pub xp: XpWidget,
     pub block: BlockWidget,
     pub bosses: BossesWidget,
+    pub keybinds: KeybindsWidget,
     pub map: MapWidget,
     pub challenges: ChallengesWidget,
 }
@@ -248,6 +249,16 @@ pub struct BossesWidget {
     pub font_size: f32,
     pub color: String,
     pub show_nearest: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KeybindsWidget {
+    pub enabled: bool,
+    pub anchor: Anchor,
+    pub x: i32,
+    pub y: i32,
+    pub font_size: f32,
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -520,6 +531,14 @@ impl Default for Widget {
                 font_size: 0.0,
                 color: String::new(),
                 show_nearest: true,
+            },
+            keybinds: KeybindsWidget {
+                enabled: true,
+                anchor: Anchor::Right,
+                x: 220,
+                y: 530,
+                font_size: 0.0,
+                color: "#a0a0a0".into(),
             },
             map: MapWidget {
                 enabled: true,
@@ -1017,6 +1036,13 @@ impl Config {
                 self.widget.bosses.y,
                 self.widget.bosses.font_size,
                 self.widget.bosses.color.as_str(),
+            ),
+            (
+                "keybinds",
+                self.widget.keybinds.x,
+                self.widget.keybinds.y,
+                self.widget.keybinds.font_size,
+                self.widget.keybinds.color.as_str(),
             ),
             (
                 "map",
@@ -1581,6 +1607,14 @@ mod tests {
                 cfg.widget.bosses.y
             ),
             [1600, 344]
+        );
+        assert_eq!(
+            cfg.hud.place(
+                cfg.widget.keybinds.anchor,
+                cfg.widget.keybinds.x,
+                cfg.widget.keybinds.y
+            ),
+            [1700, 530]
         );
         assert_eq!(
             cfg.hud.place(

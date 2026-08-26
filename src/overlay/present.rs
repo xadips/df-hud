@@ -119,6 +119,14 @@ pub fn hud_lines(v: &ModelView, cfg: &Config, groups: &Groups) -> Vec<String> {
         );
         rows.push((y, x, scene.challenges.into_iter().map(|l| l.text).collect()));
     }
+    if !scene.keybinds.is_empty() {
+        let [x, y] = cfg.hud.place(
+            cfg.widget.keybinds.anchor,
+            cfg.widget.keybinds.x,
+            cfg.widget.keybinds.y,
+        );
+        rows.push((y, x, scene.keybinds));
+    }
     rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     for (_, _, text) in rows {
         lines.extend(text);
@@ -174,8 +182,32 @@ pub fn from_view(v: &ModelView, cfg: &Config, groups: &Groups) -> View {
     if !groups.hidden("bosses") {
         out.bosses = boss_lines(v, cfg);
     }
+    if !groups.hidden("keybinds") && cfg.widget.keybinds.enabled {
+        out.keybinds = keybind_lines(cfg);
+    }
     if !groups.hidden("map") && cfg.widget.map.enabled && v.has_position && !in_onslaught(v) {
         out.map = map_view(v, cfg);
+    }
+    out
+}
+
+fn keybind_lines(cfg: &Config) -> Vec<String> {
+    let slots = [
+        (cfg.hotkeys.map.as_str(), "Minimap"),
+        (cfg.hotkeys.challenges.as_str(), "Challenges"),
+        (cfg.hotkeys.overlay.as_str(), "Overlay"),
+        (cfg.hotkeys.run_start.as_str(), "Run clock"),
+        (cfg.hotkeys.xp_reset.as_str(), "XP/hr"),
+    ];
+    let mut out = Vec::new();
+    for (raw, label) in slots {
+        if raw.trim().is_empty() {
+            continue;
+        }
+        let Ok(binding) = crate::app::hotkeys::parse_binding(raw) else {
+            continue;
+        };
+        out.push(format!("{} - {label}", binding.canonical()));
     }
     out
 }
@@ -1297,6 +1329,47 @@ mod tests {
         assert!(s.challenges.is_empty());
         assert!(s.bosses.is_empty());
         assert!(s.map.list.is_empty());
+        assert_eq!(
+            s.keybinds,
+            [
+                "G - Minimap",
+                "Z - Challenges",
+                "J - Overlay",
+                "K - Run clock",
+                "U - XP/hr",
+            ]
+        );
+    }
+
+    #[test]
+    fn keybinds_skip_empty_bindings_and_follow_toggle() {
+        let mut cfg = Config::default();
+        cfg.hotkeys.map = String::new();
+        cfg.hotkeys.overlay = "ctrl+shift+j".into();
+        let g = Groups::new();
+        let shown = from_view(&ModelView::default(), &cfg, &g);
+        assert_eq!(
+            shown.keybinds,
+            [
+                "Z - Challenges",
+                "Ctrl+Shift+J - Overlay",
+                "K - Run clock",
+                "U - XP/hr",
+            ]
+        );
+        assert!(g.toggle("keybinds").unwrap());
+        assert!(
+            from_view(&ModelView::default(), &cfg, &g)
+                .keybinds
+                .is_empty()
+        );
+        cfg.widget.keybinds.enabled = false;
+        let g = Groups::new();
+        assert!(
+            from_view(&ModelView::default(), &cfg, &g)
+                .keybinds
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2138,7 +2211,16 @@ mod tests {
         };
         assert_eq!(
             hud_lines(&v, &cfg, &groups),
-            ["IC Time: 1:00:00", "Xp/Hr: --", "South Eastern"]
+            [
+                "IC Time: 1:00:00",
+                "Xp/Hr: --",
+                "South Eastern",
+                "G - Minimap",
+                "Z - Challenges",
+                "J - Overlay",
+                "K - Run clock",
+                "U - XP/hr",
+            ]
         );
         cfg.widget.session.y = 900;
         let lines = hud_lines(&v, &cfg, &groups);
@@ -2148,6 +2230,7 @@ mod tests {
         cfg.widget.block.enabled = false;
         cfg.widget.session.enabled = false;
         cfg.widget.xp.enabled = false;
+        cfg.widget.keybinds.enabled = false;
         assert_eq!(hud_lines(&v, &cfg, &groups), ["session expired"]);
     }
 

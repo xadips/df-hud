@@ -3,7 +3,15 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-pub const TOGGLEABLE: &[&str] = &["block", "bosses", "session", "xp", "challenges", "map"];
+pub const TOGGLEABLE: &[&str] = &[
+    "block",
+    "bosses",
+    "session",
+    "xp",
+    "challenges",
+    "map",
+    "keybinds",
+];
 
 pub fn hidden_at_start() -> &'static [&'static str] {
     &["map"]
@@ -62,6 +70,7 @@ mod tests {
         let g = Groups::new();
         assert!(g.hidden("map"));
         assert!(!g.hidden("block"));
+        assert!(!g.hidden("keybinds"));
         assert!(!g.toggle("map").unwrap());
         assert!(!g.hidden("map"));
         assert!(g.toggle("nope").is_err());

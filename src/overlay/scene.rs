@@ -30,6 +30,7 @@ pub struct View {
     pub block_sub: String,
     pub challenges: Vec<Line>,
     pub bosses: Vec<Line>,
+    pub keybinds: Vec<String>,
     pub map: MapView,
 }
 
@@ -256,6 +257,25 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
                 hud_a,
             },
             &view.bosses,
+        );
+    }
+
+    if cfg.widget.keybinds.enabled && !view.keybinds.is_empty() {
+        let refs: Vec<&str> = view.keybinds.iter().map(String::as_str).collect();
+        push_text_group(
+            &mut scene,
+            xf,
+            LineLayout {
+                at: cfg.hud.place(
+                    cfg.widget.keybinds.anchor,
+                    cfg.widget.keybinds.x,
+                    cfg.widget.keybinds.y,
+                ),
+                font_px: font_px(cfg, cfg.widget.keybinds.font_size, xf),
+                default_color: widget_color(cfg, &cfg.widget.keybinds.color),
+                hud_a,
+            },
+            &refs,
         );
     }
 
@@ -842,6 +862,26 @@ mod tests {
     }
 
     #[test]
+    fn keybinds_draw_one_line_per_binding_on_the_right() {
+        let mut view = dummy_view();
+        view.map = MapView::default();
+        view.keybinds = vec!["G - Minimap".into(), "Z - Challenges".into()];
+        let scene = build(&view, &Config::default(), vp_1440());
+        let map_key = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "G - Minimap")
+            .expect("map key");
+        let board = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "Z - Challenges")
+            .expect("challenges key");
+        assert!((map_key.x - 2340.0).abs() < 0.5, "keys x = {}", map_key.x);
+        assert!(board.y > map_key.y);
+    }
+
+    #[test]
     fn right_groups_follow_a_narrower_reference() {
         let view = dummy_view();
         let mut cfg = Config::default();
@@ -1419,6 +1459,7 @@ mod tests {
         cfg.widget.block.enabled = false;
         cfg.widget.map.enabled = false;
         cfg.widget.challenges.enabled = false;
+        cfg.widget.keybinds.enabled = false;
         let scene = build(&view, &cfg, vp_1440());
         let title = scene
             .texts
@@ -1486,6 +1527,7 @@ mod tests {
         cfg.widget.block.enabled = false;
         cfg.widget.map.enabled = false;
         cfg.widget.challenges.enabled = false;
+        cfg.widget.keybinds.enabled = false;
         let scene = build(&view, &cfg, vp_1440());
         let name = scene
             .texts
