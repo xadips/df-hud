@@ -179,13 +179,16 @@ launcher_delay = 1
 enabled = true
 
 # A bare key consumes that key before the game receives it, exactly like the
-# former AutoHotkey helper. Chords are supported too: Ctrl+Shift+M, Alt+F8,
-# Win+K. Set one to "" to leave that action unbound.
-map = "V"
-challenges = "T"
-run_start = "Grave"
-xp_reset = "X"
-overlay = "K"
+# former AutoHotkey helper. Dead Frontier already owns WASD, most letters, Tab,
+# grave, the number row and most function keys, and a modifier does not hide
+# the letter from the game (Alt+T still declines an item). The defaults are
+# unmodified letters the game does not use (g, j, k, u, z). Chords still work:
+# Ctrl+Shift+M, Win+K. Set one to "" to leave that action unbound.
+map = "G"
+challenges = "Z"
+run_start = "K"
+xp_reset = "U"
+overlay = "J"
 
 [paths]
 # Holds credentials.json (0600 on Linux; protected by AppData ACLs on Windows),
@@ -433,7 +436,7 @@ min_samples = 3
 # cell per block, gaps left empty, district lines heavier, an identifier on every
 # active event and a ring on the block you are standing on.
 #
-# IT STARTS HIDDEN. The map hotkey (`hotkeys.map`, default V) brings it up.
+# IT STARTS HIDDEN. The map hotkey (`hotkeys.map`, default G) brings it up.
 # This is something you summon to decide where to walk and dismiss ten seconds
 # later. Turning enabled off costs you the key too.
 #

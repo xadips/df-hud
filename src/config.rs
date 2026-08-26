@@ -411,11 +411,11 @@ impl Default for Config {
             },
             hotkeys: Hotkeys {
                 enabled: true,
-                map: "V".into(),
-                challenges: "T".into(),
-                run_start: "Grave".into(),
-                xp_reset: "X".into(),
-                overlay: "K".into(),
+                map: "G".into(),
+                challenges: "Z".into(),
+                run_start: "K".into(),
+                xp_reset: "U".into(),
+                overlay: "J".into(),
             },
             paths: Paths {
                 data_dir: default_data_dir(),
@@ -1808,6 +1808,16 @@ window = 120
             Config::parse("[hotkeys]\nmap = \"control + shift + m\"\nchallenges = \"\"\n").unwrap();
         assert_eq!(cfg.hotkeys.map, "Ctrl+Shift+M");
         assert_eq!(cfg.hotkeys.challenges, "");
+    }
+
+    #[test]
+    fn default_hotkeys_are_letters_the_game_does_not_use() {
+        let h = Config::default().hotkeys;
+        assert_eq!(h.map, "G");
+        assert_eq!(h.challenges, "Z");
+        assert_eq!(h.run_start, "K");
+        assert_eq!(h.xp_reset, "U");
+        assert_eq!(h.overlay, "J");
     }
 
     #[test]

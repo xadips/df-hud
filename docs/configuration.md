@@ -75,7 +75,7 @@ pages. The example TOML comments them in place.
 
 | Key | Default | |
 | --- | --- | --- |
-| `hud.enabled` | `true` | Master overlay switch. Tray, `K`, and the HTTP toggle cannot turn it back on. |
+| `hud.enabled` | `true` | Master overlay switch. Tray, `J`, and the HTTP toggle cannot turn it back on. |
 | `hotkeys.enabled` | `true` | All grabbed keys. Empty strings still turn individual bindings off. |
 | `hud.only_when_game_running` | `true` | Hide the pixels when the game is not running. |
 | `poll.only_when_game_running` | `true` | Stop asking the game server when the game is not running. Separate from the HUD hide. |

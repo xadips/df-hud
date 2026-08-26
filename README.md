@@ -25,11 +25,11 @@ These only work while Dead Frontier is focused.
 
 | Key | Action |
 | --- | --- |
-| `V` | City map |
-| `T` | Challenge board |
-| `` ` `` (Grave) | Restart the run clock |
-| `X` | Reset the XP/hr average |
-| `K` | Show or hide the overlay |
+| `G` | City map |
+| `Z` | Challenge board |
+| `J` | Show or hide the overlay |
+| `K` | Restart the run clock |
+| `U` | Reset the XP/hr average |
 
 Change them in `[hotkeys]`. An empty value turns that one off. See
 [How to use](docs/usage.md).
