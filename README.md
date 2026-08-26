@@ -44,8 +44,9 @@ COSMIC, and most others. GNOME, Cinnamon, and Weston do not have it. The
 [install](docs/install.md) page lists the rest.
 
 The built-in hotkeys need Hyprland; on any other compositor, bind your own keys
-to the loopback API instead, which reaches every action the keys do. The tray
-can turn the FPS overlay on at launch, and skip the launcher dialog.
+to the [loopback API](docs/manual-wiring.md) instead, which reaches every action
+the keys do. The tray can turn the FPS overlay on at launch, and skip the
+launcher dialog.
 
 You will want
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge). That
