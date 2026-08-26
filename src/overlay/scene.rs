@@ -12,6 +12,7 @@ const MAP_MIN_CELL: i32 = 6;
 const MAP_MAX_CELL: i32 = 96;
 const MAP_BASE_SIZE: f32 = 1180.0;
 const MAP_LIST_GAP: f32 = 10.0;
+const MAP_CHIP_NAME_GAP: f32 = 8.0;
 const MAP_MARKER_FONT: f32 = 0.72;
 /// Legend size vs design-space cell. 0.52 is 0.8 × the old 0.65, so a default
 /// 27px cell yields ~14pt instead of tracking the grid 1:1.
@@ -615,7 +616,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
         let pad_y = xf.size(2.0).max(1.0);
         // Two-character chip (I5 / B4). Δ and ▼ sit in the same box so columns line up.
         let chip_w = mono_advance("MM", list_px) + pad_x * 2.0;
-        let name_x = lx + chip_w + xf.size(4.0);
+        let name_x = lx + chip_w + xf.size(MAP_CHIP_NAME_GAP);
         let name_col = view
             .map
             .list
