@@ -397,6 +397,24 @@ y = 344
 # wrong way round. Anything past a dozen blocks is not reported.
 show_nearest = true
 
+[widget.keybinds]
+# Live [hotkeys] cheat sheet. One binding per line, so a first-time overlay
+# tells you which key does what without opening the config.
+#
+# Starts shown. Tray "Show keybinds" or POST /api/widget/keybinds/toggle hides
+# it until restart. enabled = false turns it off for good. There is no hotkey
+# for this group (the map is the one that starts hidden).
+#
+# Right column, same inset as block info, under a full bosses nest. Not next to
+# XP/hr or IC Time (those sit on native game UI) and not above or below the
+# challenge board.
+enabled = true
+anchor = "right"
+x = 220
+y = 530
+# font_size = 14
+color = "#a0a0a0"
+
 [widget.session]
 enabled = true
 x = 350

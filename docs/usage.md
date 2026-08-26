@@ -31,6 +31,10 @@ Set a value to `""` to leave that one unbound. Chords work (`Ctrl+Shift+M`,
 defaults are unmodified keys the game does not use. `hotkeys.enabled = false`
 turns the whole grab off.
 
+The [keybinds](widgets/keybinds.md) group prints these bindings on the overlay.
+It starts shown. Tray **Show keybinds** hides it until restart; `enabled = false`
+turns it off for good. There is no hotkey for that group.
+
 The keys only work while Dead Frontier is focused. So `J` does nothing if you
 have alt-tabbed away. The HUD itself hides by workspace, not by focus. A window
 in front of the game on the same workspace still has the HUD over it.
@@ -47,7 +51,7 @@ also bind them in the compositor or AutoHotkey.
 
 On any other layer-shell compositor df-hud grabs nothing, so bind keys yourself
 and POST to the loopback listener. Every action above is reachable, and so are
-four groups the keys do not cover:
+five groups the keys do not cover:
 
 | Action | Request to `http://127.0.0.1:9310` |
 | --- | --- |
@@ -56,7 +60,7 @@ four groups the keys do not cover:
 | Restart the run clock | `POST /api/run/start` |
 | Reset XP/hr | `POST /api/xp/reset` |
 | Show or hide the overlay | `POST /api/overlay/toggle` |
-| Other groups | `POST /api/widget/<name>/toggle`, where name is `block`, `bosses`, `session`, or `xp` |
+| Other groups | `POST /api/widget/<name>/toggle`, where name is `block`, `bosses`, `session`, `xp`, or `keybinds` |
 
 ```sh
 bind = SUPER, G, exec, curl -fsS -X POST http://127.0.0.1:9310/api/widget/map/toggle
@@ -66,7 +70,8 @@ One difference matters. The keys df-hud grabs only fire while Dead Frontier is
 focused, and it lets go when you alt-tab. A compositor binding fires wherever
 you are, so pick keys you will not want elsewhere.
 
-The [city map](widgets/map.md) starts hidden. Press `G` to bring it up.
+The [city map](widgets/map.md) starts hidden. Press `G` to bring it up. The
+[keybinds](widgets/keybinds.md) list starts shown.
 
 Hiding a group with a key or the tray lasts until you restart. It is not saved
 to the file. `enabled` in the config is what stays. The status banner cannot be
@@ -77,6 +82,7 @@ hidden. That is how df-hud tells you it cannot do its job.
 The tray is how you find df-hud when the overlay is off.
 
 - **Show overlay** / **Show challenges**: same as `J` and `Z`
+- **Show keybinds**: the overlay hotkey cheat sheet. Starts shown. No key for this group.
 - **FPS display on launch**: press the game's FPS key after the window appears
 - **Skip the launcher**: press Play on the configuration dialog. Turn this off
   when you need the Input tab.

@@ -40,6 +40,13 @@ pub fn view(clock: &str) -> View {
         block_sub: String::new(),
         challenges: vec![],
         bosses: vec![],
+        keybinds: vec![
+            "G - Minimap".into(),
+            "Z - Challenges".into(),
+            "J - Overlay".into(),
+            "K - Run clock".into(),
+            "U - XP/hr".into(),
+        ],
         map: fake_map(),
     }
 }

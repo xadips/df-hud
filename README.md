@@ -12,12 +12,14 @@ no OCR.
 
 - [Block info](docs/widgets/block.md): region or outpost, and block support. Top right.
 - [Bosses](docs/widgets/bosses.md): what is on your block, or the nearest event
+- [Keybinds](docs/widgets/keybinds.md): the overlay hotkeys, one per line. Starts shown.
 - [Run clock](docs/widgets/session.md): time spent playing, not how long the client has been open
 - [XP/hr](docs/widgets/xp.md): a one-minute average
 - [Challenge board](docs/widgets/challenges.md): the whole board, filtered by category
 - [City map](docs/widgets/map.md): the inner city. Press a key to show it
 
-Each group sits where you put it. The map starts hidden.
+Each group sits where you put it. The map starts hidden. The keybinds list
+starts shown; hide it from the tray or with `enabled = false`.
 
 ## Keys
 
@@ -31,8 +33,9 @@ These only work while Dead Frontier is focused.
 | `K` | Restart the run clock |
 | `U` | Reset the XP/hr average |
 
-Change them in `[hotkeys]`. An empty value turns that one off. See
-[How to use](docs/usage.md).
+Change them in `[hotkeys]`. An empty value turns that one off. The
+[keybinds](docs/widgets/keybinds.md) group prints the live set on the overlay.
+See [How to use](docs/usage.md).
 
 ## Install
 
