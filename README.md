@@ -2,9 +2,9 @@
 
 A HUD overlay for Dead Frontier on Windows and Linux (Wayland).
 
-It sits on top of the game, including fullscreen, and clicks go through to the
-game. It reads the game's API and DFProfiler's event map. No screen scraping,
-no OCR.
+It sits on top of the game, fullscreen included, and clicks go through to the
+client. It talks to the game's API and DFProfiler's event map. No screen
+scraping, no OCR.
 
 ![df-hud overlay on Dead Frontier](docs/images/overlay.png)
 
@@ -13,7 +13,7 @@ no OCR.
 - [Block info](docs/widgets/block.md): region or outpost, and block support. Top right.
 - [Bosses](docs/widgets/bosses.md): what is on your block, or the nearest event. In Onslaught this is last / now / next
 - [Keybinds](docs/widgets/keybinds.md): the overlay hotkeys, one per line. Starts shown.
-- [Run clock](docs/widgets/session.md): time spent playing, not how long the client has been open
+- [Run clock](docs/widgets/session.md): elapsed since the run started. It keeps ticking if you pause
 - [XP/hr](docs/widgets/xp.md): a one-minute average
 - [Challenge board](docs/widgets/challenges.md): the whole board, filtered by category
 - [City map](docs/widgets/map.md): the inner city. Press a key to show it
@@ -47,14 +47,25 @@ The built-in hotkeys need Hyprland; on any other compositor, bind your own keys
 to the loopback API instead, which reaches every action the keys do. The tray
 can turn the FPS overlay on at launch, and skip the launcher dialog.
 
-Install
+You will want
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge). That
-is the recommended way to give df-hud your session: it syncs on its own, and
-the challenge board needs it. `df.user_id` is the fallback if you skip the
-script; it covers everything except the board. See
-[install](docs/install.md).
+is how df-hud gets your session: the script keeps it in sync, and the
+challenge board needs it. If you skip the script, `df.user_id` still covers
+everything except the board. Details are on [install](docs/install.md).
 
 [Install](docs/install.md), [how to use](docs/usage.md),
 [configuration](docs/configuration.md).
 
 GPL-3.0-or-later. Notes on the game feeds are in [knowledge/](knowledge/).
+
+## Development
+
+Building it, or sending a patch? [Development](docs/development.md) has the
+checks CI runs, and where LLMs fit in.
+
+## LLM use
+
+I used LLMs to help write this, on purpose. Everything in the tree still got
+read and understood by a person. If nobody can explain a change, it doesn't
+go in.
+

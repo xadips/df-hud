@@ -3,6 +3,7 @@
 - [Install](install.md)
 - [How to use](usage.md)
 - [Configuration](configuration.md)
+- [Development](development.md)
 
 ## Widgets
 
