@@ -39,10 +39,10 @@ need the table at all** — the table is the fallback for a record that lacks th
 field, plus the source of "XP to next level".
 
 Its relationship to the table is a **fixed offset**, not an exact match. From
-five independent captures:
+five independent captures at the level cap:
 
 ```
-df_exptotal - df_exp = 16,576,044,375 + 393,591   (identical in all five)
+df_exptotal - df_exp = table prefix + a constant offset
 sum(exp_lvl 2..415)  = 16,576,044,375
 offset               =        393,591
 ```
@@ -121,9 +121,8 @@ its value matches this reconstruction:
 
 ```
 sum(exp_lvl 2..415)         = 16,576,044,375
-+ in-level exp (level 415)  =  df_exp
-                            = table reconstruction
-DFProfiler total_exp        = table reconstruction + 393,591   (gap 393,591, ~0.0016%)
++ in-level exp              =          (df_exp)
+DFProfiler total_exp        = table reconstruction + 393,591
 ```
 
 The gap is one scrape-timing difference between their two fields (a few hundred

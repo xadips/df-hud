@@ -345,7 +345,7 @@ mod tests {
             s.append_xp_sample(
                 XpSample {
                     at: base + chrono::Duration::seconds(i),
-                    cumulative: 10_000_000 + i * 100,
+                    cumulative: 1_000_000 + i * 100,
                     source: "df_exptotal".into(),
                 },
                 Duration::from_secs(3600),
@@ -355,7 +355,7 @@ mod tests {
         s.append_xp_sample(
             XpSample {
                 at: base + chrono::Duration::seconds(3),
-                cumulative: 999_000,
+                    cumulative: 999_000,
                 source: "exp table reconstruction".into(),
             },
             Duration::from_secs(3600),
