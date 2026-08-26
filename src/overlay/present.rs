@@ -1134,6 +1134,9 @@ fn map_list(marks: &[&CityMark], max_listed: i32, in_onslaught: bool) -> Vec<Lin
             if !heading.is_empty() {
                 names.push(heading.as_str());
             }
+            if m.kind == CityEventKind::Mission {
+                names.extend(m.objectives.iter().map(String::as_str));
+            }
             names.extend(
                 m.enemies
                     .iter()
@@ -1158,8 +1161,6 @@ fn map_list(marks: &[&CityMark], max_listed: i32, in_onslaught: bool) -> Vec<Lin
         rows.push(Line {
             text: format!("{}  {}", m.marker, names[0]),
             chip: Some(mark_color(m)),
-            chip_ring: city_mark_ringed(m)
-                && bossmap::mark_category(m.kind, &m.enemies) == MarkCategory::Qrf,
             timer: extra.to_string(),
             ..Line::default()
         });
@@ -1978,6 +1979,7 @@ mod tests {
             label: "Disarmed".into(),
             kind: CityEventKind::Mission,
             enemies: vec!["200 x 64".into()],
+            objectives: vec!["Find O'Connell's arms (2)".into()],
             walk: Walk {
                 blocks: 2,
                 ..Walk::default()
@@ -1992,6 +1994,12 @@ mod tests {
             rows[0].text
         );
         assert!(
+            rows.iter()
+                .any(|r| r.chip.is_none() && r.text.contains("O'Connell")),
+            "objective under the title: {:?}",
+            rows
+        );
+        assert!(
             rows.iter().all(|r| !r.text.contains("200 x 64")),
             "type id leaked: {:?}",
             rows
@@ -2002,6 +2010,7 @@ mod tests {
             label: "Red Inferno".into(),
             kind: CityEventKind::Mission,
             enemies: vec!["3 x Flaming Titan".into()],
+            objectives: vec!["Eliminate the Flaming Titans (3)".into()],
             walk: Walk {
                 blocks: 3,
                 ..Walk::default()
@@ -2011,6 +2020,11 @@ mod tests {
         };
         let rows = map_list(&[&inferno], 20, false);
         assert!(rows[0].text.contains("Red Inferno"));
+        assert!(
+            rows[1].chip.is_none() && rows[1].text.contains("Eliminate the Flaming Titans"),
+            "objective under the title: {:?}",
+            rows
+        );
         assert!(rows.iter().any(|r| r.text.contains("Flaming Titan")));
 
         let dropped = [
@@ -2151,7 +2165,11 @@ mod tests {
             "{texts:?}"
         );
         assert_eq!(rows.iter().filter(|r| r.chip.is_some()).count(), 2);
-        assert_eq!(rows.iter().filter(|r| r.chip_ring).count(), 1);
+        assert_eq!(
+            rows.iter().filter(|r| r.chip_ring).count(),
+            0,
+            "legend chips stay one size; the grid ring already marks wasteland"
+        );
         assert!(
             !rows[0].timer.is_empty() && rows[1].timer.is_empty(),
             "shared hour once, on the nearer QRF: {:?}",

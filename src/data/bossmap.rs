@@ -138,6 +138,7 @@ impl BossMap {
                         e.title.clone()
                     },
                     enemies: e.enemies.clone(),
+                    objectives: e.objectives.clone(),
                     kind: e.kind,
                     event_type: e.event_type.clone(),
                     x: loc[0],
@@ -592,6 +593,12 @@ mod tests {
             m.events[0].enemies
         );
         assert_eq!(m.events[0].objectives, ["Find O'Connell's arms (2)"]);
+        let marks = m.active_marks(now, [1053, 985], &[]);
+        assert_eq!(
+            marks[0].objectives,
+            ["Find O'Connell's arms (2)"],
+            "map marks keep the objective"
+        );
 
         let named = br#"{
 	  "1":{"event_id":"1","isoa":"0","locations":[["1029","1006"]],"started":"1","ended":"0",

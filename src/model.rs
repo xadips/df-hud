@@ -463,6 +463,7 @@ pub struct CityMark {
     pub marker: String,
     pub label: String,
     pub enemies: Vec<String>,
+    pub objectives: Vec<String>,
     pub kind: CityEventKind,
     pub event_type: String,
     pub x: i32,
@@ -475,10 +476,11 @@ pub struct CityMark {
 
 impl Serialize for CityMark {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut st = s.serialize_struct("CityMark", 10)?;
+        let mut st = s.serialize_struct("CityMark", 11)?;
         st.serialize_field("Marker", &self.marker)?;
         st.serialize_field("Label", &self.label)?;
         st.serialize_field("Enemies", &self.enemies)?;
+        st.serialize_field("Objectives", &self.objectives)?;
         st.serialize_field("Kind", &self.kind)?;
         st.serialize_field("X", &self.x)?;
         st.serialize_field("Y", &self.y)?;

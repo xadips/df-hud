@@ -43,7 +43,8 @@ one row per event.
 The list beside the grid is nearest first, one entry per event, not per block.
 The feed repeats the same pack on many tiles. Each row is the label and the
 enemy types, then a countdown to the right of the name when that event has its
-own clock.
+own clock. Missions print the objective under the title, so you can see the
+job before you walk there.
 
 Bosses, bandits, and QRFs share the city hour, so that countdown is printed
 once, on the nearest of them. Dailies (`DH` `VL` `BH` `LB`) are random spawns

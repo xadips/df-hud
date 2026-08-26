@@ -355,7 +355,7 @@ mod tests {
         s.append_xp_sample(
             XpSample {
                 at: base + chrono::Duration::seconds(3),
-                    cumulative: 999_000,
+                cumulative: 999_000,
                 source: "exp table reconstruction".into(),
             },
             Duration::from_secs(3600),
