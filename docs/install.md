@@ -70,8 +70,8 @@ at login. The first start writes `%APPDATA%\df-hud\config.toml` if it is missing
 
 ## Session script
 
-df-hud listens on `127.0.0.1:9310`. A userscript
-in the browser posts your session there. Install
+df-hud listens on `127.0.0.1:9310`. A userscript in the browser posts your
+session there. Install
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge) in
 Tampermonkey or Violentmonkey.
 

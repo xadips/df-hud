@@ -550,6 +550,19 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
         });
     }
 
+    let mut stack_n: HashMap<(i32, i32), usize> = HashMap::new();
+    for marker in &view.map.markers {
+        if marker.x < win_x
+            || marker.x >= win_x + win_w
+            || marker.y < win_y
+            || marker.y >= win_y + win_h
+        {
+            continue;
+        }
+        *stack_n.entry((marker.x, marker.y)).or_insert(0) += 1;
+    }
+    let mut stack_i: HashMap<(i32, i32), usize> = HashMap::new();
+
     let ring_w = xf.size(2.0).max(1.0);
     for marker in &view.map.markers {
         if marker.x < win_x
@@ -571,10 +584,22 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
             ];
             stroke_rect(scene, cx, cy, cell, cell, ring_w, ring);
         }
-        let (marker_px, tw) = fit_marker_font(&marker.text, cell);
+        let n = stack_n
+            .get(&(marker.x, marker.y))
+            .copied()
+            .unwrap_or(1)
+            .max(1);
+        let slot = {
+            let i = stack_i.entry((marker.x, marker.y)).or_insert(0);
+            let slot = *i;
+            *i += 1;
+            slot
+        };
+        let band = cell / n as f32;
+        let (marker_px, tw) = stacked_marker_font(&marker.text, cell, n);
         scene.labels.push(Text {
             x: cx + (cell - tw) * 0.5,
-            y: cy,
+            y: cy + slot as f32 * band,
             color: [
                 marker.ink[0],
                 marker.ink[1],
@@ -586,7 +611,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
             outline: true,
             outline_color: None,
             lcd: true,
-            center_h: Some(cell),
+            center_h: Some(band),
         });
     }
 
@@ -727,6 +752,17 @@ fn fit_marker_font(text: &str, cell: f32) -> (f32, f32) {
         base.min(limit)
     };
     (px, mono_advance(text, px))
+}
+
+/// DFProfiler halves each glyph when two events share a block (QRF over a
+/// boss or bandit camp). `n` events → `1/n` of the solo size, stacked in the cell.
+fn stacked_marker_font(text: &str, cell: f32, n: usize) -> (f32, f32) {
+    let (mut px, mut tw) = fit_marker_font(text, cell);
+    if n > 1 {
+        px /= n as f32;
+        tw = mono_advance(text, px);
+    }
+    (px, tw)
 }
 
 fn stroke_rect(scene: &mut Scene, x: f32, y: f32, w: f32, h: f32, width: f32, color: [f32; 4]) {
@@ -1016,6 +1052,98 @@ mod tests {
         let width = label.text.chars().count() as f32 * label.font_px * 0.6;
         assert!(width <= cell * 0.9 + 0.05, "advance {width} vs cell {cell}");
         assert_eq!(label.center_h, Some(cell));
+    }
+
+    #[test]
+    fn two_events_on_one_block_stack_at_half_size() {
+        let mut view = dummy_view();
+        view.map.markers.push(MapMarker {
+            x: 1010,
+            y: 1008,
+            text: "Δ".into(),
+            ink: [1.0, 1.0, 1.0, 1.0],
+            color: [0.36, 0.9, 0.36, 1.0],
+            ring: true,
+        });
+        view.map.markers.push(MapMarker {
+            x: 1010,
+            y: 1008,
+            text: "I4".into(),
+            ink: [1.0, 1.0, 1.0, 1.0],
+            color: [0.33, 0.66, 1.0, 1.0],
+            ring: false,
+        });
+        let stacked = build(&view, &Config::default(), vp_1440());
+        let mut solo_view = dummy_view();
+        solo_view.map.markers.push(MapMarker {
+            x: 1010,
+            y: 1008,
+            text: "Δ".into(),
+            ink: [1.0, 1.0, 1.0, 1.0],
+            color: [0.36, 0.9, 0.36, 1.0],
+            ring: true,
+        });
+        solo_view.map.markers.push(MapMarker {
+            x: 1011,
+            y: 1008,
+            text: "I4".into(),
+            ink: [1.0, 1.0, 1.0, 1.0],
+            color: [0.33, 0.66, 1.0, 1.0],
+            ring: false,
+        });
+        let solo = build(&solo_view, &Config::default(), vp_1440());
+        let cell = stacked
+            .fills
+            .iter()
+            .find(|f| f.w > 8.0 && f.h > 8.0)
+            .expect("cell")
+            .w;
+        let qrf = stacked
+            .labels
+            .iter()
+            .find(|t| t.text == "Δ" && t.outline)
+            .expect("Δ");
+        let boss = stacked
+            .labels
+            .iter()
+            .find(|t| t.text == "I4" && t.outline)
+            .expect("I4");
+        let solo_qrf = solo
+            .labels
+            .iter()
+            .find(|t| t.text == "Δ" && t.outline)
+            .expect("solo Δ");
+        let solo_boss = solo
+            .labels
+            .iter()
+            .find(|t| t.text == "I4" && t.outline)
+            .expect("solo I4");
+        assert!(
+            (qrf.font_px * 2.0 - solo_qrf.font_px).abs() < 0.05,
+            "stacked QRF {} vs solo {}",
+            qrf.font_px,
+            solo_qrf.font_px
+        );
+        assert!(
+            (boss.font_px * 2.0 - solo_boss.font_px).abs() < 0.05,
+            "stacked {} vs solo {}",
+            boss.font_px,
+            solo_boss.font_px
+        );
+        assert_eq!(qrf.center_h, Some(cell / 2.0));
+        assert_eq!(boss.center_h, Some(cell / 2.0));
+        assert!(
+            (boss.y - qrf.y - cell / 2.0).abs() < 0.05,
+            "QRF above I4: {} vs {}",
+            qrf.y,
+            boss.y
+        );
+        let green_rings = stacked
+            .strokes
+            .iter()
+            .filter(|s| s.width >= 1.9 && s.color[1] > 0.8 && s.color[0] < 0.5)
+            .count();
+        assert!(green_rings >= 4, "one QRF ring around the shared cell");
     }
 
     #[test]
