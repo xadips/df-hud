@@ -48,10 +48,10 @@ to the [loopback API](docs/manual-wiring.md) instead, which reaches every action
 the keys do. The tray can turn the FPS overlay on at launch, and skip the
 launcher dialog.
 
-You will want
+It is recommende to install
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge). That
 is how df-hud gets your session: the script keeps it in sync, and the
-challenge board needs it. If you skip the script, `df.user_id` still covers
+challenge list needs it. If you skip the script, `df.user_id` still covers
 everything except the board. Details are on [install](docs/install.md).
 
 [Install](docs/install.md), [how to use](docs/usage.md),
@@ -63,6 +63,10 @@ GPL-3.0-or-later. Notes on the game feeds are in [knowledge/](knowledge/).
 
 Building it, or sending a patch? [Development](docs/development.md) has the
 checks CI runs, and where LLMs fit in.
+
+## Why was this made?
+
+Inspired by SilverOverlays which I couldn't make work for Linux. At first I decided to build a Go application for Linux which I eventually ported to Windows as well, but it was a shitty first attempt and a pain to build, so here we are.
 
 ## LLM use
 
