@@ -2,6 +2,8 @@
 
 `[widget.session]`. Time spent playing, not how long the client has been open.
 
+![Run clock](../images/session.png)
+
 Launching Dead Frontier means a launcher, a loading screen, then Start. Process
 uptime is ahead of any playing, so this clock waits until you actually start.
 The client's own position (Discord rich presence) wins when it is fresh: a

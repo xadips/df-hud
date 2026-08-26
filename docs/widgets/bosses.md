@@ -3,6 +3,8 @@
 `[widget.bosses]`. What is on your block. Sits under [block info](block.md) on
 the right.
 
+![Bosses](../images/bosses.png)
+
 One row per enemy type, plus **OUTPOST ATTACK** when every outpost is under
 attack. Most blocks are empty, so this group is often blank.
 
@@ -23,9 +25,11 @@ nearest 3 up 1 left, 8 blocks  1015, 1024
 Anything more than a dozen blocks away is left off. `show_nearest = false`
 turns the row off.
 
-In Onslaught this group becomes the cycle panel (current, last, and next)
+In Onslaught this group becomes the cycle panel (last, now, and next)
 instead of the city list. The [city map](map.md) hides there. Onslaught is not
 on that grid.
+
+![Onslaught cycles](../images/onslaught.png)
 
 | Key | Default | |
 | --- | --- | --- |

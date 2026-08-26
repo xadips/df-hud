@@ -2,6 +2,8 @@
 
 `[widget.map]`. The inner city as a grid.
 
+![City map](../images/map.png)
+
 One cell per block, shaded like DFProfiler's map, gaps left empty, district
 lines heavier, a label on every active event, and a white ring on the block you
 are standing on. The mouse still reaches the game through it. There is no hover.

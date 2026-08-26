@@ -33,12 +33,13 @@ timeout = 10
 # rotating it heals itself. Set it only to work without the bridge script.
 skeygen = ""
 
-# Your numeric account id, digits only. This is a fallback, not a login: it
-# reads the same public record DFProfiler does, so block info, the map ring and
-# XP/hr work before you have installed the bridge userscript. The challenge
-# board still needs a real session and says so next to the board, not in the
-# status banner. As soon as the bridge delivers a session it takes over and this
-# is ignored. Empty means the HUD waits for the bridge, as it always has.
+# Your numeric account id, digits only. The recommended path is DF HUD Bridge
+# (automatic session sync and the challenge board). This key is the fallback
+# without the script: it reads the same public record DFProfiler does, so block
+# info, the map ring and XP/hr work. The challenge board still needs a real
+# session and says so next to the board, not in the status banner. As soon as
+# the bridge delivers a session it takes over and this is ignored. Empty means
+# the HUD waits for the bridge.
 user_id = ""
 
 [bridge]
@@ -363,9 +364,8 @@ y = 300
 # Cool blue, because the amber below it means "something here can kill you".
 color = "#9ecbff"
 
-# Print the raw coordinates. Off, because the game already shows them under its
-# own minimap; with it off the city head becomes the region name, which the game
-# shows nowhere. Turn it on to check df-hud against the game.
+# Print the raw coordinates under the name. Off, because the game already shows
+# them under its own minimap. Turn it on to check df-hud against the game.
 show_position = false
 
 [widget.bosses]

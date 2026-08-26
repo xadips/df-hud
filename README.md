@@ -11,7 +11,7 @@ no OCR.
 ## Features
 
 - [Block info](docs/widgets/block.md): region or outpost, and block support. Top right.
-- [Bosses](docs/widgets/bosses.md): what is on your block, or the nearest event
+- [Bosses](docs/widgets/bosses.md): what is on your block, or the nearest event. In Onslaught this is last / now / next
 - [Keybinds](docs/widgets/keybinds.md): the overlay hotkeys, one per line. Starts shown.
 - [Run clock](docs/widgets/session.md): time spent playing, not how long the client has been open
 - [XP/hr](docs/widgets/xp.md): a one-minute average
@@ -44,13 +44,15 @@ COSMIC, and most others. GNOME, Cinnamon, and Weston do not have it. The
 [install](docs/install.md) page lists the rest.
 
 The built-in hotkeys need Hyprland; on any other compositor, bind your own keys
-to the loopback API instead, which reaches every action the keys do.
+to the loopback API instead, which reaches every action the keys do. The tray
+can turn the FPS overlay on at launch, and skip the launcher dialog.
 
-You also need
-[DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge), a
-userscript that hands df-hud your session on `127.0.0.1`. Without it the
-overlay runs but has nothing to show, unless you set `df.user_id`, which covers
-everything except the challenge board.
+Install
+[DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge). That
+is the recommended way to give df-hud your session: it syncs on its own, and
+the challenge board needs it. `df.user_id` is the fallback if you skip the
+script; it covers everything except the board. See
+[install](docs/install.md).
 
 [Install](docs/install.md), [how to use](docs/usage.md),
 [configuration](docs/configuration.md).

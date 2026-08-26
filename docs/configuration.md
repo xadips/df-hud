@@ -81,6 +81,8 @@ pages. The example TOML comments them in place.
 | `hotkeys.enabled` | `true` | All grabbed keys. Empty strings still turn individual bindings off. |
 | `hud.only_when_game_running` | `true` | Hide the pixels when the game is not running. |
 | `poll.only_when_game_running` | `true` | Stop asking the game server when the game is not running. Separate from the HUD hide. |
+| `game_keys.fps_display` | `false` | Press the game's FPS key after the window appears. Tray **FPS display on launch**. |
+| `game_keys.dismiss_launcher` | `false` | Press Play on the configuration dialog. Tray **Skip the launcher**. Off when you need the Input tab. |
 
 Hotkeys, tray, poll intervals, and the rest of the file are in the example TOML.
 See [How to use](usage.md) for the default keys.

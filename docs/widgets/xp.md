@@ -2,6 +2,8 @@
 
 `[widget.xp]`. Experience per hour, averaged over a sliding window.
 
+![XP/hr](../images/xp.png)
+
 The default window is one minute (`window = 60`). XP arrives in lumps. A
 window short enough to hold no kill reads as zero. The rate stays blank until
 `min_samples` polls have landed (default 3).
