@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::config::{Config, parse_color};
+use crate::config::{Anchor, Config, parse_color};
 use crate::overlay::layout::{Transform, Viewport};
 
 const PT_TO_PX: f32 = 4.0 / 3.0;
@@ -150,21 +150,21 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
     if !view.status.is_empty() {
         // The config banner arrives pre-wrapped; every other status is one line.
         let rows: Vec<&str> = view.status.lines().collect();
-        push_text_group(
-            &mut scene,
-            xf,
-            LineLayout {
-                at: cfg.hud.place(
-                    cfg.widget.status.anchor,
-                    cfg.widget.status.x,
-                    cfg.widget.status.y,
-                ),
-                font_px: font_px(cfg, cfg.widget.status.font_size, xf),
-                default_color: view.status_color.unwrap_or(hud_color),
-                hud_a,
-            },
-            &rows,
-        );
+        let layout = LineLayout {
+            at: cfg.hud.place(
+                cfg.widget.status.anchor,
+                cfg.widget.status.x,
+                cfg.widget.status.y,
+            ),
+            font_px: font_px(cfg, cfg.widget.status.font_size, xf),
+            default_color: view.status_color.unwrap_or(hud_color),
+            hud_a,
+        };
+        if cfg.widget.status.anchor == Anchor::Center {
+            push_centered_rows(&mut scene, xf, layout, &rows);
+        } else {
+            push_text_group(&mut scene, xf, layout, &rows);
+        }
     }
 
     if cfg.widget.session.enabled && !view.clock.is_empty() {
@@ -324,6 +324,33 @@ fn push_text_group(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &
         })
         .collect();
     push_lines(scene, xf, layout, &lines);
+}
+
+/// The banner shape: every row centered on the anchor x, whatever its length.
+fn push_centered_rows(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[&str]) {
+    let LineLayout {
+        at: [ax, ay],
+        font_px,
+        default_color,
+        hud_a,
+    } = layout;
+    let (cx, mut y) = xf.point(ax as f32, ay as f32);
+    let mut color = default_color;
+    color[3] *= hud_a;
+    for row in rows {
+        scene.texts.push(Text {
+            x: cx - mono_advance(row, font_px) / 2.0,
+            y,
+            color,
+            text: (*row).to_string(),
+            font_px,
+            outline: true,
+            outline_color: None,
+            lcd: true,
+            center_h: None,
+        });
+        y += font_px * LINE_HEIGHT;
+    }
 }
 
 fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line]) {
@@ -879,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn wrapped_status_draws_one_row_per_line() {
+    fn wrapped_status_rows_center_on_the_midline() {
         let mut view = dummy_view();
         view.status = "config: TOML parse error at line 12, column 19\nexpected i64".into();
         let scene = build(&view, &Config::default(), vp_1440());
@@ -893,7 +920,14 @@ mod tests {
             .iter()
             .find(|t| t.text == "expected i64")
             .expect("banner tail");
-        assert_eq!(head.x, tail.x);
+        let mid = |t: &Text| t.x + mono_advance(&t.text, t.font_px) / 2.0;
+        assert!(
+            (mid(head) - 1280.0).abs() < 0.5,
+            "banner mid = {}, want the 2560-wide midline",
+            mid(head)
+        );
+        assert!((mid(head) - mid(tail)).abs() < 0.5, "rows share a center");
+        assert!(head.x < tail.x, "the longer row starts further left");
         assert!(tail.y > head.y, "second row sits below the first");
     }
 
