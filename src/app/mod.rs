@@ -55,7 +55,6 @@ pub struct Handle {
     last_run_start: Mutex<Option<DateTime<Utc>>>,
     presence: Option<Arc<presence::Control>>,
     pub gamekeys: Arc<crate::game::gamekeys::Keys>,
-    config_err: Mutex<Option<String>>,
 }
 
 impl Handle {
@@ -140,15 +139,16 @@ impl Handle {
     }
 
     pub fn config_error(&self) -> Option<String> {
-        self.config_err.lock().unwrap().clone()
+        self.store.config_error()
     }
 
     pub fn set_config_error(&self, err: impl Into<String>) {
-        *self.config_err.lock().unwrap() = Some(err.into());
+        self.store.set_config_error(err.into());
+        self.wake_ui();
     }
 
     pub fn clear_config_error(&self) {
-        *self.config_err.lock().unwrap() = None;
+        self.store.set_config_error(String::new());
     }
 
     pub fn note_config_watch(&self, watch: &crate::config::Watch, reloaded: bool) {
@@ -483,7 +483,6 @@ pub fn start_with(
         last_run_start: Mutex::new(last_run_start),
         presence: presence.clone(),
         gamekeys: gamekeys.clone(),
-        config_err: Mutex::new(None),
     });
 
     {

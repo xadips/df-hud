@@ -192,6 +192,7 @@ struct Inner {
     board: Vec<Challenge>,
     have_board: bool,
     board_status: String,
+    config_error: String,
     xp_samples: Option<Arc<dyn Fn() -> Vec<XpSample> + Send + Sync>>,
     xp_min_samples: i32,
     missed_ticks: i32,
@@ -238,6 +239,7 @@ impl Store {
                 board: Vec::new(),
                 have_board: false,
                 board_status: String::new(),
+                config_error: String::new(),
                 xp_samples: None,
                 xp_min_samples: 3,
                 missed_ticks: 0,
@@ -399,6 +401,16 @@ impl Store {
 
     pub fn set_challenge_status(&self, reason: String) {
         self.inner.lock().unwrap().board_status = reason;
+    }
+
+    /// Empty clears it. Kept whole for the tray; the HUD line clips.
+    pub fn set_config_error(&self, err: String) {
+        self.inner.lock().unwrap().config_error = err;
+    }
+
+    pub fn config_error(&self) -> Option<String> {
+        let s = self.inner.lock().unwrap();
+        (!s.config_error.is_empty()).then(|| s.config_error.clone())
     }
 
     pub fn set_boss_map(&self, m: BossMap) {
@@ -625,7 +637,12 @@ impl Store {
 }
 
 fn status_locked(s: &Inner) -> (String, bool) {
-    if s.poller.stale {
+    // A failed reload leaves the HUD looking healthy on the old settings, and
+    // the person watching it just saved the file. First line only; it clips.
+    if !s.config_error.is_empty() {
+        let first = s.config_error.lines().next().unwrap_or_default();
+        (format!("config: {first}"), true)
+    } else if s.poller.stale {
         (
             "session expired - open any Dead Frontier page to refresh".into(),
             true,
@@ -1061,6 +1078,22 @@ mod tests {
         let v = s.derive(now);
         assert!(v.status.contains("session expired"));
         assert!(v.status_is_fix);
+    }
+
+    #[test]
+    fn config_error_outranks_everything_and_clips_to_one_line() {
+        let now = Utc::now();
+        let s = Store::new(None);
+        s.set_poller_status(PollerStatus {
+            stale: true,
+            ..PollerStatus::default()
+        });
+        s.set_config_error("expected newline, found an identifier\n  |\n12 | x".into());
+        let v = s.derive(now);
+        assert_eq!(v.status, "config: expected newline, found an identifier");
+        assert!(v.status_is_fix, "editing the file again is the fix");
+        s.set_config_error(String::new());
+        assert!(s.derive(now).status.contains("session expired"));
     }
 
     #[test]
