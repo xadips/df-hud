@@ -20,36 +20,38 @@ pub struct Credentials {
     pub sc: String,
 }
 
+/// Split by what the caller does: `Stale` pauses the pollers until the bridge
+/// delivers a fresh session, everything else is retried with backoff.
 #[derive(Debug)]
-pub struct StatusError {
-    pub status: String,
+pub enum Error {
+    /// `status=value_mismatch` or `missing_value`: the credentials are dead
+    /// and retrying them invites rate limiting.
+    Stale { status: String },
+    /// Transport, HTTP, HTML, other `status=` refusals. Worded for the log.
+    Other(String),
 }
 
-impl std::fmt::Display for StatusError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "df: server returned status={}", self.status)
+impl Error {
+    pub fn stale(&self) -> bool {
+        matches!(self, Error::Stale { .. })
     }
 }
 
-impl std::error::Error for StatusError {}
-
-#[derive(Debug)]
-pub struct StaleCredentials;
-
-impl std::fmt::Display for StaleCredentials {
+impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "df: credentials rejected (sc likely stale)")
+        match self {
+            Error::Stale { status } => {
+                write!(
+                    f,
+                    "df: credentials rejected (sc likely stale, status={status})"
+                )
+            }
+            Error::Other(msg) => write!(f, "df: {msg}"),
+        }
     }
 }
 
-impl std::error::Error for StaleCredentials {}
-
-pub fn is_stale(err: &dyn std::error::Error) -> bool {
-    let msg = err.to_string();
-    msg.contains("credentials rejected")
-        || msg.contains("value_mismatch")
-        || msg.contains("missing_value")
-}
+impl std::error::Error for Error {}
 
 pub type Vars = HashMap<String, String>;
 
@@ -96,15 +98,15 @@ pub fn signed_body(salt: &str, params: &[Param]) -> String {
     format!("hash={}&{}", hash_body(salt, &body), body)
 }
 
-pub fn parse_flash(body: &str) -> Result<Vars, Box<dyn std::error::Error>> {
+pub fn parse_flash(body: &str) -> Result<Vars, Error> {
     if let Some(rest) = body.strip_prefix("status=") {
         let status = rest.split('&').next().unwrap_or(rest);
         if status == "value_mismatch" || status == "missing_value" {
-            return Err(format!("{StaleCredentials} (status={status})").into());
+            return Err(Error::Stale {
+                status: status.to_string(),
+            });
         }
-        return Err(Box::new(StatusError {
-            status: status.to_string(),
-        }));
+        return Err(Error::Other(format!("server returned status={status}")));
     }
     let mut out = Vars::new();
     for seg in body.split('&') {
@@ -113,7 +115,7 @@ pub fn parse_flash(body: &str) -> Result<Vars, Box<dyn std::error::Error>> {
         }
     }
     if out.is_empty() {
-        return Err("df: response contained no key=value pairs".into());
+        return Err(Error::Other("response contained no key=value pairs".into()));
     }
     Ok(out)
 }
@@ -212,19 +214,18 @@ impl Client {
         params: &[Param],
         hashed: bool,
         salt: &str,
-    ) -> Result<Vars, Box<dyn std::error::Error>> {
+    ) -> Result<Vars, Error> {
         if !allowed(endpoint) {
-            return Err(format!(
-                "df: endpoint {endpoint:?} is not on the allowlist (never callable: {})",
+            return Err(Error::Other(format!(
+                "endpoint {endpoint:?} is not on the allowlist (never callable: {})",
                 FORBIDDEN.join(", ")
-            )
-            .into());
+            )));
         }
         if hashed && salt.is_empty() {
-            return Err(
-                "df: hashed call needs a signing salt (set df.skeygen or let the bridge report it)"
+            return Err(Error::Other(
+                "hashed call needs a signing salt (set df.skeygen or let the bridge report it)"
                     .into(),
-            );
+            ));
         }
         let mut body = encode_params(params);
         if hashed {
@@ -239,7 +240,9 @@ impl Client {
         if !self.cookie.is_empty() {
             req = req.header("Cookie", &self.cookie);
         }
-        let resp = req.send(&body)?;
+        let resp = req
+            .send(&body)
+            .map_err(|e| Error::Other(format!("{endpoint}: {e}")))?;
         self.read_flash(resp, endpoint)
     }
 
@@ -247,27 +250,30 @@ impl Client {
         &self,
         resp: ureq::http::Response<ureq::Body>,
         call: &str,
-    ) -> Result<Vars, Box<dyn std::error::Error>> {
+    ) -> Result<Vars, Error> {
         if resp.status() != 200 {
-            return Err(format!("df: {call}: HTTP {}", resp.status()).into());
+            return Err(Error::Other(format!("{call}: HTTP {}", resp.status())));
         }
         let mut raw = Vec::new();
         resp.into_body()
             .into_reader()
             .take(self.max_body)
-            .read_to_end(&mut raw)?;
+            .read_to_end(&mut raw)
+            .map_err(|e| Error::Other(format!("{call}: {e}")))?;
         let text = String::from_utf8_lossy(&raw).into_owned();
         if looks_like_html(&text) {
-            return Err(format!(
-                "df: {call}: got an HTML page instead of data{}",
+            return Err(Error::Other(format!(
+                "{call}: got an HTML page instead of data{}",
                 describe_html(&text)
-            )
-            .into());
+            )));
         }
-        parse_flash(&text).map_err(|e| format!("df: {call}: {e}").into())
+        parse_flash(&text).map_err(|err| match err {
+            Error::Other(msg) => Error::Other(format!("{call}: {msg}")),
+            stale => stale,
+        })
     }
 
-    pub fn get_values(&self, cr: &Credentials) -> Result<Vars, Box<dyn std::error::Error>> {
+    pub fn get_values(&self, cr: &Credentials) -> Result<Vars, Error> {
         if !self.public_failed.load(Ordering::SeqCst) {
             match self.fetch_public(&cr.user_id) {
                 Ok(vars) if record_looks_real(&vars) => return Ok(vars),
@@ -305,35 +311,31 @@ impl Client {
     /// is no authenticated call to fall back to here, so a failure is just a
     /// failure and the next poll should try again. An empty record is an error
     /// rather than a blank HUD, since the usual cause is a wrong `df.user_id`.
-    pub fn get_values_public(&self, user_id: &str) -> Result<Vars, Box<dyn std::error::Error>> {
+    pub fn get_values_public(&self, user_id: &str) -> Result<Vars, Error> {
         let vars = self.fetch_public(user_id)?;
         if !record_looks_real(&vars) {
-            return Err(format!(
-                "df: {GET_VALUES}: no public record for user id {user_id:?}; check df.user_id"
-            )
-            .into());
+            return Err(Error::Other(format!(
+                "{GET_VALUES}: no public record for user id {user_id:?}; check df.user_id"
+            )));
         }
         Ok(vars)
     }
 
-    fn fetch_public(&self, user_id: &str) -> Result<Vars, Box<dyn std::error::Error>> {
+    fn fetch_public(&self, user_id: &str) -> Result<Vars, Error> {
         if !numeric_id(user_id) {
-            return Err(format!("{user_id:?} is not a user id").into());
+            return Err(Error::Other(format!("{user_id:?} is not a user id")));
         }
         let url = format!("{}/{GET_VALUES}.php?userID={user_id}", self.base_url);
         let resp = self
             .agent
             .get(&url)
             .header("User-Agent", &self.user_agent)
-            .call()?;
+            .call()
+            .map_err(|e| Error::Other(format!("{GET_VALUES}: {e}")))?;
         self.read_flash(resp, GET_VALUES)
     }
 
-    pub fn load_challenge(
-        &self,
-        cr: &Credentials,
-        salt: &str,
-    ) -> Result<Vars, Box<dyn std::error::Error>> {
+    pub fn load_challenge(&self, cr: &Credentials, salt: &str) -> Result<Vars, Error> {
         self.call(
             LOAD_CHALLENGE,
             &[
@@ -452,15 +454,13 @@ mod tests {
         assert!(parse_flash("").is_err());
 
         let err = parse_flash("status=no_results&foo=bar").unwrap_err();
-        let se = err.downcast_ref::<StatusError>().unwrap();
-        assert_eq!(se.status, "no_results");
+        assert!(!err.stale());
+        assert!(err.to_string().contains("status=no_results"), "{err}");
 
         for s in ["value_mismatch", "missing_value"] {
             let err = parse_flash(&format!("status={s}")).unwrap_err();
-            assert!(
-                err.to_string().contains("stale") || err.to_string().contains("rejected"),
-                "{err}"
-            );
+            assert!(err.stale(), "{err}");
+            assert!(err.to_string().contains("rejected"), "{err}");
         }
     }
 

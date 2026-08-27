@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::data::challenges;
 use crate::model::{PollerStatus, Tick};
 use crate::net::creds::Store as Creds;
-use crate::net::dfclient::{self, Client};
+use crate::net::dfclient::Client;
 use crate::wake::Notify;
 
 pub const MIN_REQUEST_GAP: Duration = Duration::from_secs(1);
@@ -294,6 +294,8 @@ impl PlayerPoller {
                 Identity::PublicId(id) => client.get_values_public(id),
             }
         };
+        // Read before the error is flattened into Tick.err for display.
+        let stale = matches!(&result, Err(err) if err.stale());
         let tick = match result {
             Ok(vars) => Tick {
                 at: Utc::now(),
@@ -316,10 +318,7 @@ impl PlayerPoller {
                     st.last_error.clear();
                     st.last_success = Some(tick.at);
                 }
-                Some(err)
-                    if dfclient::is_stale(&DummyErr(err.clone()))
-                        || err.contains("credentials rejected") =>
-                {
+                Some(err) if stale => {
                     st.stale = true;
                     self.session_stale.store(true, Ordering::SeqCst);
                     st.last_error.clone_from(err);
@@ -411,11 +410,8 @@ impl Schedule for PlayerPoller {
         if self.stop.load(Ordering::SeqCst) {
             return Outcome::Stop;
         }
-        if tick
-            .err
-            .as_deref()
-            .is_some_and(|e| e.contains("credentials rejected"))
-        {
+        // poll never runs while paused, so a set latch means this poll set it.
+        if self.status().stale {
             Outcome::Stale
         } else if tick.err.is_some() {
             Outcome::Err
@@ -433,19 +429,6 @@ impl Schedule for PlayerPoller {
         self.backoff(self.status().failures)
     }
 }
-
-struct DummyErr(String);
-impl std::fmt::Display for DummyErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-impl std::fmt::Debug for DummyErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-impl std::error::Error for DummyErr {}
 
 pub struct ChallengePoller {
     client: Arc<Mutex<Client>>,
@@ -559,9 +542,7 @@ impl ChallengePoller {
         let vars = {
             let mut client = self.client.lock().unwrap();
             client.cookie.clone_from(&cr.cookie);
-            client
-                .load_challenge(&cr.to_df(), &salt)
-                .map_err(|e| e.to_string())
+            client.load_challenge(&cr.to_df(), &salt)
         };
         match vars {
             Ok(vars) => {
@@ -577,7 +558,7 @@ impl ChallengePoller {
                 Ok(())
             }
             Err(err) => {
-                if err.contains("credentials rejected") {
+                if err.stale() {
                     self.stale.store(true, Ordering::SeqCst);
                     self.session_stale.store(true, Ordering::SeqCst);
                 } else {
@@ -585,10 +566,10 @@ impl ChallengePoller {
                     self.store.set_challenge_status(BOARD_RETRY.into());
                 }
                 let n = *self.failures.lock().unwrap();
-                if n == 1 || n % 10 == 0 || err.contains("credentials rejected") {
+                if n == 1 || n % 10 == 0 || err.stale() {
                     eprintln!("challenges: {err}");
                 }
-                Err(err)
+                Err(err.to_string())
             }
         }
     }
@@ -641,7 +622,8 @@ impl Schedule for ChallengePoller {
 
     fn poll(&self) -> Outcome {
         match self.poll_once() {
-            Err(err) if err.contains("credentials rejected") => Outcome::Stale,
+            // poll never runs while paused, so a set latch means this poll set it.
+            Err(_) if self.stale.load(Ordering::SeqCst) => Outcome::Stale,
             Err(_) => Outcome::Err,
             Ok(()) => Outcome::Ok,
         }
@@ -910,6 +892,30 @@ mod tests {
             !err.contains("credentials rejected"),
             "HTML is not a credential problem: {err}"
         );
+        assert!(!p.status().stale, "HTML must not latch the stale flag");
+    }
+
+    /// status=value_mismatch must latch the stale flag, whatever the message says.
+    #[test]
+    fn a_rejected_session_stops_the_player_poller() {
+        let (base, _) = spawn_df(|_| (200, "status=value_mismatch".into()));
+        let (p, _stop, _) = test_poller(&base);
+        let tick = p.poll_once(false);
+        assert!(tick.err.is_some());
+        assert!(p.status().stale);
+        let reason = p.pause_reason().expect("paused");
+        assert!(reason.contains("rejected"), "{reason}");
+    }
+
+    #[test]
+    fn a_rejected_session_pauses_the_challenge_board() {
+        let (base, _) = spawn_df(|_| (200, "status=missing_value".into()));
+        let (p, _, _) = test_challenge_poller(Arc::new(AtomicBool::new(false)));
+        p.replace_client(Client::new(&base, "df-hud-test"));
+        assert!(p.pause_reason().is_none(), "not stale before the poll");
+        assert!(p.poll_once().is_err());
+        let reason = p.pause_reason().expect("paused");
+        assert!(reason.contains("session expired"), "{reason}");
     }
 
     #[test]
