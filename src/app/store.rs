@@ -631,17 +631,18 @@ impl Store {
             hint.xp_available = rate.available;
             hint.xp_per_hour = rate.per_hour;
         }
-        hint.status = status_locked(&s).0;
+        // The tray shows one line; only the config banner ever wraps.
+        hint.status = status_locked(&s).0.replace('\n', " ");
         hint
     }
 }
 
 fn status_locked(s: &Inner) -> (String, bool) {
     // A failed reload leaves the HUD looking healthy on the old settings, and
-    // the person watching it just saved the file. First line only; it clips.
+    // the person watching it just saved the file. Red: it is an error, not a
+    // session prompt.
     if !s.config_error.is_empty() {
-        let first = s.config_error.lines().next().unwrap_or_default();
-        (format!("config: {first}"), true)
+        (config_banner(&s.config_error), false)
     } else if s.poller.stale {
         (
             "session expired - open any Dead Frontier page to refresh".into(),
@@ -661,6 +662,57 @@ fn status_locked(s: &Inner) -> (String, bool) {
     } else {
         (String::new(), false)
     }
+}
+
+/// `config: <prose>` wrapped to at most three status lines. The stored text
+/// keeps the path and the toml snippet for the tray and the log; the banner
+/// drops both and keeps the position header and the message.
+fn config_banner(err: &str) -> String {
+    let mut flat = String::new();
+    for line in err.lines() {
+        let t = line.trim();
+        if t.is_empty() || snippet_art(t) {
+            continue;
+        }
+        if !flat.is_empty() {
+            flat.push(' ');
+        }
+        flat.push_str(t);
+    }
+    let flat = flat
+        .split_once(".toml: ")
+        .map_or(flat.as_str(), |(_, rest)| rest);
+    wrap(&format!("config: {flat}"), 64, 3)
+}
+
+/// The `|` gutter rows the toml crate draws around the offending line.
+fn snippet_art(t: &str) -> bool {
+    t.trim_start_matches(|c: char| c.is_ascii_digit())
+        .trim_start()
+        .starts_with('|')
+}
+
+/// Greedy word wrap; the last permitted line gets `…` when text is dropped.
+fn wrap(text: &str, width: usize, max_lines: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        match lines.last_mut() {
+            Some(cur) if cur.len() + 1 + word.len() <= width => {
+                cur.push(' ');
+                cur.push_str(word);
+            }
+            _ => {
+                if lines.len() == max_lines {
+                    if let Some(cur) = lines.last_mut() {
+                        cur.push('…');
+                    }
+                    break;
+                }
+                lines.push(word.to_string());
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 fn apply_rate(v: &mut View, rate: XpRate) {
@@ -1081,19 +1133,48 @@ mod tests {
     }
 
     #[test]
-    fn config_error_outranks_everything_and_clips_to_one_line() {
+    fn config_error_outranks_everything_and_drops_path_and_snippet() {
         let now = Utc::now();
         let s = Store::new(None);
         s.set_poller_status(PollerStatus {
             stale: true,
             ..PollerStatus::default()
         });
-        s.set_config_error("expected newline, found an identifier\n  |\n12 | x".into());
+        s.set_config_error(
+            "/home/me/.config/df-hud/config.toml: TOML parse error at line 12, column 19\n   |\n12 | active_interval = \"fast\"\n   |                   ^^^^^^\ninvalid type: string \"fast\", expected i64\n".into(),
+        );
         let v = s.derive(now);
-        assert_eq!(v.status, "config: expected newline, found an identifier");
-        assert!(v.status_is_fix, "editing the file again is the fix");
+        assert!(
+            v.status
+                .starts_with("config: TOML parse error at line 12, column 19"),
+            "{}",
+            v.status
+        );
+        assert!(v.status.contains("expected i64"), "{}", v.status);
+        assert!(
+            !v.status.contains('|'),
+            "snippet art on the HUD: {}",
+            v.status
+        );
+        assert!(!v.status.contains("/home/"), "the path wastes banner width");
+        assert!(v.status.lines().count() <= 3);
+        assert!(!v.status_is_fix, "red - it is an error");
+        assert!(
+            !s.tray_hint(now).status.contains('\n'),
+            "tray gets one line"
+        );
         s.set_config_error(String::new());
         assert!(s.derive(now).status.contains("session expired"));
+    }
+
+    #[test]
+    fn config_banner_wraps_to_three_lines_and_marks_the_cut() {
+        let long = "x".repeat(40);
+        let banner = config_banner(&format!("a {long} b {long} c {long} d {long}"));
+        assert_eq!(banner.lines().count(), 3);
+        assert!(banner.ends_with('…'), "{banner}");
+        assert!(banner.lines().all(|l| l.len() <= 64 + '…'.len_utf8()));
+        assert_eq!(config_banner("one bad key"), "config: one bad key");
     }
 
     #[test]
