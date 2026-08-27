@@ -139,10 +139,6 @@ impl Inner {
                 }
             }
         }
-        if let Some(reason) = deny_cross_origin(&host, &origin) {
-            let _ = write_http(&mut stream, 403, "text/plain", reason.as_bytes());
-            return;
-        }
         if content_len > MAX_BODY {
             let _ = write_http(&mut stream, 413, "text/plain", b"payload too large");
             return;
@@ -150,6 +146,12 @@ impl Inner {
         let mut body = vec![0u8; content_len];
         if content_len > 0 && reader.read_exact(&mut body).is_err() {
             let _ = write_http(&mut stream, 400, "text/plain", b"truncated body");
+            return;
+        }
+        // Refused only after draining the body: a close mid-upload turns into
+        // a TCP reset and the sender never sees the 403.
+        if let Some(reason) = deny_cross_origin(&host, &origin) {
+            let _ = write_http(&mut stream, 403, "text/plain", reason.as_bytes());
             return;
         }
         let (status, ctype, payload) = self.handle(&method, &path, &content_type, &body);
