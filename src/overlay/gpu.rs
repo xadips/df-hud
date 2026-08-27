@@ -493,3 +493,82 @@ unsafe fn compile(gl: &Glow, kind: u32, src: String) -> Result<glow::Shader, Box
         Ok(shader)
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::overlay::egl::Egl;
+    use crate::overlay::layout::Viewport;
+    use crate::overlay::{dummy, scene};
+
+    /// One frame through the real stack: EGL context, shader compile, glyph
+    /// atlas, draw, readback. Mesa's surfaceless platform needs no compositor
+    /// (llvmpipe on CI). Skips where that platform is missing, unless
+    /// DF_HUD_REQUIRE_RENDER_TEST says a skip is a failure (set on CI).
+    #[test]
+    fn renders_a_dummy_frame_headless() {
+        let skip = |why: &str| {
+            assert!(
+                std::env::var_os("DF_HUD_REQUIRE_RENDER_TEST").is_none(),
+                "render test is required here but got skipped: {why}"
+            );
+            eprintln!("render smoke: skipped: {why}");
+        };
+        let egl = match Egl::load() {
+            Ok(egl) => egl,
+            Err(err) => return skip(&err.to_string()),
+        };
+        let display = match egl.get_surfaceless_display() {
+            Ok(display) => display,
+            Err(err) => return skip(&err.to_string()),
+        };
+        if let Err(err) = egl.initialize(display) {
+            return skip(&err.to_string());
+        }
+
+        // From here on everything is expected to work: failures are bugs.
+        egl.bind_es().unwrap();
+        let config = egl.choose_es3_pbuffer_config(display).unwrap();
+        let (w, h) = (320, 180);
+        let surface = egl.create_pbuffer_surface(display, config, w, h).unwrap();
+        let ctx = egl.create_es3_context(display, config).unwrap();
+        egl.make_current(display, surface, surface, ctx).unwrap();
+        let gl = unsafe { Glow::from_loader_function(|name| egl.get_proc_address(name)) };
+
+        let mut gpu = Gpu::new(gl, w, h, "").unwrap();
+        let view = dummy::view("12:00:00");
+        let built = scene::build(
+            &view,
+            &Config::default(),
+            Viewport {
+                width: w as f32,
+                height: h as f32,
+            },
+        );
+        assert!(!built.texts.is_empty(), "the dummy view must draw text");
+        gpu.draw(w, h, w, h, &built).unwrap();
+
+        let mut px = vec![0u8; (w * h * 4) as usize];
+        unsafe {
+            gpu.gl.read_pixels(
+                0,
+                0,
+                w,
+                h,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut px)),
+            );
+        }
+        assert!(
+            px.iter().any(|&b| b != 0),
+            "the frame stayed transparent black"
+        );
+
+        egl.unbind(display);
+        egl.destroy_surface(display, surface);
+        egl.destroy_context(display, ctx);
+        egl.terminate(display);
+    }
+}
