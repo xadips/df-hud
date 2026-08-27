@@ -27,9 +27,6 @@ pub enum MarkCategory {
 
 #[derive(Clone, Debug, Default)]
 pub struct BossMap {
-    /// Parse time. Overlay does not draw map age yet.
-    #[allow(dead_code)]
-    pub fetched_at: DateTime<Utc>,
     pub server_time: DateTime<Utc>,
     pub hash: String,
     pub events: Vec<CityEvent>,
@@ -87,15 +84,6 @@ impl BossMap {
             .filter(|e| pred(e))
             .cloned()
             .collect()
-    }
-
-    #[allow(dead_code)]
-    pub fn age(&self, now: DateTime<Utc>) -> Duration {
-        if now > self.fetched_at {
-            (now - self.fetched_at).to_std().unwrap_or(Duration::ZERO)
-        } else {
-            Duration::ZERO
-        }
     }
 
     pub fn active_marks(&self, now: DateTime<Utc>, from: [i32; 2], dist: &[i32]) -> Vec<CityMark> {
@@ -180,12 +168,7 @@ pub fn nearest_mark(marks: &[CityMark]) -> Option<CityMark> {
         .cloned()
 }
 
-pub fn fetch(
-    url: &str,
-    user_agent: &str,
-    timeout: Duration,
-    now: DateTime<Utc>,
-) -> Result<BossMap, String> {
+pub fn fetch(url: &str, user_agent: &str, timeout: Duration) -> Result<BossMap, String> {
     let body = crate::net::http::get_bytes(
         url,
         user_agent,
@@ -197,18 +180,15 @@ pub fn fetch(
         ],
     )
     .map_err(|e| format!("bossmap: {e}"))?;
-    parse(&body, now)
+    parse(&body)
 }
 
-pub fn parse(data: &[u8], fetched_at: DateTime<Utc>) -> Result<BossMap, String> {
+pub fn parse(data: &[u8]) -> Result<BossMap, String> {
     let v: Value = serde_json::from_slice(data).map_err(|e| e.to_string())?;
     let obj = v
         .as_object()
         .ok_or_else(|| "bossmap: expected object".to_string())?;
-    let mut out = BossMap {
-        fetched_at,
-        ..BossMap::default()
-    };
+    let mut out = BossMap::default();
     if let Some(h) = obj.get("bosshash").and_then(|v| v.as_str()) {
         out.hash = h.to_string();
     }
@@ -554,7 +534,7 @@ mod tests {
         let v: Value = serde_json::from_slice(&raw).unwrap();
         let t = v.get("servertime").and_then(|x| x.as_i64()).unwrap();
         let now = DateTime::from_timestamp(t, 0).unwrap();
-        (parse(&raw, now).unwrap(), now)
+        (parse(&raw).unwrap(), now)
     }
 
     #[test]
@@ -566,7 +546,7 @@ mod tests {
 	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"17",
 	       "event_type":"","dfp_objectives":[],"start_time":"900","end_time":"5000"},
 	  "bosshash":"abc","servertime":1000,"version":"1"}"#;
-        let m = parse(raw, now).unwrap();
+        let m = parse(raw).unwrap();
         let events = m.at(1055, 985, now);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].enemies[0], "1 x Titan");
@@ -584,7 +564,7 @@ mod tests {
 	       "event_type":"mission","dfp_objectives":{"loot":"Find O'Connell's arms","loot_amount":"2","area_highlight":"1053_985"},
 	       "start_time":"900","end_time":"5000"},
 	  "bosshash":"abc","servertime":1000,"version":"1"}"#;
-        let m = parse(raw, now).unwrap();
+        let m = parse(raw).unwrap();
         assert_eq!(m.events[0].kind, CityEventKind::Mission);
         assert_eq!(m.events[0].title, "Disarmed");
         assert!(
@@ -607,7 +587,7 @@ mod tests {
 	       "event_type":"mission","dfp_objectives":{"kill":"Eliminate the Flaming Titans","kill_amount":"3","area_highlight":"1029_1006"},
 	       "start_time":"900","end_time":"5000"},
 	  "bosshash":"abc","servertime":1000,"version":"1"}"#;
-        let m = parse(named, now).unwrap();
+        let m = parse(named).unwrap();
         assert_eq!(m.events[0].title, "Red Inferno");
         assert_eq!(m.events[0].enemies, ["3 x Flaming Titan"]);
         assert_eq!(m.events[0].objectives, ["Eliminate the Flaming Titans (3)"]);
@@ -785,8 +765,8 @@ mod tests {
         DateTime::from_timestamp(secs, 0).unwrap()
     }
 
-    fn parse_at(raw: &str, now: DateTime<Utc>) -> BossMap {
-        parse(raw.as_bytes(), now).unwrap()
+    fn parse_str(raw: &str) -> BossMap {
+        parse(raw.as_bytes()).unwrap()
     }
 
     #[test]
@@ -801,7 +781,7 @@ mod tests {
 	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"2",
 	       "event_type":"","dfp_objectives":[],"start_time":"101","end_time":"200"},
 	  "bosshash":"abc","servertime":250,"version":"1"}"#;
-        let m = parse_at(raw, unix(250));
+        let m = parse_str(raw);
         let got = m.at_ended(1000, 1000, unix(250));
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].enemies[0], "1 x Titan");
@@ -819,7 +799,7 @@ mod tests {
 	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"2",
 	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"200"},
 	  "bosshash":"abc","servertime":250,"version":"1"}"#;
-        let m = parse_at(raw, unix(250));
+        let m = parse_str(raw);
         assert_eq!(m.at_ended(1000, 1000, unix(250)).len(), 2);
     }
 
@@ -836,7 +816,7 @@ mod tests {
 	       "event_type":"","dfp_objectives":[],"start_time":"400","end_time":"700"},
 	  "bosshash":"abc","servertime":100,"version":"1"}"#;
         let now = unix(100);
-        let m = parse_at(raw, now);
+        let m = parse_str(raw);
         let got = m.at_upcoming(1000, 1000, now);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].enemies[0], "1 x Titan");
@@ -852,7 +832,7 @@ mod tests {
 	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"1",
 	       "event_type":"","dfp_objectives":[],"start_time":"1","end_time":"200"},
 	  "bosshash":"abc","servertime":100,"version":"1"}"#;
-        let m = parse_at(raw, unix(100));
+        let m = parse_str(raw);
         assert_eq!(m.block_boundary(1000, 1000, unix(100)), Some(unix(200)));
         assert_eq!(m.block_boundary(2000, 2000, unix(100)), None);
     }
@@ -869,7 +849,7 @@ mod tests {
 	       "special_enemy_type":"3 x Eldritch Horror","special_enemy_amount":"3","boss_num":"17",
 	       "event_type":"","dfp_objectives":[],"start_time":"1300","end_time":"1600"},
 	  "bosshash":"abc","servertime":1147,"version":"1"}"#;
-        let m = parse_at(raw, unix(1200));
+        let m = parse_str(raw);
         let names = |events: Vec<CityEvent>| {
             events
                 .into_iter()

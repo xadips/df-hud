@@ -843,7 +843,7 @@ fn bossmap_loop(
         if gate.wait(&stop, &shutdown).is_err() {
             return;
         }
-        match bossmap::fetch(&c.bossmap.url, &c.df.user_agent, c.df.timeout.0, Utc::now()) {
+        match bossmap::fetch(&c.bossmap.url, &c.df.user_agent, c.df.timeout.0) {
             Ok(m) => {
                 store.set_boss_map(m);
                 wake.ping();

@@ -1212,7 +1212,7 @@ mod tests {
 	       "special_enemy_type":"1 x Titan","special_enemy_amount":"1","boss_num":"17",
 	       "event_type":"","dfp_objectives":[],"start_time":"900","end_time":"5000"},
 	  "bosshash":"abc","servertime":1000,"version":"1"}"#;
-        s.set_boss_map(bossmap::parse(raw, now).unwrap());
+        s.set_boss_map(bossmap::parse(raw).unwrap());
         polled_position(&s, now);
         assert!(
             s.derive(now).block_events.is_none()
@@ -1481,7 +1481,7 @@ mod tests {
 	       "special_enemy_type":"0","special_enemy_amount":"0","boss_num":"0",
 	       "event_type":"","dfp_objectives":[],"start_time":"900","end_time":"5000"},
 	  "bosshash":"abc","servertime":1000,"version":"1"}"#;
-        s.set_boss_map(bossmap::parse(raw, now).unwrap());
+        s.set_boss_map(bossmap::parse(raw).unwrap());
         s.set_challenges(vec![Challenge {
             name: "Travel".into(),
             ..Challenge::default()
@@ -1513,7 +1513,7 @@ mod tests {
         assert!(view.challenges.is_none());
         assert_eq!(view.challenge_status, "retrying");
         s.set_boss_map(
-            bossmap::parse(br#"{"bosshash":"x","servertime":1000,"version":"1"}"#, now).unwrap(),
+            bossmap::parse(br#"{"bosshash":"x","servertime":1000,"version":"1"}"#).unwrap(),
         );
         s.clear_boss_map();
         assert!(!s.derive(now).outpost_attack);
