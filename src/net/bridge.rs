@@ -1,4 +1,10 @@
 //! Loopback HTTP/1.1 bridge. Request bodies are never logged.
+//!
+//! Loopback does not stop browsers: any webpage can POST here with a
+//! preflight-free request shape, and DNS rebinding makes responses readable.
+//! Both arrive with a web Origin or a non-loopback Host; no legitimate
+//! client sends either (GM.xmlHttpRequest sends no Origin or an
+//! extension-scheme one).
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -105,6 +111,8 @@ impl Inner {
         let path = parts.next().unwrap_or("").to_string();
         let mut content_len = 0usize;
         let mut content_type = String::new();
+        let mut host = String::new();
+        let mut origin = String::new();
         loop {
             let mut line = String::new();
             match reader.read_line(&mut line) {
@@ -120,10 +128,20 @@ impl Inner {
                 if key == "content-length" {
                     content_len = val.parse().unwrap_or(0);
                 }
+                if key == "host" {
+                    host = val.clone();
+                }
+                if key == "origin" {
+                    origin = val.clone();
+                }
                 if key == "content-type" {
                     content_type = val;
                 }
             }
+        }
+        if let Some(reason) = deny_cross_origin(&host, &origin) {
+            let _ = write_http(&mut stream, 403, "text/plain", reason.as_bytes());
+            return;
         }
         if content_len > MAX_BODY {
             let _ = write_http(&mut stream, 413, "text/plain", b"payload too large");
@@ -163,7 +181,9 @@ impl Inner {
     }
 
     fn user_data(&self, ctype: &str, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
-        if !ctype.is_empty() && !ctype.starts_with("application/json") {
+        // Strict: an untyped Blob POST arrives with no Content-Type and no
+        // preflight, and the userscript always sends application/json.
+        if !ctype.starts_with("application/json") {
             return (415, "text/plain", b"expected application/json".to_vec());
         }
         let parsed: Value = if let Ok(v) = serde_json::from_slice(body) {
@@ -292,6 +312,44 @@ impl Inner {
     }
 }
 
+/// The anti-CSRF / anti-rebinding gate. Returns a refusal reason, or None to
+/// let the request through.
+fn deny_cross_origin(host: &str, origin: &str) -> Option<&'static str> {
+    // Non-loopback Host = DNS rebinding, which would make replies readable.
+    if !host.is_empty() && !loopback_host(host) {
+        return Some("host is not loopback");
+    }
+    if origin.is_empty() {
+        return None;
+    }
+    if let Some((scheme, rest)) = origin.split_once("://") {
+        let ok = match scheme {
+            "http" | "https" => loopback_host(rest),
+            // chrome-/moz-/safari-web-extension: script managers report
+            // themselves, and webpages cannot forge these schemes.
+            other => other.ends_with("extension"),
+        };
+        if ok {
+            return None;
+        }
+    }
+    // Web origins and "null" (sandboxed iframes).
+    Some("cross-origin requests are not allowed")
+}
+
+/// `localhost` or a loopback IP, with or without a port or brackets.
+fn loopback_host(hostport: &str) -> bool {
+    let host = if let Some(rest) = hostport.strip_prefix('[') {
+        rest.split_once(']').map_or(rest, |(h, _)| h)
+    } else {
+        hostport.rsplit_once(':').map_or(hostport, |(h, _)| h)
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
 fn write_http(
     stream: &mut TcpStream,
     status: u16,
@@ -302,6 +360,7 @@ fn write_http(
         200 => "OK",
         204 => "No Content",
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
         413 => "Payload Too Large",
         415 => "Unsupported Media Type",
@@ -390,9 +449,16 @@ mod tests {
     }
 
     fn post(url: &str, ctype: &str, body: &[u8]) -> (u16, String) {
+        post_from(url, ctype, "", body)
+    }
+
+    fn post_from(url: &str, ctype: &str, origin: &str, body: &[u8]) -> (u16, String) {
         let mut req = lenient_agent().post(url);
         if !ctype.is_empty() {
             req = req.header("Content-Type", ctype);
+        }
+        if !origin.is_empty() {
+            req = req.header("Origin", origin);
         }
         let mut resp = req.send(body).expect("post");
         let status = resp.status().as_u16();
@@ -479,12 +545,109 @@ mod tests {
             &payload(valid_vars(), "", ""),
         );
         assert_eq!(status, 415);
+        // An untyped Blob POST arrives with no Content-Type and no preflight.
+        let (status, _) = post(
+            &format!("{base}/api/userData"),
+            "",
+            &payload(valid_vars(), "", ""),
+        );
+        assert_eq!(status, 415);
         let status = match lenient_agent().get(&format!("{base}/api/userData")).call() {
             Ok(r) => r.status().as_u16(),
             Err(_) => 0,
         };
         assert_ne!(status, 200);
         srv.stop();
+    }
+
+    #[test]
+    fn web_origins_are_rejected() {
+        let toggles = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let t2 = toggles.clone();
+        let (srv, creds, _dir) = test_srv(Hooks {
+            overlay_toggle: Some(Arc::new(move || {
+                t2.fetch_add(1, Ordering::SeqCst);
+            })),
+            ..Hooks::default()
+        });
+        let base = format!("http://{}", srv.listen);
+        let body = payload(valid_vars(), FAKE_SALT, "");
+        for origin in ["https://evil.example", "http://evil.example:9310", "null"] {
+            let (status, _) = post_from(
+                &format!("{base}/api/userData"),
+                "application/json",
+                origin,
+                &body,
+            );
+            assert_eq!(status, 403, "userData from {origin}");
+            let (status, _) = post_from(&format!("{base}/api/overlay/toggle"), "", origin, b"");
+            assert_eq!(status, 403, "toggle from {origin}");
+        }
+        assert!(creds.get().is_none());
+        assert_eq!(toggles.load(Ordering::SeqCst), 0);
+        srv.stop();
+    }
+
+    #[test]
+    fn local_and_extension_origins_are_allowed() {
+        let (srv, creds, _dir) = test_srv(Hooks::default());
+        let url = format!("http://{}/api/userData", srv.listen);
+        let body = payload(valid_vars(), FAKE_SALT, "");
+        for origin in [
+            "moz-extension://0f9a1c4e-8b2d-6f3a-7c5e-9b1d4f8a2c6e",
+            "chrome-extension://abcdefghijklmnop",
+            &format!("http://{}", srv.listen),
+            "http://localhost:9310",
+        ] {
+            let (status, _) = post_from(&url, "application/json", origin, &body);
+            assert_eq!(status, 200, "from {origin}");
+        }
+        assert!(creds.get().is_some());
+        srv.stop();
+    }
+
+    /// ureq will not send a forged Host, so this one speaks raw HTTP.
+    #[test]
+    fn rebound_host_is_rejected() {
+        let (srv, creds, _dir) = test_srv(Hooks::default());
+        let body = payload(valid_vars(), FAKE_SALT, "");
+        let mut stream = TcpStream::connect(srv.listen).unwrap();
+        write!(
+            stream,
+            "POST /api/userData HTTP/1.1\r\nHost: evil.example:9310\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(&body).unwrap();
+        let mut status_line = String::new();
+        BufReader::new(stream).read_line(&mut status_line).unwrap();
+        assert!(status_line.contains("403"), "{status_line}");
+        assert!(creds.get().is_none());
+        srv.stop();
+    }
+
+    #[test]
+    fn loopback_host_shapes() {
+        for host in [
+            "127.0.0.1",
+            "127.0.0.1:9310",
+            "127.1.2.3:80",
+            "localhost",
+            "LocalHost:9310",
+            "[::1]",
+            "[::1]:9310",
+        ] {
+            assert!(loopback_host(host), "{host}");
+        }
+        for host in [
+            "evil.example",
+            "evil.example:9310",
+            "192.168.1.2:9310",
+            "[2001:db8::1]:9310",
+            "localhost.evil.example",
+        ] {
+            assert!(!loopback_host(host), "{host}");
+        }
     }
 
     #[test]
