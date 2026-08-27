@@ -79,6 +79,9 @@ The tray is how you find df-hud when the overlay is off.
   when you need the Input tab.
 - **Reset xp/hr** / **Restart run clock**: same as `U` and `K`
 - **Reload config**: read the TOML again without restarting
+- **Check for updates**: one probe of the GitHub release page, only when
+  clicked; a newer version opens that page in the browser. df-hud never
+  checks on its own.
 - **Quit df-hud**
 
 On Windows the menu also has **Open config file**, **Open log file**, and

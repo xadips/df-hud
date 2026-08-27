@@ -554,6 +554,14 @@ mod linux {
                 }
                 .into(),
             );
+            items.push(
+                StandardItem {
+                    label: self.handle.update_note(),
+                    activate: Box::new(|this: &mut HudTray| this.handle.check_updates()),
+                    ..StandardItem::default()
+                }
+                .into(),
+            );
             items.push(MenuItem::Separator);
             items.push(
                 StandardItem {
@@ -707,6 +715,7 @@ mod windows {
     const ID_STARTUP: u16 = 25;
     const ID_OPEN_CONFIG: u16 = 26;
     const ID_OPEN_LOG: u16 = 27;
+    const ID_UPDATES: u16 = 28;
     const ID_QUIT: u16 = 22;
 
     struct Ctx {
@@ -974,6 +983,13 @@ mod windows {
                 ID_RELOAD as usize,
                 wide("Reload config").as_ptr(),
             );
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING,
+                ID_UPDATES as usize,
+                wide(&ctx.handle.update_note()).as_ptr(),
+            );
             InsertMenuW(menu, u32::MAX, MF_SEPARATOR, 0, ptr::null());
             InsertMenuW(
                 menu,
@@ -1025,6 +1041,7 @@ mod windows {
             ID_OPEN_CONFIG => h.open_config(),
             ID_OPEN_LOG => h.open_log(),
             ID_RELOAD => h.reload_config(),
+            ID_UPDATES => h.check_updates(),
             ID_QUIT => h.request_stop(),
             _ => {}
         }
