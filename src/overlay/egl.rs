@@ -20,6 +20,14 @@ pub const NONE: Int = 0x3038;
 pub const ATTRIB_NONE: Attrib = 0x3038;
 pub const SURFACE_TYPE: Int = 0x3033;
 pub const WINDOW_BIT: Int = 0x0004;
+#[cfg(test)]
+pub const PBUFFER_BIT: Int = 0x0001;
+#[cfg(test)]
+pub const WIDTH: Int = 0x3057;
+#[cfg(test)]
+pub const HEIGHT: Int = 0x3056;
+#[cfg(test)]
+pub const PLATFORM_SURFACELESS_MESA: Enum = 0x31DD;
 pub const RENDERABLE_TYPE: Int = 0x3040;
 pub const OPENGL_ES3_BIT: Int = 0x0000_0040;
 pub const RED_SIZE: Int = 0x3024;
@@ -42,6 +50,8 @@ type ChooseConfig = unsafe extern "C" fn(Display, *const Int, *mut Config, Int, 
 type CreateContext = unsafe extern "C" fn(Display, Config, Context, *const Int) -> Context;
 type CreateWindowSurface =
     unsafe extern "C" fn(Display, Config, NativeWindow, *const Int) -> Surface;
+#[cfg(test)]
+type CreatePbufferSurface = unsafe extern "C" fn(Display, Config, *const Int) -> Surface;
 type MakeCurrent = unsafe extern "C" fn(Display, Surface, Surface, Context) -> Int;
 type SwapInterval = unsafe extern "C" fn(Display, Int) -> Int;
 type SwapBuffers = unsafe extern "C" fn(Display, Surface) -> Int;
@@ -61,6 +71,8 @@ pub struct Egl {
     p_choose_config: ChooseConfig,
     p_create_context: CreateContext,
     p_create_window_surface: CreateWindowSurface,
+    #[cfg(test)]
+    p_create_pbuffer_surface: CreatePbufferSurface,
     p_make_current: MakeCurrent,
     p_swap_interval: SwapInterval,
     p_swap_buffers: SwapBuffers,
@@ -91,6 +103,8 @@ impl Egl {
             p_choose_config: load(&lib, b"eglChooseConfig\0")?,
             p_create_context: load(&lib, b"eglCreateContext\0")?,
             p_create_window_surface: load(&lib, b"eglCreateWindowSurface\0")?,
+            #[cfg(test)]
+            p_create_pbuffer_surface: load(&lib, b"eglCreatePbufferSurface\0")?,
             p_make_current: load(&lib, b"eglMakeCurrent\0")?,
             p_swap_interval: load(&lib, b"eglSwapInterval\0")?,
             p_swap_buffers: load(&lib, b"eglSwapBuffers\0")?,
@@ -155,9 +169,19 @@ impl Egl {
     }
 
     pub fn choose_es3_alpha_config(&self, display: Display) -> Result<Config, Box<dyn Error>> {
+        self.choose_es3_config(display, WINDOW_BIT)
+    }
+
+    /// Offscreen variant for the headless render test.
+    #[cfg(test)]
+    pub fn choose_es3_pbuffer_config(&self, display: Display) -> Result<Config, Box<dyn Error>> {
+        self.choose_es3_config(display, PBUFFER_BIT)
+    }
+
+    fn choose_es3_config(&self, display: Display, surface: Int) -> Result<Config, Box<dyn Error>> {
         let attribs = [
             SURFACE_TYPE,
-            WINDOW_BIT,
+            surface,
             RENDERABLE_TYPE,
             OPENGL_ES3_BIT,
             RED_SIZE,
@@ -213,6 +237,40 @@ impl Egl {
             unsafe { (self.p_create_window_surface)(display, config, window, ptr::null()) };
         if surface.is_null() {
             Err("eglCreateWindowSurface failed".into())
+        } else {
+            Ok(surface)
+        }
+    }
+
+    /// Mesa's windowing-free platform (llvmpipe on CI); the render test's way
+    /// to a real context.
+    #[cfg(test)]
+    pub fn get_surfaceless_display(&self) -> Result<Display, Box<dyn Error>> {
+        let Some(get_platform) = self.p_get_platform_display else {
+            return Err("eglGetPlatformDisplay is unavailable".into());
+        };
+        let attribs = [ATTRIB_NONE];
+        let display =
+            unsafe { get_platform(PLATFORM_SURFACELESS_MESA, ptr::null_mut(), attribs.as_ptr()) };
+        if display.is_null() {
+            Err("no EGL_MESA_platform_surfaceless display".into())
+        } else {
+            Ok(display)
+        }
+    }
+
+    #[cfg(test)]
+    pub fn create_pbuffer_surface(
+        &self,
+        display: Display,
+        config: Config,
+        width: Int,
+        height: Int,
+    ) -> Result<Surface, Box<dyn Error>> {
+        let attribs = [WIDTH, width, HEIGHT, height, NONE];
+        let surface = unsafe { (self.p_create_pbuffer_surface)(display, config, attribs.as_ptr()) };
+        if surface.is_null() {
+            Err("eglCreatePbufferSurface failed".into())
         } else {
             Ok(surface)
         }

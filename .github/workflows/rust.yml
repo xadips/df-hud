@@ -1,5 +1,6 @@
 # Product crate. Everyday tests stay here; .github/workflows/ci.yml packages
-# on tags. Ubuntu + rustup + MinGW; not zigbuild, not windows-latest.
+# on tags. Artifacts stay Ubuntu + rustup + MinGW (not zigbuild); the
+# windows-latest job only executes the tests a cross-compile can just type-check.
 name: Product crate
 
 on:
@@ -25,14 +26,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Wayland headers and MinGW
+      # Mesa gives the render smoke test a surfaceless llvmpipe context.
+      - name: Install Wayland headers, MinGW, and Mesa
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config \
             libwayland-dev \
             binutils-mingw-w64-x86-64 \
-            gcc-mingw-w64-x86-64
+            gcc-mingw-w64-x86-64 \
+            libegl1 \
+            libegl-mesa0 \
+            libgles2 \
+            libgl1-mesa-dri
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -98,13 +104,27 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy linux-gnu
-        run: cargo clippy --locked --target x86_64-unknown-linux-gnu
+        run: cargo clippy --locked --target x86_64-unknown-linux-gnu -- -D warnings
 
       - name: Clippy windows-gnu
-        run: cargo clippy --locked --target x86_64-pc-windows-gnu
+        run: cargo clippy --locked --target x86_64-pc-windows-gnu -- -D warnings
 
       - name: Test linux-gnu
+        env:
+          # A quietly skipped render test would erase the only GL coverage.
+          DF_HUD_REQUIRE_RENDER_TEST: "1"
         run: cargo test --locked --target x86_64-unknown-linux-gnu
 
       - name: Compile windows-gnu tests
         run: cargo test --locked --no-run --target x86_64-pc-windows-gnu
+
+  # The release artifact stays MinGW; this runs the windows-gated logic (tray
+  # menu, autostart, registry, creds) that the cross-target can never execute.
+  windows-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test windows-msvc
+        run: cargo test --locked
