@@ -2045,11 +2045,17 @@ window = 120
 
     #[test]
     fn expand_home_only_at_start() {
-        let home = std::env::var("HOME").unwrap();
-        assert_eq!(
-            expand_home("~/.local/share/df-hud"),
-            format!("{home}/.local/share/df-hud")
-        );
+        match std::env::var("HOME") {
+            Ok(home) => assert_eq!(
+                expand_home("~/.local/share/df-hud"),
+                format!("{home}/.local/share/df-hud")
+            ),
+            // Windows has no HOME; the prefix must survive untouched.
+            Err(_) => assert_eq!(
+                expand_home("~/.local/share/df-hud"),
+                "~/.local/share/df-hud"
+            ),
+        }
         assert_eq!(expand_home("/opt/~/x"), "/opt/~/x");
     }
 
