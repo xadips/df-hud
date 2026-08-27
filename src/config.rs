@@ -703,11 +703,13 @@ impl Config {
     }
 
     pub fn parse(text: &str) -> Result<Self, Box<dyn Error>> {
+        // Not rewrapped: the first line carries "at line N, column M" and the
+        // HUD banner shows only the leading prose.
         let overlay: toml::Value =
-            toml::from_str(text).map_err(|err| format!("invalid TOML ({err})"))?;
+            toml::from_str(text).map_err(|err| err.to_string().trim_end().to_string())?;
         let mut base = toml::Value::try_from(Self::default())
             .map_err(|err| format!("internal config serialize: {err}"))?;
-        reject_unknown(&overlay, &base, "")?;
+        reject_unknown(&overlay, &base, "", text)?;
         merge_value(&mut base, overlay);
         let mut cfg: Self = base
             .try_into()
@@ -1196,7 +1198,12 @@ pub(crate) fn expand_home(p: &str) -> String {
     p.to_string()
 }
 
-fn reject_unknown(overlay: &toml::Value, schema: &toml::Value, prefix: &str) -> Result<(), String> {
+fn reject_unknown(
+    overlay: &toml::Value,
+    schema: &toml::Value,
+    prefix: &str,
+    text: &str,
+) -> Result<(), String> {
     let Some(ot) = overlay.as_table() else {
         return Ok(());
     };
@@ -1209,14 +1216,39 @@ fn reject_unknown(overlay: &toml::Value, schema: &toml::Value, prefix: &str) -> 
         };
         match st.and_then(|t| t.get(k)) {
             None => {
+                let at = key_line(text, k).map_or(String::new(), |n| format!(" at line {n}"));
                 return Err(format!(
-                    "unknown key {path} (a typo here would otherwise be silently ignored; see df-hud.example.toml)"
+                    "unknown key {path}{at} (a typo here would otherwise be silently ignored; see df-hud.example.toml)"
                 ));
             }
-            Some(child) => reject_unknown(v, child, &path)?,
+            Some(child) => reject_unknown(v, child, &path, text)?,
         }
     }
     Ok(())
+}
+
+/// Where `key` sits in the raw TOML, as a `key =` line or a `[table]` header
+/// segment. The parsed tree has no spans, so this is a text scan; None when
+/// the name appears more than once and the guess could point at the wrong one.
+fn key_line(text: &str, key: &str) -> Option<usize> {
+    let mut hit = None;
+    for (i, line) in text.lines().enumerate() {
+        let t = line.trim_start();
+        let assigns = t
+            .strip_prefix(key)
+            .is_some_and(|rest| rest.trim_start().starts_with('='));
+        let heads = t.starts_with('[')
+            && t.trim_matches(['[', ']', ' '])
+                .split('.')
+                .any(|seg| seg.trim() == key);
+        if assigns || heads {
+            if hit.is_some() {
+                return None;
+            }
+            hit = Some(i + 1);
+        }
+    }
+    hit
 }
 
 fn merge_value(dest: &mut toml::Value, overlay: toml::Value) {
@@ -1914,6 +1946,22 @@ window = 120
                 "body {body:?} should mention {want:?}, got {err}"
             );
         }
+    }
+
+    #[test]
+    fn unknown_key_names_its_line_when_unambiguous() {
+        let err = Config::parse("[df]\nuser_id = \"123\"\ntestallstats_url = \"x\"\n").unwrap_err();
+        assert!(
+            err.to_string().contains("testallstats_url at line 3"),
+            "{err}"
+        );
+        let err = Config::parse("[console]\nwidth = 720\n").unwrap_err();
+        assert!(err.to_string().contains("console at line 1"), "{err}");
+
+        // The same name on two lines could point at the wrong one; say nothing.
+        let err = Config::parse("[widget.xp]\nx = 10\n\n[hud]\nx = 5\n").unwrap_err();
+        assert!(err.to_string().contains("unknown key hud.x"), "{err}");
+        assert!(!err.to_string().contains("at line"), "{err}");
     }
 
     #[test]

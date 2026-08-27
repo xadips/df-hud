@@ -148,6 +148,8 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
     let hud_color = parse_color(&cfg.hud.text_color, 1.0);
 
     if !view.status.is_empty() {
+        // The config banner arrives pre-wrapped; every other status is one line.
+        let rows: Vec<&str> = view.status.lines().collect();
         push_text_group(
             &mut scene,
             xf,
@@ -161,7 +163,7 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
                 default_color: view.status_color.unwrap_or(hud_color),
                 hud_a,
             },
-            &[view.status.as_str()],
+            &rows,
         );
     }
 
@@ -874,6 +876,25 @@ mod tests {
         assert!((ax - 2340.0).abs() < 0.5, "default block x = {ax}");
         assert!((bx - 2160.0).abs() < 0.5, "moved block x = {bx}");
         assert!((bx - ax).abs() > 100.0);
+    }
+
+    #[test]
+    fn wrapped_status_draws_one_row_per_line() {
+        let mut view = dummy_view();
+        view.status = "config: TOML parse error at line 12, column 19\nexpected i64".into();
+        let scene = build(&view, &Config::default(), vp_1440());
+        let head = scene
+            .texts
+            .iter()
+            .find(|t| t.text.contains("line 12"))
+            .expect("banner head");
+        let tail = scene
+            .texts
+            .iter()
+            .find(|t| t.text == "expected i64")
+            .expect("banner tail");
+        assert_eq!(head.x, tail.x);
+        assert!(tail.y > head.y, "second row sits below the first");
     }
 
     #[test]
