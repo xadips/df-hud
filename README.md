@@ -48,7 +48,7 @@ to the [loopback API](docs/manual-wiring.md) instead, which reaches every action
 the keys do. The tray can turn the FPS overlay on at launch, and skip the
 launcher dialog.
 
-It is recommende to install
+It is recommended to install
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge). That
 is how df-hud gets your session: the script keeps it in sync, and the
 challenge list needs it. If you skip the script, `df.user_id` still covers
