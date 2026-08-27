@@ -162,6 +162,9 @@ pub enum Anchor {
     #[default]
     Left,
     Right,
+    /// `x` offsets from the screen midline. Status-banner only: it centers
+    /// each row, which no other group's layout does (validate enforces this).
+    Center,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -482,6 +485,7 @@ impl Hud {
                 .reference_width
                 .saturating_sub(self.margin_right)
                 .saturating_sub(x),
+            Anchor::Center => (self.reference_width / 2).saturating_add(x),
         };
         [px, self.margin_top.saturating_add(y)]
     }
@@ -490,9 +494,10 @@ impl Hud {
 impl Default for Widget {
     fn default() -> Self {
         Self {
+            // Centered: the game's own UI owns the top-left corner.
             status: StatusWidget {
-                anchor: Anchor::Left,
-                x: 10,
+                anchor: Anchor::Center,
+                x: 0,
                 y: 10,
                 font_size: 0.0,
             },
@@ -1077,6 +1082,20 @@ impl Config {
                 && let Err(e) = validate_color(color)
             {
                 errs.push(format!("widget.{name}.color: {e}"));
+            }
+        }
+        for (name, anchor) in [
+            ("session", self.widget.session.anchor),
+            ("xp", self.widget.xp.anchor),
+            ("block", self.widget.block.anchor),
+            ("bosses", self.widget.bosses.anchor),
+            ("keybinds", self.widget.keybinds.anchor),
+            ("challenges", self.widget.challenges.anchor),
+        ] {
+            if anchor == Anchor::Center {
+                errs.push(format!(
+                    "widget.{name}.anchor: \"center\" only works on widget.status; other groups draw left-aligned rows"
+                ));
             }
         }
         let mut used = std::collections::HashMap::new();
@@ -1938,6 +1957,10 @@ window = 120
             ("[hud]\nfont_family = \"x\"\n", "unknown key"),
             ("[widget.session]\nfont_family = \"x\"\n", "unknown key"),
             ("[widget.block]\nanchor = \"centre\"\n", "left"),
+            (
+                "[widget.block]\nanchor = \"center\"\n",
+                "only works on widget.status",
+            ),
         ];
         for (body, want) in cases {
             let err = Config::parse(body).unwrap_err();

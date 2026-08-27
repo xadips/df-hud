@@ -334,7 +334,9 @@ enabled = true
 # Each group has its own place on screen. y is from the top. x is from the left
 # unless anchor = "right", then x is an inset from hud.reference_width. Set that
 # pair to your panel (1920x1200, etc.) if you want 1:1 pixels; right-anchored
-# groups stay on the right instead of sliding off the edge.
+# groups stay on the right instead of sliding off the edge. The status banner
+# alone also takes anchor = "center": x offsets from the midline and every
+# line centers itself.
 #
 # font_size and color are optional per group - zero, absent or empty means
 # "use the [hud] values". The overlay is one face (`hud.font`); groups do not
@@ -350,7 +352,10 @@ enabled = true
 # No enabled key, because this is how df-hud tells you it cannot do its job. No
 # color either: red when you cannot fix it, amber when you can, which is the
 # whole message.
-x = 10
+#
+# Centered because the game's own UI owns the top-left corner.
+anchor = "center"
+x = 0
 y = 10
 
 [widget.block]

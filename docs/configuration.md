@@ -40,7 +40,9 @@ Each group has its own `x` and `y` under `[widget.*]`, written for
 scaled to your monitor. `y` is from the top. `x` is from the left unless
 `anchor = "right"`, then `x` is an inset from `reference_width`. Block info,
 the boss list, and the keybinds cheat sheet use that so they stay on the right if
-you set the reference to your panel (1920x1200 and so on).
+you set the reference to your panel (1920x1200 and so on). The status banner
+alone also takes `anchor = "center"` (its default): `x` offsets from the
+midline and every line centers itself, clear of the game's own top-left UI.
 
 A group near the right edge is clipped, not wrapped. A wrapping line would make
 everything below it jump. Leave room for the longest string that group can show.
