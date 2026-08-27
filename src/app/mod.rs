@@ -8,6 +8,7 @@ pub mod rategate;
 pub mod state;
 pub mod store;
 pub mod tray;
+pub mod updates;
 pub mod visibility;
 
 use chrono::{DateTime, Utc};
@@ -55,6 +56,8 @@ pub struct Handle {
     last_run_start: Mutex<Option<DateTime<Utc>>>,
     presence: Option<Arc<presence::Control>>,
     pub gamekeys: Arc<crate::game::gamekeys::Keys>,
+    /// Last update-check outcome, shown as the tray item's label.
+    update_note: Mutex<String>,
 }
 
 impl Handle {
@@ -304,6 +307,49 @@ impl Handle {
         }
     }
 
+    /// Tray label for the update item: "Check for updates" until a check ran.
+    pub fn update_note(&self) -> String {
+        let note = self.update_note.lock().unwrap();
+        if note.is_empty() {
+            "Check for updates".into()
+        } else {
+            note.clone()
+        }
+    }
+
+    /// Probes GitHub off-thread and opens the release page when it is newer.
+    pub fn check_updates(self: &Arc<Self>) {
+        const CURRENT: &str = env!("CARGO_PKG_VERSION");
+        {
+            let mut note = self.update_note.lock().unwrap();
+            if *note == "checking…" {
+                return;
+            }
+            "checking…".clone_into(&mut note);
+        }
+        let handle = self.clone();
+        poller::spawn("df-hud-updates", self.stop.clone(), move || {
+            let outcome = match updates::check(CURRENT) {
+                Ok(updates::Check::Newer { version }) => {
+                    eprintln!(
+                        "updates: {version} is out (running {CURRENT}); opening the release page"
+                    );
+                    updates::open_release_page();
+                    format!("Update to {version}…")
+                }
+                Ok(updates::Check::UpToDate) => {
+                    eprintln!("updates: {CURRENT} is the latest");
+                    format!("{CURRENT} is the latest")
+                }
+                Err(err) => {
+                    eprintln!("updates: check failed: {err}");
+                    "update check failed - see log".into()
+                }
+            };
+            *handle.update_note.lock().unwrap() = outcome;
+        });
+    }
+
     pub fn start_on_login(&self) -> bool {
         autostart::enabled().unwrap_or(false)
     }
@@ -483,6 +529,7 @@ pub fn start_with(
         last_run_start: Mutex::new(last_run_start),
         presence: presence.clone(),
         gamekeys: gamekeys.clone(),
+        update_note: Mutex::new(String::new()),
     });
 
     {
