@@ -86,18 +86,18 @@ mod tests {
         let gate = Gate::new(Duration::from_millis(40));
         let stop = AtomicBool::new(false);
         let wake = idle_wake();
-        let mut times = Vec::new();
+        let started = Instant::now();
         for _ in 0..4 {
             gate.wait(&stop, &wake).unwrap();
-            times.push(Instant::now());
         }
-        for i in 1..times.len() {
-            let gap = times[i] - times[i - 1];
-            assert!(
-                gap >= Duration::from_millis(35),
-                "gap {i} = {gap:?}, want at least 35ms"
-            );
-        }
+        // Wakeups overshoot their slot by up to a scheduler tick (~16ms on
+        // Windows), so per-gap wall clocks flake; the total cannot, because a
+        // wait never returns early and slots are 40ms apart unconditionally.
+        let total = started.elapsed();
+        assert!(
+            total >= Duration::from_millis(115),
+            "4 gated waits took {total:?}, want ~120ms of spacing"
+        );
     }
 
     #[test]
