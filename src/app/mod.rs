@@ -56,8 +56,7 @@ pub struct Handle {
     last_run_start: Mutex<Option<DateTime<Utc>>>,
     presence: Option<Arc<presence::Control>>,
     pub gamekeys: Arc<crate::game::gamekeys::Keys>,
-    /// Last update-check outcome, shown as the tray item's label.
-    update_note: Mutex<String>,
+    update_status: Mutex<updates::Status>,
 }
 
 impl Handle {
@@ -307,25 +306,19 @@ impl Handle {
         }
     }
 
-    /// Tray label for the update item: "Check for updates" until a check ran.
-    pub fn update_note(&self) -> String {
-        let note = self.update_note.lock().unwrap();
-        if note.is_empty() {
-            "Check for updates".into()
-        } else {
-            note.clone()
-        }
+    pub fn update_status(&self) -> updates::Status {
+        self.update_status.lock().unwrap().clone()
     }
 
     /// Probes GitHub off-thread and opens the release page when it is newer.
     pub fn check_updates(self: &Arc<Self>) {
         const CURRENT: &str = env!("CARGO_PKG_VERSION");
         {
-            let mut note = self.update_note.lock().unwrap();
-            if *note == "checking…" {
+            let mut status = self.update_status.lock().unwrap();
+            if *status == updates::Status::Checking {
                 return;
             }
-            "checking…".clone_into(&mut note);
+            *status = updates::Status::Checking;
         }
         let handle = self.clone();
         poller::spawn("df-hud-updates", self.stop.clone(), move || {
@@ -335,18 +328,18 @@ impl Handle {
                         "updates: {version} is out (running {CURRENT}); opening the release page"
                     );
                     updates::open_release_page();
-                    format!("Update to {version}…")
+                    updates::Status::Newer(version)
                 }
                 Ok(updates::Check::UpToDate) => {
                     eprintln!("updates: {CURRENT} is the latest");
-                    format!("{CURRENT} is the latest")
+                    updates::Status::UpToDate
                 }
                 Err(err) => {
                     eprintln!("updates: check failed: {err}");
-                    "update check failed - see log".into()
+                    updates::Status::Failed
                 }
             };
-            *handle.update_note.lock().unwrap() = outcome;
+            *handle.update_status.lock().unwrap() = outcome;
         });
     }
 
@@ -529,7 +522,7 @@ pub fn start_with(
         last_run_start: Mutex::new(last_run_start),
         presence: presence.clone(),
         gamekeys: gamekeys.clone(),
-        update_note: Mutex::new(String::new()),
+        update_status: Mutex::new(updates::Status::Unchecked),
     });
 
     {

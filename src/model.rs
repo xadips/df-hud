@@ -534,7 +534,9 @@ pub struct View {
     pub challenges: Option<Vec<Challenge>>,
     pub challenge_status: String,
     pub status: String,
-    pub status_is_fix: bool,
+    /// True for routine asks (open a page, wait); drawn amber. False means
+    /// something is wrong (config error, server failing); drawn red.
+    pub status_is_prompt: bool,
 }
 
 impl Default for View {
@@ -576,7 +578,7 @@ impl Default for View {
             challenges: None,
             challenge_status: String::new(),
             status: String::new(),
-            status_is_fix: false,
+            status_is_prompt: false,
         }
     }
 }

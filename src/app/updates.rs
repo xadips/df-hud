@@ -17,6 +17,17 @@ pub enum Check {
     },
 }
 
+/// Check lifecycle as the tray sees it; the tray owns the wording.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum Status {
+    #[default]
+    Unchecked,
+    Checking,
+    UpToDate,
+    Newer(String),
+    Failed,
+}
+
 pub fn check(current: &str) -> Result<Check, String> {
     check_at(LATEST_URL, current)
 }

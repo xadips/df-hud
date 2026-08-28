@@ -350,8 +350,8 @@ enabled = true
 # df-hud's own error banner: stale credentials, a board it cannot fetch.
 #
 # No enabled key, because this is how df-hud tells you it cannot do its job. No
-# color either: red when you cannot fix it, amber when you can, which is the
-# whole message.
+# color either: amber for a routine ask (open a page, wait), red when something
+# is wrong (config error, server failing), which is the whole message.
 #
 # Centered because the game's own UI owns the top-left corner.
 anchor = "center"
