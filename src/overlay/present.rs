@@ -205,9 +205,17 @@ pub fn from_view(v: &ModelView, cfg: &Config, groups: &Groups) -> View {
 }
 
 fn keybind_lines(cfg: &Config) -> Vec<String> {
+    // The masteries key is only grabbed while its widget is enabled, so the
+    // sheet lists it under the same condition.
+    let masteries = if cfg.widget.masteries.enabled {
+        cfg.hotkeys.masteries.as_str()
+    } else {
+        ""
+    };
     let slots = [
         (cfg.hotkeys.map.as_str(), "Minimap"),
         (cfg.hotkeys.challenges.as_str(), "Challenges"),
+        (masteries, "Masteries"),
         (cfg.hotkeys.overlay.as_str(), "Overlay"),
         (cfg.hotkeys.run_start.as_str(), "Run clock"),
         (cfg.hotkeys.xp_reset.as_str(), "XP/hr"),
@@ -2173,6 +2181,19 @@ mod tests {
         let lines = texts(&mastery_lines(&stale, &masteries_on()));
         assert!(lines[0].contains("could not load masteries"), "{lines:?}");
         assert!(lines.iter().any(|l| l.contains("Looter")), "{lines:?}");
+    }
+
+    #[test]
+    fn masteries_key_listed_only_while_the_widget_is_enabled() {
+        let g = Groups::new();
+        let off = from_view(&ModelView::default(), &Config::default(), &g);
+        assert!(off.keybinds.iter().all(|l| !l.contains("Masteries")));
+        let shown = from_view(&ModelView::default(), &masteries_on(), &g);
+        assert!(
+            shown.keybinds.contains(&"4 - Masteries".to_string()),
+            "{:?}",
+            shown.keybinds
+        );
     }
 
     #[test]

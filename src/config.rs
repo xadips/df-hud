@@ -128,6 +128,7 @@ pub struct Hotkeys {
     pub enabled: bool,
     pub map: String,
     pub challenges: String,
+    pub masteries: String,
     pub run_start: String,
     pub xp_reset: String,
     pub overlay: String,
@@ -447,6 +448,10 @@ impl Default for Config {
                 enabled: true,
                 map: "G".into(),
                 challenges: "Z".into(),
+                // Every factory-free letter is already a df-hud default; the
+                // game's number keys stop at 3 (weapon slots), so the sixth
+                // action takes the next number over.
+                masteries: "4".into(),
                 run_start: "K".into(),
                 xp_reset: "U".into(),
                 overlay: "J".into(),
@@ -1177,6 +1182,12 @@ impl Config {
             &mut used,
             "challenges",
             &mut self.hotkeys.challenges,
+        );
+        canonicalize_hotkey(
+            &mut errs,
+            &mut used,
+            "masteries",
+            &mut self.hotkeys.masteries,
         );
         canonicalize_hotkey(
             &mut errs,
@@ -2104,6 +2115,9 @@ window = 120
         let h = Config::default().hotkeys;
         assert_eq!(h.map, "G");
         assert_eq!(h.challenges, "Z");
+        // Every factory-free letter is taken; the game's numbers stop at 3
+        // (weapon slots), so masteries takes the next one over.
+        assert_eq!(h.masteries, "4");
         assert_eq!(h.run_start, "K");
         assert_eq!(h.xp_reset, "U");
         assert_eq!(h.overlay, "J");

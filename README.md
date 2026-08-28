@@ -31,6 +31,7 @@ These only work while Dead Frontier is focused.
 | --- | --- |
 | `G` | City map |
 | `Z` | Challenge board |
+| `4` | Masteries (only while that widget is enabled) |
 | `J` | Show or hide the overlay |
 | `K` | Restart the run clock |
 | `U` | Reset the XP/hr average |

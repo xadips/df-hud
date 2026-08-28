@@ -110,17 +110,20 @@ struct Slot {
     binding: Binding,
 }
 
-fn slots_from_cfg(cfg: &crate::config::Hotkeys) -> Vec<Slot> {
+/// `masteries_widget` is `widget.masteries.enabled`: with the widget off the
+/// key stays with the game instead of being eaten for a no-op.
+fn slots_from_cfg(cfg: &crate::config::Hotkeys, masteries_widget: bool) -> Vec<Slot> {
     let specs = [
         (1, "map", cfg.map.as_str()),
         (2, "challenges", cfg.challenges.as_str()),
         (3, "run", cfg.run_start.as_str()),
         (4, "xp", cfg.xp_reset.as_str()),
         (5, "overlay", cfg.overlay.as_str()),
+        (6, "masteries", cfg.masteries.as_str()),
     ];
     let mut out = Vec::new();
     for (_id, action, raw) in specs {
-        if raw.trim().is_empty() {
+        if raw.trim().is_empty() || (action == "masteries" && !masteries_widget) {
             continue;
         }
         match parse_binding(raw) {
@@ -146,6 +149,9 @@ fn fire(handle: &crate::app::Handle, action: &str) {
         }
         "challenges" => {
             let _ = handle.toggle_group("challenges");
+        }
+        "masteries" => {
+            let _ = handle.toggle_group("masteries");
         }
         "run" => handle.restart_run(),
         "xp" => handle.reset_xp(),
@@ -221,9 +227,12 @@ mod linux {
             eprintln!("hotkeys: no Hyprland socket; HTTP remains the control hatch");
         }
         while !stop.load(Ordering::SeqCst) && !handle.stopped() {
-            let cfg = handle.cfg.lock().unwrap().hotkeys.clone();
+            let (cfg, masteries_widget) = {
+                let c = handle.cfg.lock().unwrap();
+                (c.hotkeys.clone(), c.widget.masteries.enabled)
+            };
             let slots = if cfg.enabled {
-                slots_from_cfg(&cfg)
+                slots_from_cfg(&cfg, masteries_widget)
             } else {
                 Vec::new()
             };
@@ -416,9 +425,12 @@ mod windows {
                 handle.ui.wait();
                 continue;
             }
-            let cfg = handle.cfg.lock().unwrap().hotkeys.clone();
+            let (cfg, masteries_widget) = {
+                let c = handle.cfg.lock().unwrap();
+                (c.hotkeys.clone(), c.widget.masteries.enabled)
+            };
             let slots = if cfg.enabled {
-                slots_from_cfg(&cfg)
+                slots_from_cfg(&cfg, masteries_widget)
             } else {
                 Vec::new()
             };
