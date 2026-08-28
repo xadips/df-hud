@@ -375,6 +375,70 @@ impl Serialize for Challenge {
 }
 
 #[derive(Clone, Debug, Default)]
+pub struct MasteryBonus {
+    pub name: String,
+    /// Percent per level, absolute value.
+    pub scale: f64,
+    /// Percent cap. `0` means uncapped, which never counts as capped.
+    pub max: f64,
+    /// `scale * level`, clamped to `max`. What the game page shows as the boost.
+    pub value: f64,
+}
+
+impl MasteryBonus {
+    pub fn capped(&self) -> bool {
+        self.max != 0.0 && self.value >= self.max
+    }
+}
+
+impl Serialize for MasteryBonus {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut st = s.serialize_struct("MasteryBonus", 4)?;
+        st.serialize_field("Name", &self.name)?;
+        st.serialize_field("Scale", &self.scale)?;
+        st.serialize_field("Max", &self.max)?;
+        st.serialize_field("Value", &self.value)?;
+        st.end()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Mastery {
+    pub index: i32,
+    pub name: String,
+    pub desc: String,
+    pub level: i32,
+    /// Progress within the current level, not a lifetime total.
+    pub exp: i64,
+    /// What `exp` has to reach for the next level:
+    /// `ceil(start_point * scale_factor^(level+1))`.
+    pub next_exp: i64,
+    pub bonuses: Vec<MasteryBonus>,
+}
+
+impl Mastery {
+    /// Every bonus at its cap: levels keep climbing but the boost cannot grow.
+    pub fn mastered(&self) -> bool {
+        !self.bonuses.is_empty() && self.bonuses.iter().all(MasteryBonus::capped)
+    }
+}
+
+impl Serialize for Mastery {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut st = s.serialize_struct("Mastery", 8)?;
+        st.serialize_field("Index", &self.index)?;
+        st.serialize_field("Name", &self.name)?;
+        st.serialize_field("Desc", &self.desc)?;
+        st.serialize_field("Level", &self.level)?;
+        st.serialize_field("Exp", &self.exp)?;
+        st.serialize_field("NextExp", &self.next_exp)?;
+        st.serialize_field("Bonuses", &self.bonuses)?;
+        st.serialize_field("Mastered", &self.mastered())?;
+        st.end()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct CityEvent {
     pub id: String,
     pub kind: CityEventKind,
@@ -533,6 +597,8 @@ pub struct View {
     pub xp_stability: XpStability,
     pub challenges: Option<Vec<Challenge>>,
     pub challenge_status: String,
+    pub masteries: Option<Vec<Mastery>>,
+    pub mastery_status: String,
     pub status: String,
     /// True for routine asks (open a page, wait); drawn amber. False means
     /// something is wrong (config error, server failing); drawn red.
@@ -577,6 +643,8 @@ impl Default for View {
             xp_stability: XpStability::Steady,
             challenges: None,
             challenge_status: String::new(),
+            masteries: None,
+            mastery_status: String::new(),
             status: String::new(),
             status_is_prompt: false,
         }

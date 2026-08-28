@@ -27,7 +27,7 @@ use crate::net::dfclient::Client;
 use crate::wake::{Notify, Wake};
 
 use groups::Groups;
-use poller::{ChallengePoller, MIN_REQUEST_GAP, PlayerPoller, PollerRuntime};
+use poller::{ChallengePoller, MIN_REQUEST_GAP, MasteryPoller, PlayerPoller, PollerRuntime};
 use rategate::{Gate, sleep_cancellable};
 use store::Store;
 
@@ -53,6 +53,7 @@ pub struct Handle {
     stop: Arc<AtomicBool>,
     player: Arc<PlayerPoller>,
     challenges: Arc<ChallengePoller>,
+    masteries: Arc<MasteryPoller>,
     last_run_start: Mutex<Option<DateTime<Utc>>>,
     presence: Option<Arc<presence::Control>>,
     pub gamekeys: Arc<crate::game::gamekeys::Keys>,
@@ -64,6 +65,7 @@ impl Handle {
         self.wake_ui();
         self.player.wake();
         self.challenges.wake();
+        self.masteries.wake();
     }
 
     /// Player record, challenge board, and city map. Not the allstats catalog
@@ -81,6 +83,7 @@ impl Handle {
     pub fn resume_pollers(&self) {
         self.player.resume();
         self.challenges.resume();
+        self.masteries.resume();
         if let Some((_, _)) = self.creds.get()
             && let Some(at) = self.creds.updated_at()
         {
@@ -112,6 +115,7 @@ impl Handle {
         self.vis.poke();
         self.player.wake();
         self.challenges.wake();
+        self.masteries.wake();
         self.bossmap_wake.ping();
         self.wake_ui();
     }
@@ -193,6 +197,7 @@ impl Handle {
         if rebuild_clients {
             self.player.replace_client(df_client(&cfg));
             self.challenges.replace_client(df_client(&cfg));
+            self.masteries.replace_client(df_client(&cfg));
         }
         if reconfigure_game {
             self.game
@@ -222,6 +227,22 @@ impl Handle {
             self.cfg.lock().unwrap().game_keys.dismiss_launcher = on;
             self.wake_ui();
         }
+    }
+
+    /// The tray's onboarding path for the masteries widget: configs written
+    /// before it existed never gain the section on their own, so the first
+    /// click writes `[widget.masteries] enabled = true` into the file. Only
+    /// ever called with `true`; turning it back off is a config edit.
+    pub fn enable_masteries_widget(&self) {
+        if persist_tray(self, crate::config::TrayOption::MasteriesWidget, true) {
+            self.cfg.lock().unwrap().widget.masteries.enabled = true;
+            self.masteries.wake();
+            self.wake_ui();
+        }
+    }
+
+    pub fn masteries_widget_enabled(&self) -> bool {
+        self.cfg.lock().unwrap().widget.masteries.enabled
     }
 
     pub fn has_presence(&self) -> bool {
@@ -453,6 +474,7 @@ pub fn start_with(
 
     let player_client = Arc::new(Mutex::new(df_client(&cfg)));
     let challenge_client = Arc::new(Mutex::new(df_client(&cfg)));
+    let mastery_client = Arc::new(Mutex::new(df_client(&cfg)));
     let session_stale = Arc::new(AtomicBool::new(false));
     let cfg = Arc::new(Mutex::new(cfg));
     let stop = Arc::new(AtomicBool::new(false));
@@ -498,7 +520,9 @@ pub fn start_with(
         session_stale,
     };
     let player = PlayerPoller::new(player_client, poller_runtime.clone());
-    let challenges = ChallengePoller::new(challenge_client, persist.clone(), poller_runtime);
+    let challenges =
+        ChallengePoller::new(challenge_client, persist.clone(), poller_runtime.clone());
+    let masteries = MasteryPoller::new(mastery_client, poller_runtime);
 
     let handle = Arc::new(Handle {
         store: store.clone(),
@@ -519,6 +543,7 @@ pub fn start_with(
         stop: stop.clone(),
         player: player.clone(),
         challenges: challenges.clone(),
+        masteries: masteries.clone(),
         last_run_start: Mutex::new(last_run_start),
         presence: presence.clone(),
         gamekeys: gamekeys.clone(),
@@ -603,6 +628,10 @@ pub fn start_with(
     poller::spawn("df-hud-challenges", stop.clone(), {
         let challenges = challenges.clone();
         move || challenges.run()
+    });
+    poller::spawn("df-hud-masteries", stop.clone(), {
+        let masteries = masteries.clone();
+        move || masteries.run()
     });
     poller::spawn("df-hud-state", stop.clone(), {
         let persist = persist.clone();

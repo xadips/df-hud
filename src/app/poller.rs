@@ -10,7 +10,7 @@ use crate::app::rategate::{Cancelled, Gate};
 use crate::app::state;
 use crate::app::store::Store;
 use crate::config::Config;
-use crate::data::challenges;
+use crate::data::{challenges, masteries};
 use crate::model::{PollerStatus, Tick};
 use crate::net::creds::Store as Creds;
 use crate::net::dfclient::Client;
@@ -28,6 +28,7 @@ const SESSION_EXPIRED: &str = "session expired - open any Dead Frontier page";
 const SCRIPT_TOO_OLD: &str = "bridge script sends no salt - update it";
 const NEED_COOKIE: &str = "load any Dead Frontier page to send the session";
 const BOARD_RETRY: &str = "could not load the board (retrying)";
+const MASTERIES_RETRY: &str = "could not load masteries (retrying)";
 
 #[derive(Clone)]
 pub struct PollerRuntime {
@@ -663,6 +664,205 @@ impl Schedule for ChallengePoller {
     }
 }
 
+/// The masteries feed. A clone of [`ChallengePoller`] minus the pieces
+/// masteries do not need: no sticky persistence (levels only go up) and no
+/// wait for the player level (nothing in the reply depends on it).
+pub struct MasteryPoller {
+    client: Arc<Mutex<Client>>,
+    creds: Arc<Creds>,
+    store: Arc<Store>,
+    cfg: Arc<Mutex<Config>>,
+    gate: Arc<Gate>,
+    stop: Arc<AtomicBool>,
+    shutdown: Arc<Notify>,
+    wake: Arc<Notify>,
+    game_running: Arc<AtomicBool>,
+    session_stale: Arc<AtomicBool>,
+    stale: AtomicBool,
+    failures: Mutex<i32>,
+}
+
+impl MasteryPoller {
+    pub fn new(client: Arc<Mutex<Client>>, runtime: PollerRuntime) -> Arc<Self> {
+        Arc::new(Self {
+            client,
+            creds: runtime.creds,
+            store: runtime.store,
+            cfg: runtime.cfg,
+            gate: runtime.gate,
+            stop: runtime.stop,
+            shutdown: runtime.shutdown,
+            wake: Arc::new(Notify::new()),
+            game_running: runtime.game_running,
+            session_stale: runtime.session_stale,
+            stale: AtomicBool::new(false),
+            failures: Mutex::new(0),
+        })
+    }
+
+    pub fn wake(&self) {
+        self.wake.ping();
+    }
+
+    pub fn replace_client(&self, client: Client) {
+        *self.client.lock().unwrap() = client;
+        self.wake();
+    }
+
+    pub fn resume(&self) {
+        self.stale.store(false, Ordering::SeqCst);
+        self.session_stale.store(false, Ordering::SeqCst);
+        *self.failures.lock().unwrap() = 0;
+        self.wake();
+    }
+
+    #[cfg(test)]
+    pub fn enter_pause_for_test(&self) -> Option<String> {
+        let reason = self.pause_reason()?;
+        self.on_pause(&reason, true);
+        Some(reason)
+    }
+
+    fn pause_reason(&self) -> Option<String> {
+        let cfg = self.cfg.lock().unwrap().clone();
+        if !cfg.widget.masteries.enabled {
+            return Some("the masteries widget is disabled".into());
+        }
+        let Some((cr, salt)) = self.creds.get() else {
+            return Some(NEED_SCRIPT.into());
+        };
+        if self.session_stale.load(Ordering::SeqCst) || self.stale.load(Ordering::SeqCst) {
+            return Some(SESSION_EXPIRED.into());
+        }
+        if cfg.signing_salt(|| salt.clone()).is_empty() {
+            return Some(SCRIPT_TOO_OLD.into());
+        }
+        if cr.cookie.is_empty() {
+            return Some(NEED_COOKIE.into());
+        }
+        if cfg.poll.only_when_game_running && !self.game_running.load(Ordering::SeqCst) {
+            return Some("the game is not running (poll.only_when_game_running)".into());
+        }
+        None
+    }
+
+    pub fn run(self: Arc<Self>) {
+        run_loop(&*self);
+    }
+
+    fn poll_once(&self) -> Outcome {
+        let Some((cr, salt_stored)) = self.creds.get() else {
+            return Outcome::Err;
+        };
+        let cfg = self.cfg.lock().unwrap().clone();
+        let salt = cfg.signing_salt(|| salt_stored.clone());
+        if self.gate.wait(&self.stop, &self.shutdown).is_err() {
+            return Outcome::Stop;
+        }
+        let vars = {
+            let mut client = self.client.lock().unwrap();
+            client.cookie.clone_from(&cr.cookie);
+            client.load_masteries(&cr.to_df(), &salt)
+        };
+        match vars {
+            Ok(vars) => {
+                *self.failures.lock().unwrap() = 0;
+                self.store.set_masteries(masteries::parse(&vars));
+                self.store.set_mastery_status(String::new());
+                Outcome::Ok
+            }
+            Err(err) => {
+                if err.stale() {
+                    self.stale.store(true, Ordering::SeqCst);
+                    self.session_stale.store(true, Ordering::SeqCst);
+                } else {
+                    *self.failures.lock().unwrap() += 1;
+                    self.store.set_mastery_status(MASTERIES_RETRY.into());
+                }
+                let n = *self.failures.lock().unwrap();
+                if n == 1 || n % 10 == 0 || err.stale() {
+                    eprintln!("masteries: {err}");
+                }
+                if err.stale() {
+                    Outcome::Stale
+                } else {
+                    Outcome::Err
+                }
+            }
+        }
+    }
+}
+
+impl Schedule for MasteryPoller {
+    fn stop(&self) -> &AtomicBool {
+        &self.stop
+    }
+
+    fn wake(&self) -> &Notify {
+        &self.wake
+    }
+
+    fn current_pause(&self) -> Option<String> {
+        self.pause_reason()
+    }
+
+    fn on_pause(&self, reason: &str, entered: bool) {
+        if !entered {
+            return;
+        }
+        eprintln!("masteries: paused - {reason}");
+        self.store.set_mastery_status(reason.to_string());
+        if !self.cfg.lock().unwrap().widget.masteries.enabled {
+            self.store.clear_masteries();
+        }
+    }
+
+    fn on_resume(&self) {
+        eprintln!("masteries: resumed");
+        self.store.set_mastery_status(String::new());
+    }
+
+    fn apply_floor(&self, next: &mut Instant) {
+        if let Some(floor) = self.gate.reserved()
+            && *next < floor
+        {
+            *next = floor;
+        }
+    }
+
+    fn before_wait(&self, _next: Instant) {}
+
+    fn after_wake(&self, next: &mut Instant) {
+        if let Some(floor) = self.gate.reserved() {
+            *next = floor;
+        }
+    }
+
+    fn poll(&self) -> Outcome {
+        self.poll_once()
+    }
+
+    fn success_delay(&self) -> Duration {
+        let cfg = self.cfg.lock().unwrap();
+        let running = self.game_running.load(Ordering::SeqCst);
+        jittered(
+            cfg.poll.effective_mastery_interval(running),
+            cfg.poll.jitter,
+        )
+    }
+
+    fn fail_delay(&self) -> Duration {
+        let n = *self.failures.lock().unwrap();
+        let cfg = self.cfg.lock().unwrap();
+        exponential_backoff(
+            cfg.poll.effective_mastery_interval(true),
+            n,
+            cfg.poll.backoff_max.0,
+            cfg.poll.jitter,
+        )
+    }
+}
+
 pub fn spawn<F>(name: &str, stop: Arc<AtomicBool>, f: F)
 where
     F: FnOnce() + Send + 'static,
@@ -1006,13 +1206,16 @@ mod tests {
             SCRIPT_TOO_OLD,
             NEED_COOKIE,
             BOARD_RETRY,
+            MASTERIES_RETRY,
         ] {
-            let rendered = format!("challenges: {reason}");
-            assert!(
-                rendered.len() <= 64,
-                "{} chars will clip: {rendered}",
-                rendered.len()
-            );
+            for prefix in ["challenges", "masteries"] {
+                let rendered = format!("{prefix}: {reason}");
+                assert!(
+                    rendered.len() <= 64,
+                    "{} chars will clip: {rendered}",
+                    rendered.len()
+                );
+            }
             assert!(
                 !reason.contains("browser bridge") && !reason.contains("signing salt"),
                 "say it the way docs/install.md does: {reason}"
@@ -1048,5 +1251,114 @@ mod tests {
         p.replace_client(Client::new(&base, "df-hud-reloaded"));
         assert_eq!(p.poll_once(), Outcome::Ok);
         assert_eq!(*hits.lock().unwrap(), 1);
+    }
+
+    fn test_mastery_poller(
+        session_stale: Arc<AtomicBool>,
+    ) -> (Arc<MasteryPoller>, Arc<Store>, Arc<Mutex<Config>>) {
+        let mut cfg = Config::default();
+        cfg.widget.masteries.enabled = true;
+        cfg.poll.only_when_game_running = false;
+        let creds = Arc::new(Creds::new(""));
+        creds
+            .set(
+                Credentials {
+                    user_id: "1234567".into(),
+                    password: "hash".into(),
+                    sc: "sc".into(),
+                    cookie: "session=1".into(),
+                },
+                "salt",
+            )
+            .unwrap();
+        let store = Arc::new(Store::new(None));
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(2)))
+                .http_status_as_error(false)
+                .build(),
+        );
+        let cfg = Arc::new(Mutex::new(cfg));
+        let p = MasteryPoller::new(
+            Arc::new(Mutex::new(Client::with_agent(
+                agent,
+                "http://127.0.0.1:1",
+                "df-hud-test",
+            ))),
+            PollerRuntime {
+                creds,
+                store: store.clone(),
+                cfg: cfg.clone(),
+                gate: Arc::new(Gate::new(Duration::from_millis(5))),
+                stop: Arc::new(AtomicBool::new(false)),
+                shutdown: Arc::new(Notify::new()),
+                game_running: Arc::new(AtomicBool::new(true)),
+                session_stale,
+            },
+        );
+        (p, store, cfg)
+    }
+
+    #[test]
+    fn masteries_pause_when_player_session_is_stale() {
+        let stale = Arc::new(AtomicBool::new(true));
+        let (p, _, _) = test_mastery_poller(stale);
+        let reason = p.pause_reason().expect("paused");
+        assert!(reason.contains("session expired"), "{reason}");
+    }
+
+    #[test]
+    fn masteries_do_not_wait_for_the_player_record() {
+        // Unlike challenges, nothing in the reply depends on the level.
+        let (p, _, _) = test_mastery_poller(Arc::new(AtomicBool::new(false)));
+        assert!(p.pause_reason().is_none());
+    }
+
+    #[test]
+    fn masteries_clear_when_widget_disabled() {
+        let (p, store, cfg) = test_mastery_poller(Arc::new(AtomicBool::new(false)));
+        store.set_masteries(vec![crate::model::Mastery {
+            name: "Looter".into(),
+            ..crate::model::Mastery::default()
+        }]);
+        cfg.lock().unwrap().widget.masteries.enabled = false;
+        let reason = p.enter_pause_for_test().expect("paused");
+        assert!(reason.contains("disabled"), "{reason}");
+        assert!(store.derive(Utc::now()).masteries.is_none());
+    }
+
+    #[test]
+    fn a_rejected_session_pauses_masteries() {
+        let (base, _) = spawn_df(|_| (200, "status=missing_value".into()));
+        let (p, _, _) = test_mastery_poller(Arc::new(AtomicBool::new(false)));
+        p.replace_client(Client::new(&base, "df-hud-test"));
+        assert!(p.pause_reason().is_none(), "not stale before the poll");
+        assert_eq!(p.poll_once(), Outcome::Stale);
+        let reason = p.pause_reason().expect("paused");
+        assert!(reason.contains("session expired"), "{reason}");
+    }
+
+    #[test]
+    fn mastery_poll_fills_the_store() {
+        let (base, hits) = spawn_df(|_| {
+            (
+                200,
+                "&max_masteries=1&mastery_0_name=Looter&mastery_0_stat_level=10\
+                 &mastery_0_stat_exp=5&mastery_0_scale_factor=1.0001&mastery_0_start_point=100\
+                 &mastery_0_bonuses=1&mastery_0_bonuses_0_name=Item Find Chance\
+                 &mastery_0_bonuses_0_scale=0.005&mastery_0_bonuses_0_max=5"
+                    .into(),
+            )
+        });
+        let (p, store, _) = test_mastery_poller(Arc::new(AtomicBool::new(false)));
+        p.replace_client(Client::new(&base, "df-hud-test"));
+        assert_eq!(p.poll_once(), Outcome::Ok);
+        assert_eq!(*hits.lock().unwrap(), 1);
+        let view = store.derive(Utc::now());
+        let masteries = view.masteries.as_deref().unwrap();
+        assert_eq!(masteries.len(), 1);
+        assert_eq!(masteries[0].name, "Looter");
+        assert_eq!(masteries[0].level, 10);
+        assert!(view.mastery_status.is_empty());
     }
 }

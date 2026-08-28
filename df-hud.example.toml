@@ -60,9 +60,9 @@ listen = "127.0.0.1:9310"
 # from the previous poll, so it would always be one poll stale, and it would
 # delay noticing the outpost-to-city transition by a whole idle interval.
 #
-# Minimums: active 5, idle 30, challenges 30, catalog 3600 seconds. Regardless of
-# these, two requests are never sent less than 1s apart, so nothing that wakes
-# df-hud can turn into a burst.
+# Minimums: active 5, idle 30, challenges 30, masteries 30, catalog 3600 seconds.
+# Regardless of these, two requests are never sent less than 1s apart, so nothing
+# that wakes df-hud can turn into a burst.
 active_interval = 10
 idle_interval = 120
 
@@ -70,6 +70,10 @@ idle_interval = 120
 # to idle_interval, so a short value chosen for play cannot become an all-night
 # poll if you turn only_when_game_running off.
 challenge_interval = 30
+
+# Same for the masteries widget, at the same cadence as the challenge board.
+# Only polled while [widget.masteries] is enabled.
+mastery_interval = 30
 
 catalog_interval = 86400
 
@@ -357,6 +361,7 @@ enabled = true
 anchor = "center"
 x = 0
 y = 10
+font_size = 0
 
 [widget.block]
 # Where you are: the region or outpost name, and the block-support countdown.
@@ -364,7 +369,7 @@ enabled = true
 anchor = "right"
 x = 220
 y = 300
-# font_size = 14
+font_size = 0
 
 # Cool blue, because the amber below it means "something here can kill you".
 color = "#9ecbff"
@@ -390,8 +395,8 @@ enabled = true
 anchor = "right"
 x = 320
 y = 344
-# font_size = 14
-# color = "#ffd166"
+font_size = 0
+color = ""
 
 # When your own block is empty, say which way the nearest event is:
 #
@@ -418,11 +423,12 @@ enabled = true
 anchor = "right"
 x = 220
 y = 530
-# font_size = 14
+font_size = 0
 color = "#a0a0a0"
 
 [widget.session]
 enabled = true
+anchor = "left"
 x = 350
 y = 60
 font_size = 0
@@ -431,14 +437,14 @@ prefix = "IC Time: "
 
 [widget.xp]
 enabled = true
+anchor = "left"
 x = 220
 y = 80
 # White to match the clock, and because this sits beside the game's own
-# "LV 415: 8,122,281,000" and reads as its continuation.
+# "LV 415: 8,122,281,000" and reads as its continuation. The amber and red that
+# say recent polls have been missing still win over this.
 color = "#ffffff"
-# font_size = 16
-# The amber and red that say recent polls have been missing still win over this.
-# color = "#9be564"
+font_size = 0
 prefix = "Xp/Hr: "
 # Averaging window, and the sample count below which the rate is left blank
 # rather than extrapolated. The window must be long enough to hold min_samples at
@@ -525,9 +531,10 @@ color = "#e8e8e8"
 [widget.challenges]
 # The board grouped by category: event, yours, then clan. Not raw Flash order.
 enabled = true
+anchor = "left"
 x = 10
 y = 190
-# font_size = 11
+font_size = 0
 # Off-white rather than white: the longest column on screen, and the green and
 # red it marks finished and expiring rows with need somewhere quiet to stand out
 # from.
@@ -570,6 +577,43 @@ max_shown = 0
 # a key because "soon" depends on how you play: two hours is plenty for a daily
 # kill count and nowhere near enough for a weekly you have not started.
 urgent_within = 7200
+
+[widget.masteries]
+# Mastery levels and progress to the next one, one row each:
+#
+#   Melee Expert  48   512/750
+#
+# Off by default: it is another authenticated request stream, and most of the
+# time the interesting masteries are the two or three you are actively working
+# on. Needs the bridge script, like the challenge board.
+enabled = false
+# "right" makes x an inset from the right edge, like block info.
+anchor = "left"
+x = 10
+y = 900
+font_size = 0
+color = "#e8e8e8"
+
+# A mastery is MASTERED when every bonus it grants has hit its cap - the level
+# keeps climbing but the boost cannot grow. Off hides those rows: they will
+# never change again except as a bigger number next to the name.
+show_mastered = false
+
+# Artisan only levels from outpost work (services sold, production cycles), so
+# while you are out killing it is a row that never moves. Off by default.
+show_artisan = false
+
+# Watch specific masteries: with any names here, ONLY these are shown, and
+# show_mastered / show_artisan are ignored for them. Case does not matter, and
+# the weapon masteries' " Expert" suffix is optional: "melee" pins Melee Expert.
+# The game decides the names; `df-hud --dump-masteries` prints yours exactly.
+# Valid names: Looter, Artisan, Master, Melee, Chainsaw, Pistol, Shotgun,
+# Rifle, SMG, Machine Gun, Explosive (each weapon one is "... Expert" in full).
+# Example: pin = ["Melee", "Looter"]
+pin = []
+
+# Cap on rows, or 0 for no cap.
+max_shown = 0
 
 # The listener also exposes the two corrections the tray menu offers, so a key
 # can do them without taking a hand off the mouse:

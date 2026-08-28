@@ -66,11 +66,13 @@ HUD vanishes when you play.
 | `[widget.xp]` | [XP/hr](widgets/xp.md) |
 | `[widget.map]` | [City map](widgets/map.md) |
 | `[widget.challenges]` | [Challenge board](widgets/challenges.md) |
+| `[widget.masteries]` | [Masteries](widgets/masteries.md) |
 | `[widget.status]` | [How to use](usage.md#status-banner) |
 
 `enabled = false` turns a group off for good. A key or the tray toggles it
 for this run only. The city map starts hidden; the keybinds list starts
-shown. The status banner has no `enabled` key.
+shown; masteries are off entirely until you enable them in the file. The
+status banner has no `enabled` key.
 
 ## Switches
 

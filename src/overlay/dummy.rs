@@ -39,6 +39,7 @@ pub fn view(clock: &str) -> View {
         block: "Nastya's Holdout".into(),
         block_sub: String::new(),
         challenges: vec![],
+        masteries: vec![],
         bosses: vec![],
         keybinds: vec![
             "G - Minimap".into(),

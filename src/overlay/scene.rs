@@ -31,6 +31,7 @@ pub struct View {
     pub block: String,
     pub block_sub: String,
     pub challenges: Vec<Line>,
+    pub masteries: Vec<Line>,
     pub bosses: Vec<Line>,
     pub keybinds: Vec<String>,
     pub map: MapView,
@@ -243,6 +244,24 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
                 hud_a,
             },
             &view.challenges,
+        );
+    }
+
+    if cfg.widget.masteries.enabled && !view.masteries.is_empty() {
+        push_lines(
+            &mut scene,
+            xf,
+            LineLayout {
+                at: cfg.hud.place(
+                    cfg.widget.masteries.anchor,
+                    cfg.widget.masteries.x,
+                    cfg.widget.masteries.y,
+                ),
+                font_px: font_px(cfg, cfg.widget.masteries.font_size, xf),
+                default_color: widget_color(cfg, &cfg.widget.masteries.color),
+                hud_a,
+            },
+            &view.masteries,
         );
     }
 

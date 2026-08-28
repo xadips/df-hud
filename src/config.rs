@@ -21,6 +21,7 @@ const DEFAULT_BOSSMAP_URL: &str = "https://www.dfprofiler.com/bossmap/json/";
 const FLOOR_ACTIVE: StdDuration = StdDuration::from_secs(5);
 const FLOOR_IDLE: StdDuration = StdDuration::from_secs(30);
 const FLOOR_CHALLENGE: StdDuration = StdDuration::from_secs(30);
+const FLOOR_MASTERY: StdDuration = StdDuration::from_secs(30);
 const FLOOR_CATALOG: StdDuration = StdDuration::from_secs(3600);
 const FLOOR_BOSSMAP: StdDuration = StdDuration::from_secs(15);
 const FLOOR_TIMEOUT: StdDuration = StdDuration::from_secs(2);
@@ -94,6 +95,7 @@ pub struct Poll {
     pub active_interval: Duration,
     pub idle_interval: Duration,
     pub challenge_interval: Duration,
+    pub mastery_interval: Duration,
     pub catalog_interval: Duration,
     pub jitter: f64,
     pub only_when_game_running: bool,
@@ -198,6 +200,7 @@ pub struct Widget {
     pub keybinds: KeybindsWidget,
     pub map: MapWidget,
     pub challenges: ChallengesWidget,
+    pub masteries: MasteriesWidget,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -296,6 +299,22 @@ pub struct ChallengesWidget {
     pub show_sections: bool,
     pub max_shown: i32,
     pub urgent_within: Duration,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MasteriesWidget {
+    pub enabled: bool,
+    pub anchor: Anchor,
+    pub x: i32,
+    pub y: i32,
+    pub font_size: f32,
+    pub color: String,
+    pub show_mastered: bool,
+    pub show_artisan: bool,
+    /// Mastery names, case-insensitive. Non-empty shows only these and
+    /// bypasses `show_mastered` / `show_artisan`.
+    pub pin: Vec<String>,
+    pub max_shown: i32,
 }
 
 fn default_user_agent() -> String {
@@ -401,6 +420,7 @@ impl Default for Config {
                 active_interval: Duration::from_secs(10),
                 idle_interval: Duration(StdDuration::from_secs(120)),
                 challenge_interval: Duration::from_secs(30),
+                mastery_interval: Duration::from_secs(30),
                 catalog_interval: Duration(StdDuration::from_hours(24)),
                 jitter: 0.10,
                 only_when_game_running: true,
@@ -575,19 +595,41 @@ impl Default for Widget {
                 max_shown: 0,
                 urgent_within: Duration(StdDuration::from_hours(2)),
             },
+            masteries: MasteriesWidget {
+                enabled: false,
+                anchor: Anchor::Left,
+                x: 10,
+                y: 900,
+                font_size: 0.0,
+                color: "#e8e8e8".into(),
+                show_mastered: false,
+                show_artisan: false,
+                pin: Vec::new(),
+                max_shown: 0,
+            },
         }
     }
 }
 
 impl Poll {
     pub fn effective_challenge_interval(&self, game_running: bool) -> StdDuration {
+        self.stretched_when_idle(self.challenge_interval.0, game_running)
+    }
+
+    pub fn effective_mastery_interval(&self, game_running: bool) -> StdDuration {
+        self.stretched_when_idle(self.mastery_interval.0, game_running)
+    }
+
+    /// Idle widens a board interval to at least the idle interval; a board
+    /// already slower than idle keeps its own pace.
+    fn stretched_when_idle(&self, interval: StdDuration, game_running: bool) -> StdDuration {
         if game_running {
-            return self.challenge_interval.0;
+            return interval;
         }
-        if self.idle_interval.0 > self.challenge_interval.0 {
+        if self.idle_interval.0 > interval {
             self.idle_interval.0
         } else {
-            self.challenge_interval.0
+            interval
         }
     }
 }
@@ -755,6 +797,10 @@ impl Config {
             total += active_fraction * per_hour(self.poll.effective_challenge_interval(true))
                 + (1.0 - active_fraction) * per_hour(self.poll.effective_challenge_interval(false));
         }
+        if self.widget.masteries.enabled {
+            total += active_fraction * per_hour(self.poll.effective_mastery_interval(true))
+                + (1.0 - active_fraction) * per_hour(self.poll.effective_mastery_interval(false));
+        }
         total += per_hour(self.poll.catalog_interval.0);
         if self.bossmap.enabled {
             total += active_fraction * per_hour(self.bossmap.interval.0);
@@ -876,6 +922,12 @@ impl Config {
         );
         push_floor(
             &mut errs,
+            "poll.mastery_interval",
+            self.poll.mastery_interval.0,
+            FLOOR_MASTERY,
+        );
+        push_floor(
+            &mut errs,
             "poll.catalog_interval",
             self.poll.catalog_interval.0,
             FLOOR_CATALOG,
@@ -994,6 +1046,18 @@ impl Config {
                 self.widget.challenges.max_shown
             ));
         }
+        if self.widget.masteries.max_shown < 0 {
+            errs.push(format!(
+                "widget.masteries.max_shown {} cannot be negative (0 means no cap)",
+                self.widget.masteries.max_shown
+            ));
+        }
+        // The mastery list comes from the server, so names cannot be checked
+        // here; blanks would only ever match nothing.
+        self.widget.masteries.pin.retain(|p| !p.trim().is_empty());
+        for p in &mut self.widget.masteries.pin {
+            *p = p.trim().to_string();
+        }
         if self.widget.map.enabled {
             if self.widget.map.scale <= 0.0 {
                 errs.push(format!(
@@ -1065,6 +1129,13 @@ impl Config {
                 self.widget.challenges.font_size,
                 self.widget.challenges.color.as_str(),
             ),
+            (
+                "masteries",
+                self.widget.masteries.x,
+                self.widget.masteries.y,
+                self.widget.masteries.font_size,
+                self.widget.masteries.color.as_str(),
+            ),
         ] {
             if x < 0 || y < 0 {
                 errs.push(format!(
@@ -1089,6 +1160,7 @@ impl Config {
             ("bosses", self.widget.bosses.anchor),
             ("keybinds", self.widget.keybinds.anchor),
             ("challenges", self.widget.challenges.anchor),
+            ("masteries", self.widget.masteries.anchor),
         ] {
             if anchor == Anchor::Center {
                 errs.push(format!(
@@ -1438,6 +1510,7 @@ impl Watch {
 pub enum TrayOption {
     FpsDisplay,
     DismissLauncher,
+    MasteriesWidget,
 }
 
 impl TrayOption {
@@ -1445,6 +1518,7 @@ impl TrayOption {
         match self {
             Self::FpsDisplay => ("game_keys", "fps_display"),
             Self::DismissLauncher => ("game_keys", "dismiss_launcher"),
+            Self::MasteriesWidget => ("widget.masteries", "enabled"),
         }
     }
 }
@@ -1925,6 +1999,7 @@ window = 120
         for body in [
             "[poll]\nidle_interval = 5\n",
             "[poll]\nchallenge_interval = 10\n",
+            "[poll]\nmastery_interval = 10\n",
             "[poll]\ncatalog_interval = 60\n",
         ] {
             let err = Config::parse(body).unwrap_err();
@@ -1942,6 +2017,11 @@ window = 120
             ("[poll]\njitter = 0.9\n", "jitter"),
             ("[widget.xp]\nmin_samples = 1\n", "two points"),
             ("[widget.challenges]\nmax_shown = -1\n", "max_shown"),
+            ("[widget.masteries]\nmax_shown = -1\n", "max_shown"),
+            (
+                "[widget.masteries]\nanchor = \"center\"\n",
+                "widget.masteries.anchor",
+            ),
             ("[widget.xp]\nx = -10\n", "cannot be negative"),
             ("[widget.block]\nfont_size = -2\n", "font_size"),
             ("[widget.xp]\ncolor = \"#gg0000\"\n", "widget.xp.color"),
@@ -2142,6 +2222,39 @@ window = 120
     }
 
     #[test]
+    fn effective_mastery_interval_stretches_when_idle() {
+        let cfg = Config::default();
+        assert_eq!(
+            cfg.poll.effective_mastery_interval(true),
+            StdDuration::from_secs(30)
+        );
+        assert_eq!(
+            cfg.poll.effective_mastery_interval(false),
+            StdDuration::from_secs(120)
+        );
+    }
+
+    #[test]
+    fn masteries_widget_defaults_off_and_costs_nothing() {
+        let cfg = Config::default();
+        assert!(!cfg.widget.masteries.enabled);
+        let mut on = Config::default();
+        on.widget.masteries.enabled = true;
+        // 30s while playing is 120 more requests an hour.
+        let diff = on.requests_per_hour(1.0) - cfg.requests_per_hour(1.0);
+        assert!((diff - 120.0).abs() < 1.0, "diff = {diff}");
+    }
+
+    #[test]
+    fn mastery_pin_is_trimmed_and_blanks_drop() {
+        let cfg = Config::parse(
+            "[widget.masteries]\npin = [\" Melee Expert \", \"\", \"  \", \"Looter\"]\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.widget.masteries.pin, ["Melee Expert", "Looter"]);
+    }
+
+    #[test]
     fn set_tray_option_preserves_comments() {
         let dir = std::env::temp_dir().join(format!("df-hud-tray-opt-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
@@ -2155,6 +2268,31 @@ window = 120
         let got = std::fs::read_to_string(&path).unwrap();
         assert!(got.contains("fps_display = false # keep this"), "{got}");
         assert!(got.contains("dismiss_launcher = true"), "{got}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The tray enables the masteries widget for configs written before it
+    /// existed: the section is appended, nothing else is touched, and the
+    /// result still parses.
+    #[test]
+    fn set_tray_option_appends_a_missing_masteries_section() {
+        let dir = std::env::temp_dir().join(format!("df-hud-tray-mst-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[hud]\nopacity = 0.9 # keep this\n").unwrap();
+        set_tray_option(&path, TrayOption::MasteriesWidget, true).unwrap();
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert!(got.contains("opacity = 0.9 # keep this"), "{got}");
+        assert!(got.contains("[widget.masteries]\nenabled = true"), "{got}");
+        let cfg = Config::load(&path).unwrap();
+        assert!(cfg.widget.masteries.enabled);
+        assert!((cfg.hud.opacity - 0.9).abs() < 1e-6);
+
+        // A second click on an existing key edits in place, not a duplicate.
+        set_tray_option(&path, TrayOption::MasteriesWidget, false).unwrap();
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(got.matches("[widget.masteries]").count(), 1, "{got}");
+        assert!(got.contains("enabled = false"), "{got}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

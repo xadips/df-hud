@@ -13,8 +13,8 @@ use crate::data::citymap;
 use crate::data::xp;
 use crate::format;
 use crate::model::{
-    Challenge, Deadline, GameState, Ns, PollerStatus, PresenceState, RunState, Snapshot, Tick,
-    View, XpRate, XpSample, XpSource, XpStability,
+    Challenge, Deadline, GameState, Mastery, Ns, PollerStatus, PresenceState, RunState, Snapshot,
+    Tick, View, XpRate, XpSample, XpSource, XpStability,
 };
 
 const DF_FOREVER: i64 = (1 << 31) - 8;
@@ -192,6 +192,9 @@ struct Inner {
     board: Vec<Challenge>,
     have_board: bool,
     board_status: String,
+    masteries: Vec<Mastery>,
+    have_masteries: bool,
+    mastery_status: String,
     config_error: String,
     xp_samples: Option<Arc<dyn Fn() -> Vec<XpSample> + Send + Sync>>,
     xp_min_samples: i32,
@@ -239,6 +242,9 @@ impl Store {
                 board: Vec::new(),
                 have_board: false,
                 board_status: String::new(),
+                masteries: Vec::new(),
+                have_masteries: false,
+                mastery_status: String::new(),
                 config_error: String::new(),
                 xp_samples: None,
                 xp_min_samples: 3,
@@ -401,6 +407,22 @@ impl Store {
 
     pub fn set_challenge_status(&self, reason: String) {
         self.inner.lock().unwrap().board_status = reason;
+    }
+
+    pub fn set_masteries(&self, masteries: Vec<Mastery>) {
+        let mut s = self.inner.lock().unwrap();
+        s.masteries = masteries;
+        s.have_masteries = true;
+    }
+
+    pub fn clear_masteries(&self) {
+        let mut s = self.inner.lock().unwrap();
+        s.masteries.clear();
+        s.have_masteries = false;
+    }
+
+    pub fn set_mastery_status(&self, reason: String) {
+        self.inner.lock().unwrap().mastery_status = reason;
     }
 
     /// Empty clears it. Kept whole for the tray; the HUD line clips.
@@ -601,6 +623,10 @@ impl Store {
             v.challenges = Some(s.board.clone());
         }
         v.challenge_status = s.board_status.clone();
+        if s.have_masteries {
+            v.masteries = Some(s.masteries.clone());
+        }
+        v.mastery_status = s.mastery_status.clone();
         if let Some(get) = &s.xp_samples {
             let samples = get();
             let rate = xp::compute_rate(&samples, s.xp_min_samples, stability_locked(&s));
@@ -749,6 +775,9 @@ fn clear_session_derived(s: &mut Inner) {
     s.board.clear();
     s.have_board = false;
     s.board_status.clear();
+    s.masteries.clear();
+    s.have_masteries = false;
+    s.mastery_status.clear();
 }
 
 fn end_run_locked(s: &mut Inner, at: DateTime<Utc>, why: &str) -> bool {
@@ -1601,8 +1630,14 @@ mod tests {
             ..Challenge::default()
         }]);
         s.set_challenge_status("waiting".into());
+        s.set_masteries(vec![crate::model::Mastery {
+            name: "Looter".into(),
+            ..crate::model::Mastery::default()
+        }]);
+        s.set_mastery_status("waiting".into());
         assert!(s.derive(now).outpost_attack);
         assert!(s.derive(now).challenges.is_some());
+        assert!(s.derive(now).masteries.is_some());
         s.set_game(GameState::default());
         let view = s.derive(now);
         assert!(
@@ -1611,6 +1646,8 @@ mod tests {
         );
         assert!(view.challenges.is_none());
         assert!(view.challenge_status.is_empty());
+        assert!(view.masteries.is_none());
+        assert!(view.mastery_status.is_empty());
     }
 
     #[test]

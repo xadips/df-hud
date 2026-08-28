@@ -16,10 +16,12 @@ scraping, no OCR.
 - [Run clock](docs/widgets/session.md): elapsed since the run started. It keeps ticking if you pause
 - [XP/hr](docs/widgets/xp.md): a one-minute average
 - [Challenge board](docs/widgets/challenges.md): the whole board, filtered by category
+- [Masteries](docs/widgets/masteries.md): mastery levels and progress. Off by default
 - [City map](docs/widgets/map.md): the inner city. Press a key to show it
 
 Each group sits where you put it. The map starts hidden. The keybinds list
-starts shown; hide it from the tray or with `enabled = false`.
+starts shown; hide it from the tray or with `enabled = false`. Masteries are
+the one group that is off until you set `[widget.masteries] enabled = true`.
 
 ## Keys
 

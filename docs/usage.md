@@ -28,6 +28,7 @@ table.
 | XP/hr | shown | `U` resets | [xp](widgets/xp.md) |
 | City map | hidden | `G` | [map](widgets/map.md) |
 | Challenge board | shown | `Z` | [challenges](widgets/challenges.md) |
+| Masteries | off (`enabled = false`) | tray only | [masteries](widgets/masteries.md) |
 | Status banner | always | cannot hide | [Status banner](#status-banner) |
 
 A key or the tray toggles a group. That is not saved to the file. Restart puts
@@ -73,6 +74,11 @@ them yourself: [Manual wiring](manual-wiring.md).
 The tray is how you find df-hud when the overlay is off.
 
 - **Show overlay** / **Show challenges**: same as `J` and `Z`
+- **Enable masteries widget** / **Show masteries**: with the widget off in the
+  config (the default), the item writes `[widget.masteries] enabled = true`
+  into the file, like the FPS switch. After that it toggles visibility for
+  this run, like **Show challenges**. df-hud never turns it back off in the
+  file; that is a config edit. See [masteries](widgets/masteries.md).
 - **Show keybinds**: the overlay hotkey cheat sheet. Starts shown. No key for this group.
 - **FPS display on launch**: press the game's FPS key after the window appears
 - **Skip the launcher**: press Play on the configuration dialog. Turn this off
