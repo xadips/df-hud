@@ -74,6 +74,7 @@ fn exponential_backoff(base: Duration, failures: i32, cap: Duration, jitter: f64
     jittered(d, jitter)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Outcome {
     Stop,
     Stale,
@@ -259,18 +260,28 @@ impl PlayerPoller {
         run_loop(&*self);
     }
 
+    #[cfg(test)]
     pub fn poll_once(&self, scheduled: bool) -> Tick {
+        self.poll_classified(scheduled).0
+    }
+
+    /// The Tick plus what run_loop should do about it, decided here where the
+    /// typed client error is still in hand.
+    fn poll_classified(&self, scheduled: bool) -> (Tick, Outcome) {
         let identity = match self.creds.get() {
             Some((cr, _)) => Identity::Session(Box::new(cr)),
             None => match self.public_only_id() {
                 Some(id) => Identity::PublicId(id),
                 None => {
-                    return Tick {
-                        at: Utc::now(),
-                        vars: Default::default(),
-                        err: Some("no credentials".into()),
-                        scheduled,
-                    };
+                    return (
+                        Tick {
+                            at: Utc::now(),
+                            vars: Default::default(),
+                            err: Some("no credentials".into()),
+                            scheduled,
+                        },
+                        Outcome::Err,
+                    );
                 }
             },
         };
@@ -280,12 +291,15 @@ impl PlayerPoller {
             st.total_polls += 1;
         }
         if self.gate.wait(&self.stop, &self.shutdown).is_err() {
-            return Tick {
-                at: Utc::now(),
-                vars: Default::default(),
-                err: Some(Cancelled.to_string()),
-                scheduled,
-            };
+            return (
+                Tick {
+                    at: Utc::now(),
+                    vars: Default::default(),
+                    err: Some(Cancelled.to_string()),
+                    scheduled,
+                },
+                Outcome::Stop,
+            );
         }
         let result = {
             let client = self.client.lock().unwrap();
@@ -342,7 +356,14 @@ impl PlayerPoller {
         if let Some(fn_) = self.on_tick.lock().unwrap().clone() {
             fn_(tick.clone());
         }
-        tick
+        let outcome = if stale {
+            Outcome::Stale
+        } else if tick.err.is_some() {
+            Outcome::Err
+        } else {
+            Outcome::Ok
+        };
+        (tick, outcome)
     }
 }
 
@@ -406,18 +427,11 @@ impl Schedule for PlayerPoller {
     }
 
     fn poll(&self) -> Outcome {
-        let tick = self.poll_once(true);
+        let (_, outcome) = self.poll_classified(true);
         if self.stop.load(Ordering::SeqCst) {
             return Outcome::Stop;
         }
-        // poll never runs while paused, so a set latch means this poll set it.
-        if self.status().stale {
-            Outcome::Stale
-        } else if tick.err.is_some() {
-            Outcome::Err
-        } else {
-            Outcome::Ok
-        }
+        outcome
     }
 
     fn success_delay(&self) -> Duration {
@@ -530,15 +544,15 @@ impl ChallengePoller {
         run_loop(&*self);
     }
 
-    fn poll_once(&self) -> Result<(), String> {
+    fn poll_once(&self) -> Outcome {
         let Some((cr, salt_stored)) = self.creds.get() else {
-            return Err("no credentials".into());
+            return Outcome::Err;
         };
         let cfg = self.cfg.lock().unwrap().clone();
         let salt = cfg.signing_salt(|| salt_stored.clone());
-        self.gate
-            .wait(&self.stop, &self.shutdown)
-            .map_err(|e| e.to_string())?;
+        if self.gate.wait(&self.stop, &self.shutdown).is_err() {
+            return Outcome::Stop;
+        }
         let vars = {
             let mut client = self.client.lock().unwrap();
             client.cookie.clone_from(&cr.cookie);
@@ -555,7 +569,7 @@ impl ChallengePoller {
                 let board = self.persist.remember_challenge_board(board);
                 self.store.set_challenges(board);
                 self.store.set_challenge_status(String::new());
-                Ok(())
+                Outcome::Ok
             }
             Err(err) => {
                 if err.stale() {
@@ -569,7 +583,11 @@ impl ChallengePoller {
                 if n == 1 || n % 10 == 0 || err.stale() {
                     eprintln!("challenges: {err}");
                 }
-                Err(err.to_string())
+                if err.stale() {
+                    Outcome::Stale
+                } else {
+                    Outcome::Err
+                }
             }
         }
     }
@@ -621,12 +639,7 @@ impl Schedule for ChallengePoller {
     }
 
     fn poll(&self) -> Outcome {
-        match self.poll_once() {
-            // poll never runs while paused, so a set latch means this poll set it.
-            Err(_) if self.stale.load(Ordering::SeqCst) => Outcome::Stale,
-            Err(_) => Outcome::Err,
-            Ok(()) => Outcome::Ok,
-        }
+        self.poll_once()
     }
 
     fn success_delay(&self) -> Duration {
@@ -913,7 +926,7 @@ mod tests {
         let (p, _, _) = test_challenge_poller(Arc::new(AtomicBool::new(false)));
         p.replace_client(Client::new(&base, "df-hud-test"));
         assert!(p.pause_reason().is_none(), "not stale before the poll");
-        assert!(p.poll_once().is_err());
+        assert_eq!(p.poll_once(), Outcome::Stale);
         let reason = p.pause_reason().expect("paused");
         assert!(reason.contains("session expired"), "{reason}");
     }
@@ -1033,7 +1046,7 @@ mod tests {
         let (base, hits) = spawn_df(|_| (200, "&df_challengename_1=Travel".into()));
         let (p, _, _) = test_challenge_poller(Arc::new(AtomicBool::new(false)));
         p.replace_client(Client::new(&base, "df-hud-reloaded"));
-        assert!(p.poll_once().is_ok());
+        assert_eq!(p.poll_once(), Outcome::Ok);
         assert_eq!(*hits.lock().unwrap(), 1);
     }
 }
