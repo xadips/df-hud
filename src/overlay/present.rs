@@ -3,11 +3,13 @@
 use chrono::{DateTime, Utc};
 
 use crate::app::groups::Groups;
-use crate::config::Config;
+use crate::config::{Config, MasteriesWidget};
 use crate::data::bossmap::{self, MarkCategory};
 use crate::data::citymap;
 use crate::format;
-use crate::model::{Challenge, CityEvent, CityEventKind, CityMark, View as ModelView, XpStability};
+use crate::model::{
+    Challenge, CityEvent, CityEventKind, CityMark, Mastery, View as ModelView, XpStability,
+};
 use crate::overlay::layout::Viewport;
 use crate::overlay::scene::{self, Line, MapCell, MapMarker, MapView, TextRun, View};
 
@@ -119,6 +121,14 @@ pub fn hud_lines(v: &ModelView, cfg: &Config, groups: &Groups) -> Vec<String> {
         );
         rows.push((y, x, scene.challenges.into_iter().map(|l| l.text).collect()));
     }
+    if !scene.masteries.is_empty() {
+        let [x, y] = cfg.hud.place(
+            cfg.widget.masteries.anchor,
+            cfg.widget.masteries.x,
+            cfg.widget.masteries.y,
+        );
+        rows.push((y, x, scene.masteries.into_iter().map(|l| l.text).collect()));
+    }
     if !scene.keybinds.is_empty() {
         let [x, y] = cfg.hud.place(
             cfg.widget.keybinds.anchor,
@@ -178,6 +188,9 @@ pub fn from_view(v: &ModelView, cfg: &Config, groups: &Groups) -> View {
     }
     if !groups.hidden("challenges") {
         out.challenges = challenge_lines(v, cfg);
+    }
+    if !groups.hidden("masteries") {
+        out.masteries = mastery_lines(v, cfg);
     }
     if !groups.hidden("bosses") {
         out.bosses = boss_lines(v, cfg);
@@ -871,6 +884,97 @@ fn name_covers_objective(name: &str, objective: &str) -> bool {
         return true;
     }
     name.to_lowercase().contains(&objective.to_lowercase())
+}
+
+/// Case does not matter, and the weapon masteries' " Expert" suffix is
+/// optional: "smg" pins "SMG Expert". The stripped names collide with nothing
+/// (Looter, Artisan and Master carry no suffix).
+fn pin_matches(pin: &str, name: &str) -> bool {
+    if pin.eq_ignore_ascii_case(name) {
+        return true;
+    }
+    name.strip_suffix(" Expert")
+        .is_some_and(|base| pin.eq_ignore_ascii_case(base))
+}
+
+fn show_mastery(m: &Mastery, w: &MasteriesWidget) -> bool {
+    // Pinning is "watch these": it overrides the other filters, so a pinned
+    // mastered mastery (or Artisan) still shows.
+    if !w.pin.is_empty() {
+        return w.pin.iter().any(|p| pin_matches(p, &m.name));
+    }
+    if m.mastered() && !w.show_mastered {
+        return false;
+    }
+    if !w.show_artisan && m.name.eq_ignore_ascii_case("artisan") {
+        return false;
+    }
+    true
+}
+
+fn mastery_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
+    let w = &cfg.widget.masteries;
+    if !w.enabled {
+        return Vec::new();
+    }
+    let all = v.masteries.as_deref().unwrap_or(&[]);
+    let cap = if w.max_shown > 0 {
+        w.max_shown as usize
+    } else {
+        usize::MAX
+    };
+    let status_line = || Line {
+        text: format!("masteries: {}", v.mastery_status),
+        ..Line::default()
+    };
+    let shown: Vec<&Mastery> = all.iter().filter(|m| show_mastery(m, w)).take(cap).collect();
+    if shown.is_empty() {
+        if !v.mastery_status.is_empty() && all.is_empty() {
+            return vec![status_line()];
+        }
+        return Vec::new();
+    }
+    let label = |m: &Mastery| format!("{} {}", m.name, m.level);
+    let pad = shown
+        .iter()
+        .map(|m| label(m).chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut lines: Vec<Line> = shown
+        .iter()
+        .map(|m| {
+            let label = label(m);
+            let progress = if m.mastered() {
+                "MAX".to_string()
+            } else {
+                format!("{}/{}", format::int(m.exp), format::int(m.next_exp))
+            };
+            let gap = " ".repeat(2 + pad - label.chars().count());
+            Line {
+                text: format!("{label}{gap}{progress}"),
+                color: if m.mastered() { Some(DONE_RGB) } else { None },
+                runs: vec![
+                    TextRun {
+                        text: label,
+                        alpha: 1.0,
+                    },
+                    TextRun {
+                        text: gap,
+                        alpha: 1.0,
+                    },
+                    TextRun {
+                        text: progress,
+                        alpha: OBJECTIVE_ALPHA,
+                    },
+                ],
+                ..Line::default()
+            }
+        })
+        .collect();
+    if !v.mastery_status.is_empty() {
+        lines.insert(0, status_line());
+    }
+    lines
 }
 
 fn map_view(v: &ModelView, cfg: &Config) -> MapView {
@@ -1919,6 +2023,165 @@ mod tests {
 
         let joined: String = done_obj.runs.iter().map(|r| r.text.as_str()).collect();
         assert_eq!(joined, done_obj.text);
+    }
+
+    fn mastery(name: &str, level: i32, exp: i64, next: i64, value: f64, max: f64) -> Mastery {
+        Mastery {
+            name: name.into(),
+            level,
+            exp,
+            next_exp: next,
+            bonuses: vec![crate::model::MasteryBonus {
+                name: "Bonus".into(),
+                scale: 0.1,
+                max,
+                value,
+            }],
+            ..Mastery::default()
+        }
+    }
+
+    fn masteries() -> Vec<Mastery> {
+        vec![
+            mastery("Looter", 204, 37, 103, 1.02, 5.0),
+            mastery("Melee Expert", 48, 512, 750, 4.8, 20.0),
+            mastery("Artisan", 120, 9, 130, 6.0, 20.0),
+            mastery("SMG Expert", 200, 3, 1200, 20.0, 20.0),
+        ]
+    }
+
+    fn masteries_on() -> Config {
+        let mut cfg = Config::default();
+        cfg.widget.masteries.enabled = true;
+        cfg
+    }
+
+    #[test]
+    fn mastery_lines_hide_artisan_and_mastered_by_default() {
+        let v = ModelView {
+            masteries: Some(masteries()),
+            ..ModelView::default()
+        };
+        let cfg = masteries_on();
+        let lines = mastery_lines(&v, &cfg);
+        let text = texts(&lines);
+        assert_eq!(text.len(), 2, "{text:?}");
+        assert_eq!(text[0], "Looter 204       37/103");
+        assert_eq!(text[1], "Melee Expert 48  512/750");
+        assert!(lines.iter().all(|l| l.color.is_none() && !l.strike));
+
+        let mut disabled = cfg.clone();
+        disabled.widget.masteries.enabled = false;
+        assert!(mastery_lines(&v, &disabled).is_empty());
+    }
+
+    #[test]
+    fn mastery_show_toggles_bring_rows_back() {
+        let v = ModelView {
+            masteries: Some(masteries()),
+            ..ModelView::default()
+        };
+        let mut cfg = masteries_on();
+        cfg.widget.masteries.show_mastered = true;
+        let lines = mastery_lines(&v, &cfg);
+        let smg = lines
+            .iter()
+            .find(|l| l.text.contains("SMG Expert"))
+            .expect("mastered row shown");
+        assert!(smg.text.ends_with("MAX"), "{}", smg.text);
+        assert_eq!(smg.color, Some(DONE_RGB));
+        assert!(!smg.strike, "MAX already says it; no strikethrough");
+
+        cfg.widget.masteries.show_artisan = true;
+        let text = texts(&mastery_lines(&v, &cfg));
+        assert_eq!(text.len(), 4, "{text:?}");
+        assert!(text.iter().any(|l| l.contains("Artisan")));
+    }
+
+    #[test]
+    fn mastery_pin_shows_only_pinned_and_beats_other_filters() {
+        let v = ModelView {
+            masteries: Some(masteries()),
+            ..ModelView::default()
+        };
+        let mut cfg = masteries_on();
+        cfg.widget.masteries.pin = vec!["smg expert".into(), "ARTISAN".into()];
+        let text = texts(&mastery_lines(&v, &cfg));
+        assert_eq!(text.len(), 2, "{text:?}");
+        assert!(text[0].contains("Artisan"), "board order kept: {text:?}");
+        assert!(text[1].contains("SMG Expert"));
+
+        cfg.widget.masteries.pin = vec!["No Such Mastery".into()];
+        assert!(mastery_lines(&v, &cfg).is_empty());
+    }
+
+    #[test]
+    fn mastery_pin_expert_suffix_is_optional() {
+        assert!(pin_matches("melee", "Melee Expert"));
+        assert!(pin_matches("SMG", "SMG Expert"));
+        assert!(pin_matches("machine gun", "Machine Gun Expert"));
+        assert!(pin_matches("Looter", "Looter"));
+        assert!(!pin_matches("Expert", "Melee Expert"));
+        assert!(!pin_matches("lee", "Melee Expert"), "not a substring match");
+
+        let v = ModelView {
+            masteries: Some(masteries()),
+            ..ModelView::default()
+        };
+        let mut cfg = masteries_on();
+        cfg.widget.masteries.pin = vec!["melee".into()];
+        let text = texts(&mastery_lines(&v, &cfg));
+        assert_eq!(text.len(), 1, "{text:?}");
+        assert!(text[0].contains("Melee Expert"));
+    }
+
+    #[test]
+    fn mastery_max_shown_caps_rows() {
+        let v = ModelView {
+            masteries: Some(masteries()),
+            ..ModelView::default()
+        };
+        let mut cfg = masteries_on();
+        cfg.widget.masteries.max_shown = 1;
+        let text = texts(&mastery_lines(&v, &cfg));
+        assert_eq!(text.len(), 1, "{text:?}");
+        assert!(text[0].contains("Looter"));
+    }
+
+    #[test]
+    fn mastery_status_line_mirrors_challenges() {
+        let empty = ModelView {
+            mastery_status: "no session yet - install the bridge script".into(),
+            ..ModelView::default()
+        };
+        let lines = mastery_lines(&empty, &masteries_on());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].text,
+            "masteries: no session yet - install the bridge script"
+        );
+
+        let stale = ModelView {
+            masteries: Some(masteries()),
+            mastery_status: "could not load masteries (retrying)".into(),
+            ..ModelView::default()
+        };
+        let lines = texts(&mastery_lines(&stale, &masteries_on()));
+        assert!(lines[0].contains("could not load masteries"), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("Looter")), "{lines:?}");
+    }
+
+    #[test]
+    fn mastery_group_toggle_hides_the_widget() {
+        let v = ModelView {
+            masteries: Some(masteries()),
+            ..ModelView::default()
+        };
+        let cfg = masteries_on();
+        let g = Groups::new();
+        assert!(!from_view(&v, &cfg, &g).masteries.is_empty());
+        assert!(g.toggle("masteries").unwrap());
+        assert!(from_view(&v, &cfg, &g).masteries.is_empty());
     }
 
     #[test]

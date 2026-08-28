@@ -17,6 +17,7 @@ use crate::config::{self, Config};
 #[cfg(test)]
 use crate::data::catalog;
 use crate::data::challenges;
+use crate::data::masteries;
 use crate::format;
 use crate::game;
 use crate::game::desktop;
@@ -33,6 +34,7 @@ const LONG_ALIASES: &[&str] = &[
     "config",
     "dump-challenges",
     "dump-fields",
+    "dump-masteries",
     "headless",
     "once",
     "print-hud",
@@ -87,6 +89,10 @@ pub enum Launch {
         config: Option<PathBuf>,
         raw: bool,
     },
+    DumpMasteries {
+        config: Option<PathBuf>,
+        raw: bool,
+    },
     Headless {
         config: Option<PathBuf>,
         print_hud: bool,
@@ -117,6 +123,7 @@ where
     let mut once = false;
     let mut dump_fields = false;
     let mut dump_challenges = false;
+    let mut dump_masteries = false;
     let mut headless = false;
     let mut config = None;
     let mut duration = Duration::ZERO;
@@ -141,6 +148,7 @@ where
             Long("once") => once = true,
             Long("dump-fields") => dump_fields = true,
             Long("dump-challenges") => dump_challenges = true,
+            Long("dump-masteries") => dump_masteries = true,
             Long("headless") => headless = true,
             Long("config") => {
                 config = Some(PathBuf::from(parser.value()?.string()?));
@@ -180,16 +188,23 @@ where
     if help {
         return Ok(Launch::Help);
     }
-    if dump_fields && !once && !dump_challenges {
-        return Err("--dump-fields is for --once or --dump-challenges".into());
+    if dump_fields && !once && !dump_challenges && !dump_masteries {
+        return Err("--dump-fields is for --once, --dump-challenges, or --dump-masteries".into());
     }
-    let exclusive = [version, check_config, check_game, once, dump_challenges]
-        .iter()
-        .filter(|on| **on)
-        .count();
+    let exclusive = [
+        version,
+        check_config,
+        check_game,
+        once,
+        dump_challenges,
+        dump_masteries,
+    ]
+    .iter()
+    .filter(|on| **on)
+    .count();
     if exclusive > 1 {
         return Err(
-            "use only one of --version, --check-config, --check-game, --once, --dump-challenges"
+            "use only one of --version, --check-config, --check-game, --once, --dump-challenges, --dump-masteries"
                 .into(),
         );
     }
@@ -206,6 +221,8 @@ where
         Some("--once")
     } else if dump_challenges {
         Some("--dump-challenges")
+    } else if dump_masteries {
+        Some("--dump-masteries")
     } else if headless {
         Some("--headless")
     } else {
@@ -245,6 +262,12 @@ where
     }
     if dump_challenges {
         return Ok(Launch::DumpChallenges {
+            config,
+            raw: dump_fields,
+        });
+    }
+    if dump_masteries {
+        return Ok(Launch::DumpMasteries {
             config,
             raw: dump_fields,
         });
@@ -317,8 +340,9 @@ df-hud — overlay (live derive)
   --once                 poll once, print the view, and exit
   --print-view           alias of --once
   --print-hud            print HUD text lines each update
-  --dump-fields          with --once / --dump-challenges, print the player record (secrets withheld)
+  --dump-fields          with --once / --dump-challenges / --dump-masteries, print the raw fields (secrets withheld)
   --dump-challenges      fetch the challenge board once and print it
+  --dump-masteries       fetch your masteries once and print them
   --check-config         validate TOML and print the request budget
   --check-game           report whether the game client is detected
   --headless             run pollers without the overlay window
@@ -352,6 +376,7 @@ pub fn run(launch: Launch) -> Result<(), Box<dyn Error>> {
             dump_fields,
         } => run_once(config.as_deref(), dump_fields),
         Launch::DumpChallenges { config, raw } => dump_challenges(config.as_deref(), raw),
+        Launch::DumpMasteries { config, raw } => dump_masteries(config.as_deref(), raw),
         Launch::Headless { config, print_hud } => run_headless(config, print_hud),
         Launch::Overlay(_) => Err("internal: overlay is started from main".into()),
     }
@@ -621,7 +646,17 @@ fn run_once(config: Option<&Path>, dump_fields: bool) -> Result<(), Box<dyn Erro
     Ok(())
 }
 
-fn dump_challenges(config: Option<&Path>, raw: bool) -> Result<(), Box<dyn Error>> {
+type SignedOneshotContext = (
+    Config,
+    crate::net::creds::Credentials,
+    Client,
+    Store,
+    String,
+);
+
+/// [`oneshot_setup`] plus what a hotrods call needs on top: a session with its
+/// cookie applied, and the signing salt.
+fn signed_oneshot_setup(config: Option<&Path>) -> Result<SignedOneshotContext, Box<dyn Error>> {
     let (cfg, creds, mut client, store) = oneshot_setup(config)?;
     let Some((cr, salt_stored)) = creds.get() else {
         return Err(
@@ -637,6 +672,11 @@ Load the Outpost home page with the bridge userscript installed."
                 .into(),
         );
     }
+    Ok((cfg, cr, client, store, salt))
+}
+
+fn dump_challenges(config: Option<&Path>, raw: bool) -> Result<(), Box<dyn Error>> {
+    let (_cfg, cr, client, store, salt) = signed_oneshot_setup(config)?;
     let vars = client
         .load_challenge(&cr.to_df(), &salt)
         .map_err(|e| format!("load_challenge failed: {e}"))?;
@@ -665,6 +705,42 @@ Load the Outpost home page with the bridge userscript installed."
         format_challenge_board(&vars, level, gold, chrono::Utc::now())
     );
     Ok(())
+}
+
+fn dump_masteries(config: Option<&Path>, raw: bool) -> Result<(), Box<dyn Error>> {
+    let (_cfg, cr, client, _store, salt) = signed_oneshot_setup(config)?;
+    let vars = client
+        .load_masteries(&cr.to_df(), &salt)
+        .map_err(|e| format!("load_masteries failed: {e}"))?;
+    if raw {
+        print!("{}", dump_record_fields(&vars));
+        return Ok(());
+    }
+    print!("{}", format_masteries(&vars));
+    Ok(())
+}
+
+fn format_masteries(vars: &std::collections::HashMap<String, String>) -> String {
+    let list = masteries::parse(vars);
+    let mut out = format!("{} masteries\n", list.len());
+    for m in list {
+        let status = if m.mastered() { "x" } else { " " };
+        out.push_str(&format!(
+            "\n[{status}] {}  level {}  {} / {}\n",
+            m.name,
+            m.level,
+            format::int(m.exp),
+            format::int(m.next_exp)
+        ));
+        for b in &m.bonuses {
+            let cap = if b.capped() { " MAX" } else { "" };
+            out.push_str(&format!(
+                "        {:<28} +{}%{cap}  (+{}%/lvl, cap {}%)\n",
+                b.name, b.value, b.scale, b.max
+            ));
+        }
+    }
+    out
 }
 
 fn format_challenge_board(
@@ -952,6 +1028,57 @@ mod tests {
             text.contains("FOUND:") || text.contains("NOT FOUND"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn dump_masteries_parses_and_conflicts() {
+        assert_eq!(
+            parse(&["--dump-masteries"]).unwrap(),
+            Launch::DumpMasteries {
+                config: None,
+                raw: false
+            }
+        );
+        assert_eq!(
+            parse(&["-dump-masteries", "-dump-fields"]).unwrap(),
+            Launch::DumpMasteries {
+                config: None,
+                raw: true
+            }
+        );
+        let err = parse(&["--dump-masteries", "--dump-challenges"]).unwrap_err();
+        assert!(err.contains("use only one"), "{err}");
+    }
+
+    #[test]
+    fn format_masteries_prints_levels_and_caps() {
+        let mut vars = HashMap::new();
+        vars.insert("max_masteries".into(), "2".into());
+        vars.insert("mastery_0_name".into(), "Looter".into());
+        vars.insert("mastery_0_stat_level".into(), "204".into());
+        vars.insert("mastery_0_stat_exp".into(), "37".into());
+        vars.insert("mastery_0_scale_factor".into(), "1.0001".into());
+        vars.insert("mastery_0_start_point".into(), "100".into());
+        vars.insert("mastery_0_bonuses".into(), "1".into());
+        vars.insert("mastery_0_bonuses_0_name".into(), "Item Find Chance".into());
+        vars.insert("mastery_0_bonuses_0_scale".into(), "0.005".into());
+        vars.insert("mastery_0_bonuses_0_max".into(), "5".into());
+        vars.insert("mastery_1_name".into(), "SMG Expert".into());
+        vars.insert("mastery_1_stat_level".into(), "200".into());
+        vars.insert("mastery_1_stat_exp".into(), "3".into());
+        vars.insert("mastery_1_scale_factor".into(), "1.001".into());
+        vars.insert("mastery_1_start_point".into(), "500".into());
+        vars.insert("mastery_1_bonuses".into(), "1".into());
+        vars.insert("mastery_1_bonuses_0_name".into(), "SMG Damage".into());
+        vars.insert("mastery_1_bonuses_0_scale".into(), "0.1".into());
+        vars.insert("mastery_1_bonuses_0_max".into(), "20".into());
+        let text = format_masteries(&vars);
+        assert!(text.starts_with("2 masteries\n"), "{text}");
+        assert!(text.contains("[ ] Looter  level 204  37 / 103"), "{text}");
+        assert!(text.contains("Item Find Chance"), "{text}");
+        assert!(text.contains("+1.02%"), "{text}");
+        assert!(text.contains("[x] SMG Expert"), "{text}");
+        assert!(text.contains("+20% MAX"), "{text}");
     }
 
     #[test]

@@ -3,7 +3,7 @@
 You need the overlay binary. You should also install
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge). That's
 the usual setup: the script keeps your session in sync, and the challenge
-board won't work without it.
+board and masteries won't work without it.
 
 If you'd rather not run the script, [`df.user_id`](#without-the-script) is
 documented below. It's a real option. It isn't the same as having a session,
@@ -76,14 +76,15 @@ df-hud listens on `127.0.0.1:9310`. Install
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge) in
 Tampermonkey or Violentmonkey. That is the usual setup: the script posts your
 session on the loopback, picks up a new login on its own, and is what the
-challenge board needs.
+challenge board and the masteries widget need.
 
 It is the only script that feeds df-hud. Three values live solely inside a
 logged-in page's JavaScript (`userID`, a per-session `password` hash that is
 not your account password, and `sc`), and the challenge board additionally
 needs the page cookie and `skeygen`, the game's request-signing salt. Reporting
 the salt from page context is what lets the board keep working when the game
-rotates it, with no config edit.
+rotates it, with no config edit. The masteries widget (off by default) uses
+the same signed call and has the same needs.
 
 Load the Outpost home page once after you install it. df-hud will not poll
 until that arrives. The script re-posts every five minutes, so logging in

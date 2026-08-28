@@ -10,6 +10,7 @@ use std::time::Duration;
 
 const GET_VALUES: &str = "get_values";
 const LOAD_CHALLENGE: &str = "hotrods/load_challenge";
+const LOAD_MASTERIES: &str = "hotrods/load_masteries";
 
 const FORBIDDEN: &[&str] = &["hunger", "itemspawn", "modify_values"];
 
@@ -165,7 +166,7 @@ fn record_looks_real(vars: &Vars) -> bool {
 }
 
 fn allowed(endpoint: &str) -> bool {
-    endpoint == GET_VALUES || endpoint == LOAD_CHALLENGE
+    endpoint == GET_VALUES || endpoint == LOAD_CHALLENGE || endpoint == LOAD_MASTERIES
 }
 
 pub struct Client {
@@ -336,8 +337,18 @@ impl Client {
     }
 
     pub fn load_challenge(&self, cr: &Credentials, salt: &str) -> Result<Vars, Error> {
+        self.load_hotrods(LOAD_CHALLENGE, cr, salt)
+    }
+
+    pub fn load_masteries(&self, cr: &Credentials, salt: &str) -> Result<Vars, Error> {
+        self.load_hotrods(LOAD_MASTERIES, cr, salt)
+    }
+
+    /// The hotrods `action=get` shape both boards share: hashed POST with the
+    /// session credentials, same signing salt.
+    fn load_hotrods(&self, endpoint: &str, cr: &Credentials, salt: &str) -> Result<Vars, Error> {
         self.call(
-            LOAD_CHALLENGE,
+            endpoint,
             &[
                 Param {
                     key: "userID".into(),
@@ -491,8 +502,10 @@ mod tests {
     #[test]
     fn hashed_call_needs_salt() {
         let c = Client::new("http://127.0.0.1:1", "test");
-        let err = c.call(LOAD_CHALLENGE, &[], true, "").unwrap_err();
-        assert!(err.to_string().contains("salt"), "{err}");
+        for endpoint in [LOAD_CHALLENGE, LOAD_MASTERIES] {
+            let err = c.call(endpoint, &[], true, "").unwrap_err();
+            assert!(err.to_string().contains("salt"), "{err}");
+        }
     }
 
     struct Hit {
@@ -616,13 +629,27 @@ mod tests {
             assert!(got.query.contains("userID=999"));
         }
         c.load_challenge(&cr, TEST_SALT).unwrap();
+        {
+            let got = last.lock().unwrap();
+            assert_eq!(got.path, "/hotrods/load_challenge.php");
+            assert!(
+                got.body
+                    .starts_with("hash=7fe50eb1872ba13897d0b7cc8b83e5e4&"),
+                "{}",
+                got.body
+            );
+        }
+        c.load_masteries(&cr, TEST_SALT).unwrap();
         let got = last.lock().unwrap();
+        assert_eq!(got.path, "/hotrods/load_masteries.php");
+        // Same params, same salt: the signature matches the challenge call.
         assert!(
             got.body
                 .starts_with("hash=7fe50eb1872ba13897d0b7cc8b83e5e4&"),
             "{}",
             got.body
         );
+        assert!(got.body.ends_with("&action=get"), "{}", got.body);
     }
 
     #[test]

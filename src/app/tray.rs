@@ -472,6 +472,29 @@ mod linux {
                     ..CheckmarkItem::default()
                 }
                 .into(),
+                // Config-disabled (every config written before the widget
+                // existed), the item enables it in the file, like the FPS
+                // switch. Once enabled it is a runtime toggle like challenges.
+                if self.handle.masteries_widget_enabled() {
+                    CheckmarkItem {
+                        label: "Show masteries".into(),
+                        checked: self.handle.groups.shown("masteries"),
+                        activate: Box::new(|this: &mut HudTray| {
+                            let _ = this.handle.toggle_group("masteries");
+                        }),
+                        ..CheckmarkItem::default()
+                    }
+                    .into()
+                } else {
+                    StandardItem {
+                        label: "Enable masteries widget".into(),
+                        activate: Box::new(|this: &mut HudTray| {
+                            this.handle.enable_masteries_widget();
+                        }),
+                        ..StandardItem::default()
+                    }
+                    .into()
+                },
                 CheckmarkItem {
                     label: "Show keybinds".into(),
                     checked: self.handle.groups.shown("keybinds"),
@@ -621,7 +644,8 @@ mod linux {
         }
     }
 
-    fn snapshot(handle: &Handle) -> (IconKind, String, bool, bool, bool, bool) {
+    #[allow(clippy::type_complexity)] // change-detection tuple; one slot per menu input
+    fn snapshot(handle: &Handle) -> (IconKind, String, bool, bool, bool, bool, bool, bool) {
         let vis = handle.store.visibility();
         let view = handle.store.tray_hint(chrono::Utc::now());
         let bind_failed = handle.presence_bind_failed();
@@ -644,6 +668,8 @@ mod linux {
             ),
             handle.overlay_on.load(Ordering::SeqCst),
             handle.groups.shown("challenges"),
+            handle.groups.shown("masteries"),
+            handle.masteries_widget_enabled(),
             handle.gamekeys.fps_display(),
             handle.gamekeys.dismiss_launcher(),
         )
@@ -718,6 +744,7 @@ mod windows {
     const WM_TRAY: u32 = WM_APP + 1;
     const ID_OVERLAY: u16 = 1;
     const ID_CHALLENGES: u16 = 2;
+    const ID_MASTERIES: u16 = 6;
     const ID_KEYBINDS: u16 = 5;
     const ID_FPS: u16 = 3;
     const ID_LAUNCHER: u16 = 4;
@@ -917,6 +944,26 @@ mod windows {
                 ID_CHALLENGES as usize,
                 wide("Show challenges").as_ptr(),
             );
+            // Config-disabled, the item enables the widget in the file; after
+            // that it is a runtime toggle like the challenge board.
+            if ctx.handle.masteries_widget_enabled() {
+                let masteries = ctx.handle.groups.shown("masteries");
+                InsertMenuW(
+                    menu,
+                    u32::MAX,
+                    MF_STRING | if masteries { MF_CHECKED } else { MF_UNCHECKED },
+                    ID_MASTERIES as usize,
+                    wide("Show masteries").as_ptr(),
+                );
+            } else {
+                InsertMenuW(
+                    menu,
+                    u32::MAX,
+                    MF_STRING,
+                    ID_MASTERIES as usize,
+                    wide("Enable masteries widget").as_ptr(),
+                );
+            }
             let keybinds = ctx.handle.groups.shown("keybinds");
             InsertMenuW(
                 menu,
@@ -1039,6 +1086,13 @@ mod windows {
             }
             ID_CHALLENGES => {
                 let _ = h.toggle_group("challenges");
+            }
+            ID_MASTERIES => {
+                if h.masteries_widget_enabled() {
+                    let _ = h.toggle_group("masteries");
+                } else {
+                    h.enable_masteries_widget();
+                }
             }
             ID_KEYBINDS => {
                 let _ = h.toggle_group("keybinds");

@@ -15,6 +15,7 @@
 - [XP/hr](widgets/xp.md)
 - [City map](widgets/map.md)
 - [Challenge board](widgets/challenges.md)
+- [Masteries](widgets/masteries.md)
 
 Defaults and most keys are in [df-hud.example.toml](../df-hud.example.toml).
 Notes on the game feeds are in [knowledge/](../knowledge/).

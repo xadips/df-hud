@@ -9,6 +9,7 @@ pub const TOGGLEABLE: &[&str] = &[
     "session",
     "xp",
     "challenges",
+    "masteries",
     "map",
     "keybinds",
 ];
