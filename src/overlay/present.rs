@@ -152,7 +152,7 @@ pub fn from_view(v: &ModelView, cfg: &Config, groups: &Groups) -> View {
         },
         status_color: if v.status.is_empty() {
             None
-        } else if v.status_is_fix {
+        } else if v.status_is_prompt {
             Some(SHAKY_RGB)
         } else {
             Some(EXPIRING_RGB)
@@ -2347,18 +2347,18 @@ mod tests {
     }
 
     #[test]
-    fn status_fix_is_amber_else_red() {
+    fn status_prompts_are_amber_errors_red() {
         let cfg = Config::default();
         let g = Groups::new();
         let fix = ModelView {
             status: "waiting for the bridge script".into(),
-            status_is_fix: true,
+            status_is_prompt: true,
             ..ModelView::default()
         };
         assert_eq!(from_view(&fix, &cfg, &g).status_color, Some(SHAKY_RGB));
         let stuck = ModelView {
             status: "server not responding (retrying)".into(),
-            status_is_fix: false,
+            status_is_prompt: false,
             ..ModelView::default()
         };
         assert_eq!(from_view(&stuck, &cfg, &g).status_color, Some(EXPIRING_RGB));

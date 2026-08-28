@@ -606,7 +606,7 @@ impl Store {
             let rate = xp::compute_rate(&samples, s.xp_min_samples, stability_locked(&s));
             apply_rate(&mut v, rate);
         }
-        (v.status, v.status_is_fix) = status_locked(&s);
+        (v.status, v.status_is_prompt) = status_locked(&s);
         v
     }
 
@@ -1129,7 +1129,7 @@ mod tests {
         });
         let v = s.derive(now);
         assert!(v.status.contains("session expired"));
-        assert!(v.status_is_fix);
+        assert!(v.status_is_prompt);
     }
 
     #[test]
@@ -1158,7 +1158,7 @@ mod tests {
         );
         assert!(!v.status.contains("/home/"), "the path wastes banner width");
         assert!(v.status.lines().count() <= 3);
-        assert!(!v.status_is_fix, "red - it is an error");
+        assert!(!v.status_is_prompt, "red - it is an error");
         assert!(
             !s.tray_hint(now).status.contains('\n'),
             "tray gets one line"
@@ -1193,7 +1193,7 @@ mod tests {
         assert!(!v.status.contains("bridge"), "{}", v.status);
         assert!(!v.status.contains("challenge"), "{}", v.status);
         assert_eq!(v.status, "waiting for the first poll");
-        assert!(!v.status_is_fix, "nothing for the user to fix");
+        assert!(!v.status_is_prompt, "a plain wait is not a prompt");
     }
 
     #[test]

@@ -79,6 +79,18 @@ pub fn version_label() -> String {
     format!("df-hud {}", env!("CARGO_PKG_VERSION"))
 }
 
+/// The update item's label on both trays; clicking it (re-)checks.
+pub fn update_label(status: &crate::app::updates::Status) -> String {
+    use crate::app::updates::Status;
+    match status {
+        Status::Unchecked => "Check for updates".into(),
+        Status::Checking => "Checking for updates…".into(),
+        Status::UpToDate => format!("{} is the latest", version_label()),
+        Status::Newer(version) => format!("Update to {version}…"),
+        Status::Failed => "Update check failed - see log".into(),
+    }
+}
+
 #[cfg(test)]
 fn tooltip(view: Option<&View>, vis: Visibility) -> String {
     tooltip_with_version(view.map(|v| v as &dyn TrayState), vis, "")
@@ -377,7 +389,8 @@ fn run(handle: Arc<Handle>, stop: Arc<AtomicBool>) {
 mod linux {
     use super::{
         ACTIVE, Arc, AtomicBool, ERROR, Handle, ICON_SIZE, IDLE, IconKind, Ordering, WARN,
-        icon_kind, ipc_unconnected, menu_alert_from, raster, tooltip_with_presence, version_label,
+        icon_kind, ipc_unconnected, menu_alert_from, raster, tooltip_with_presence, update_label,
+        version_label,
     };
     use std::time::Duration;
 
@@ -556,7 +569,7 @@ mod linux {
             );
             items.push(
                 StandardItem {
-                    label: self.handle.update_note(),
+                    label: update_label(&self.handle.update_status()),
                     activate: Box::new(|this: &mut HudTray| this.handle.check_updates()),
                     ..StandardItem::default()
                 }
@@ -988,7 +1001,7 @@ mod windows {
                 u32::MAX,
                 MF_STRING,
                 ID_UPDATES as usize,
-                wide(&ctx.handle.update_note()).as_ptr(),
+                wide(&update_label(&ctx.handle.update_status())).as_ptr(),
             );
             InsertMenuW(menu, u32::MAX, MF_SEPARATOR, 0, ptr::null());
             InsertMenuW(
@@ -1138,6 +1151,19 @@ mod tests {
     use super::*;
     use crate::model::{Ns, View, Visibility};
     use std::time::Duration;
+
+    #[test]
+    fn update_labels_cover_every_state() {
+        use crate::app::updates::Status;
+        assert_eq!(update_label(&Status::Unchecked), "Check for updates");
+        assert!(update_label(&Status::Checking).contains("Checking"));
+        assert!(update_label(&Status::UpToDate).contains(env!("CARGO_PKG_VERSION")));
+        assert_eq!(
+            update_label(&Status::Newer("9.9.9".into())),
+            "Update to 9.9.9…"
+        );
+        assert!(update_label(&Status::Failed).contains("log"));
+    }
 
     #[test]
     fn tooltip_states() {
