@@ -927,7 +927,11 @@ fn mastery_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
         text: format!("masteries: {}", v.mastery_status),
         ..Line::default()
     };
-    let shown: Vec<&Mastery> = all.iter().filter(|m| show_mastery(m, w)).take(cap).collect();
+    let shown: Vec<&Mastery> = all
+        .iter()
+        .filter(|m| show_mastery(m, w))
+        .take(cap)
+        .collect();
     if shown.is_empty() {
         if !v.mastery_status.is_empty() && all.is_empty() {
             return vec![status_line()];

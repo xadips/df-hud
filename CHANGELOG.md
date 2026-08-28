@@ -22,3 +22,10 @@ first within each section.
   challenge board.
 - `--dump-masteries` prints your masteries once (levels, per-bonus values and
   caps), or the raw fields with `--dump-fields`.
+
+### Fixed
+
+- First-start seeding on a panel that is not 2560x1440 (Windows stamps
+  `hud.reference_*` from the primary monitor) now rescales the widget
+  coordinates to that panel, so every group seeds at its authored screen
+  fraction instead of drifting down - or off - shorter screens.
