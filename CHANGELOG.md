@@ -22,6 +22,8 @@ first within each section.
   challenge board.
 - `--dump-masteries` prints your masteries once (levels, per-bonus values and
   caps), or the raw fields with `--dump-fields`.
+- The tray has **Check for updates**: one probe of the GitHub release page,
+  only when clicked.
 
 ### Fixed
 
