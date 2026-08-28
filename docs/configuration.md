@@ -3,7 +3,10 @@
 The first overlay start writes [df-hud.example.toml](../df-hud.example.toml) to
 the path below if that file is missing, and fills `hud.reference_width` /
 `hud.reference_height` from the current panel so left-side groups sit in
-native pixels. The rest are the built-in defaults (a test checks the values).
+native pixels. Widget coordinates are rescaled to that panel at the same
+moment, so every group keeps its authored screen position - a default written
+as three quarters down a 1440-tall design seeds as three quarters down yours.
+The rest are the built-in defaults (a test checks the values).
 After that, keys you leave in the file stay pinned; delete the file to get a
 fresh copy.
 

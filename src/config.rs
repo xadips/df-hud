@@ -1383,7 +1383,12 @@ fn write_config_atomically(path: &Path, body: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Example TOML with `reference_*` filled in from the panel when we have one.
+/// Example TOML with `reference_*` filled in from the panel when we have one,
+/// and every widget coordinate rescaled to match. The defaults are authored
+/// against 2560x1440, and stamping a different reference changes what a
+/// coordinate means: without the rescale, a default written as "three quarters
+/// down a 1440 design" sits lower on every shorter panel and a low group can
+/// land off the screen entirely.
 fn seed_default_toml(reference: Option<(i32, i32)>) -> String {
     let mut body = DEFAULT_TOML.to_string();
     let Some((width, height)) = reference else {
@@ -1402,7 +1407,65 @@ fn seed_default_toml(reference: Option<(i32, i32)>) -> String {
         &format!("reference_height = {height}"),
         1,
     );
+    if (width, height) != (2560, 1440) {
+        body = scale_seed_coordinates(&body, width, height);
+    }
     body
+}
+
+/// Rescale `x`/`y`/`offset_x`/`offset_y` under every `[widget.*]` section from
+/// the authored 2560x1440 to the stamped panel, keeping each group at the same
+/// screen fraction. Right-anchored `x` is an inset, which scales the same way.
+/// Seed-time only: an existing config is the user's to author.
+fn scale_seed_coordinates(src: &str, width: i32, height: i32) -> String {
+    let sx = f64::from(width) / 2560.0;
+    let sy = f64::from(height) / 1440.0;
+    let newline = if src.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out: Vec<String> = Vec::new();
+    let mut in_widget = false;
+    for line in src.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_widget = trimmed[1..trimmed.len() - 1].starts_with("widget.");
+            out.push(line.to_string());
+            continue;
+        }
+        if in_widget {
+            out.push(scale_coordinate_line(line, sx, sy));
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    let mut body = out.join(newline);
+    if src.ends_with('\n') {
+        body.push_str(newline);
+    }
+    body
+}
+
+fn scale_coordinate_line(line: &str, sx: f64, sy: f64) -> String {
+    let (code, comment) = match line.find('#') {
+        Some(i) => (&line[..i], &line[i..]),
+        None => (line, ""),
+    };
+    let Some((lhs, rhs)) = code.split_once('=') else {
+        return line.to_string();
+    };
+    let scale = match lhs.trim() {
+        "x" | "offset_x" => sx,
+        "y" | "offset_y" => sy,
+        _ => return line.to_string(),
+    };
+    let Ok(value) = rhs.trim().parse::<i64>() else {
+        return line.to_string();
+    };
+    let scaled = (value as f64 * scale).round() as i64;
+    let mut next = format!("{}= {scaled}", &code[..code.find('=').unwrap()]);
+    if !comment.is_empty() {
+        next.push(' ');
+        next.push_str(comment);
+    }
+    next
 }
 
 /// Write the example defaults when `path` does not exist. `true` if a file was created.
@@ -1793,14 +1856,81 @@ mod tests {
         assert_eq!(cfg.hud.reference_width, 1920);
         assert_eq!(cfg.hud.reference_height, 1200);
         assert_eq!(cfg.widget.block.anchor, Anchor::Right);
+        // Coordinates rescale with the reference: block keeps its 220/2560
+        // inset and 300/1440 height as fractions of the 1920x1200 panel.
         assert_eq!(
             cfg.hud.place(
                 cfg.widget.block.anchor,
                 cfg.widget.block.x,
                 cfg.widget.block.y
             ),
-            [1700, 300]
+            [1920 - 165, 250]
         );
+    }
+
+    /// Seeded defaults keep their screen FRACTION on any panel. A 1080p seed
+    /// must not put the masteries group (authored at y = 900 of 1440) below
+    /// the bottom edge.
+    #[test]
+    fn seed_scales_widget_coordinates_to_the_panel() {
+        let body = seed_default_toml(Some((1920, 1080)));
+        let cfg = Config::parse(&body).unwrap();
+        let want = Config::default();
+        assert_eq!(cfg.widget.masteries.y, 675); // 900 * 1080/1440
+        assert_eq!(cfg.widget.masteries.x, 8); // 10 * 1920/2560, rounded
+        assert_eq!(cfg.widget.challenges.y, 143); // 190 * 0.75 = 142.5
+        assert_eq!(cfg.widget.block.x, 165); // right inset scales too
+        assert_eq!(
+            cfg.widget.map.offset_x,
+            (f64::from(want.widget.map.offset_x) * 0.75).round() as i32
+        );
+        // Everything that is not a coordinate is untouched.
+        assert_eq!(
+            cfg.widget.masteries.max_shown,
+            want.widget.masteries.max_shown
+        );
+        assert_eq!(cfg.widget.xp.window, want.widget.xp.window);
+        assert_eq!(cfg.poll.mastery_interval, want.poll.mastery_interval);
+        for (name, got, authored) in [
+            ("status", cfg.widget.status.y, want.widget.status.y),
+            ("session", cfg.widget.session.y, want.widget.session.y),
+            ("xp", cfg.widget.xp.y, want.widget.xp.y),
+            ("bosses", cfg.widget.bosses.y, want.widget.bosses.y),
+            ("keybinds", cfg.widget.keybinds.y, want.widget.keybinds.y),
+        ] {
+            let want_y = (f64::from(authored) * 1080.0 / 1440.0).round() as i32;
+            assert_eq!(got, want_y, "widget.{name}.y");
+        }
+    }
+
+    /// The authored panel seeds byte-identically: nothing to scale, and the
+    /// file a 2560x1440 user reads is exactly the one in the repo.
+    #[test]
+    fn seed_at_the_authored_reference_is_untouched() {
+        assert_eq!(seed_default_toml(Some((2560, 1440))), DEFAULT_TOML);
+        assert_eq!(seed_default_toml(None), DEFAULT_TOML);
+    }
+
+    #[test]
+    fn scale_coordinate_line_edges() {
+        // Trailing comments survive, non-coordinates and prose pass through.
+        assert_eq!(
+            scale_coordinate_line("x = 100 # keep", 0.75, 0.5),
+            "x = 75 # keep"
+        );
+        assert_eq!(
+            scale_coordinate_line("offset_y = -60", 0.75, 0.5),
+            "offset_y = -30"
+        );
+        assert_eq!(
+            scale_coordinate_line("max_shown = 100", 0.5, 0.5),
+            "max_shown = 100"
+        );
+        assert_eq!(
+            scale_coordinate_line("# x = 100 in prose", 0.5, 0.5),
+            "# x = 100 in prose"
+        );
+        assert_eq!(scale_coordinate_line("", 0.5, 0.5), "");
     }
 
     #[test]

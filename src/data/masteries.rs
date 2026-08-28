@@ -19,7 +19,10 @@ pub fn parse(vars: &HashMap<String, String>) -> Vec<Mastery> {
         let Some((index, field)) = parse_key(name) else {
             continue;
         };
-        fields.entry(index).or_default().insert(field, value.clone());
+        fields
+            .entry(index)
+            .or_default()
+            .insert(field, value.clone());
     }
 
     let mut out = Vec::new();
