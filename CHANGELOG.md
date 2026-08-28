@@ -22,6 +22,10 @@ first within each section.
   challenge board.
 - `--dump-masteries` prints your masteries once (levels, per-bonus values and
   caps), or the raw fields with `--dump-fields`.
+- `hotkeys.masteries` (default `4`, the first number past the game's weapon
+  slots) toggles the masteries widget. The key is only grabbed while
+  `[widget.masteries]` is enabled, so an opted-out install leaves `4` with
+  the game.
 - The tray has **Check for updates**: one probe of the GitHub release page,
   only when clicked.
 

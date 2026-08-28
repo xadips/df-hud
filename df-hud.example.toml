@@ -95,10 +95,12 @@ launcher_delay = 1
 enabled = true
 
 # A bare key is consumed before the game sees it, and a modifier does not
-# hide the letter. Defaults are letters the game does not use. "" leaves an
-# action unbound; chords like Ctrl+Shift+M work.
+# hide the letter. Defaults are keys the game does not use. "" leaves an
+# action unbound; chords like Ctrl+Shift+M work. The masteries key is only
+# grabbed while [widget.masteries] is enabled.
 map = "G"
 challenges = "Z"
+masteries = "4"
 run_start = "K"
 xp_reset = "U"
 overlay = "J"

@@ -28,7 +28,7 @@ table.
 | XP/hr | shown | `U` resets | [xp](widgets/xp.md) |
 | City map | hidden | `G` | [map](widgets/map.md) |
 | Challenge board | shown | `Z` | [challenges](widgets/challenges.md) |
-| Masteries | off (`enabled = false`) | tray only | [masteries](widgets/masteries.md) |
+| Masteries | off (`enabled = false`) | `4` once enabled | [masteries](widgets/masteries.md) |
 | Status banner | always | cannot hide | [Status banner](#status-banner) |
 
 A key or the tray toggles a group. That is not saved to the file. Restart puts
@@ -45,6 +45,7 @@ lets go when you alt-tab. Defaults:
 | --- | --- | --- |
 | `hotkeys.map` | `G` | Show or hide the [city map](widgets/map.md) |
 | `hotkeys.challenges` | `Z` | Show or hide the [challenge board](widgets/challenges.md) |
+| `hotkeys.masteries` | `4` | Show or hide [masteries](widgets/masteries.md). Grabbed only while that widget is enabled. |
 | `hotkeys.run_start` | `K` | Restart the [run clock](widgets/session.md) from now |
 | `hotkeys.xp_reset` | `U` | Start the [XP/hr](widgets/xp.md) average again |
 | `hotkeys.overlay` | `J` | Show or hide the whole overlay |
@@ -61,8 +62,9 @@ have alt-tabbed away. The HUD itself hides by workspace, not by focus. A window
 in front of the game on the same workspace still has the HUD over it.
 
 A bare key is eaten before the game sees it. Do not bind WASD, Tab, Shift, grave,
-the number row, function keys, or a letter the game already uses (`e` `f` `q`
-`c` `b` `h` `m` `n` `o` `t` `v` `y` `x` `r` `i` `l` `p`). See
+the weapon numbers `1` `2` `3`, `F1`-`F4`, or a letter the game already uses
+(`e` `f` `q` `c` `b` `h` `m` `n` `o` `t` `v` `y` `x` `r` `i` `l` `p`). Numbers
+from `4` and `F5` up are factory-free. See
 [knowledge/game-keybinds.md](../knowledge/game-keybinds.md).
 
 Linux installs the same keys on Hyprland. Windows uses `RegisterHotKey`. Do not

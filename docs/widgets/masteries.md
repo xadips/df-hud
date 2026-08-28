@@ -36,7 +36,10 @@ item reads **Enable masteries widget** and clicking it writes
 touched). Once enabled, the item becomes **Show masteries** and, like
 `POST /api/widget/masteries/toggle`, toggles visibility for this run only.
 df-hud never writes `enabled = false`; turning it back off is a config edit.
-No hotkey by default.
+
+`4` (`hotkeys.masteries`) toggles it too - the first number the game's weapon
+slots do not use. The key is only grabbed while the widget is enabled, so an
+opted-out install leaves `4` with the game.
 
 | Key | Default | |
 | --- | --- | --- |

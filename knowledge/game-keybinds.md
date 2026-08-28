@@ -112,4 +112,6 @@ A collision in either table rules a key IN. The launcher table cannot rule one o
 `Alt+T` still declines an item: a modifier does not hide the letter from Unity.
 
 df-hud defaults are the factory-free letters, closest first: map `g`, challenges
-`z`, overlay `j`, run clock `k`, xp reset `u`.
+`z`, overlay `j`, run clock `k`, xp reset `u`. Those five exhaust the free
+letters; masteries takes `4`, the first number past the weapon slots (grabbed
+only while its widget is enabled).
