@@ -4,7 +4,7 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
-## [Unreleased]
+## [0.4.11] - 2026-08-28
 
 ### Added
 
@@ -29,3 +29,8 @@ first within each section.
   `hud.reference_*` from the primary monitor) now rescales the widget
   coordinates to that panel, so every group seeds at its authored screen
   fraction instead of drifting down - or off - shorter screens.
+
+### Changed
+
+- The example config's comments are one or two lines per key; the reasoning
+  moved to `docs/configuration.md` and `docs/widgets/`.
