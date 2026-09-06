@@ -74,7 +74,7 @@ impl Font {
         match try_load(want) {
             Ok(font) => font,
             Err(err) => {
-                eprintln!("font: {err}; using auto");
+                warn!("font: {err}; using auto");
                 load_auto()
             }
         }

@@ -1,5 +1,6 @@
 //! Process-wide minimum gap between reserved request slots.
 
+use crate::wake::lock;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -33,7 +34,7 @@ impl Gate {
     /// Reserves the next slot, then sleeps until it is due.
     pub fn wait(&self, stop: &AtomicBool, wake: &Notify) -> Result<(), Cancelled> {
         let delay = {
-            let mut last = self.last.lock().unwrap();
+            let mut last = lock(&self.last);
             let now = Instant::now();
             let slot = match *last {
                 Some(prev) => {
@@ -49,7 +50,7 @@ impl Gate {
     }
 
     pub fn reserved(&self) -> Option<Instant> {
-        *self.last.lock().unwrap()
+        *lock(&self.last)
     }
 }
 

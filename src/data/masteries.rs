@@ -7,60 +7,33 @@
 
 use std::collections::HashMap;
 
-use crate::data::repair_glued_pairs;
+use crate::data::{field, group_indexed};
 use crate::model::{Mastery, MasteryBonus};
 
 pub fn parse(vars: &HashMap<String, String>) -> Vec<Mastery> {
-    let mut vars = vars.clone();
-    repair_glued_pairs(&mut vars);
-
-    let mut fields: HashMap<i32, HashMap<String, String>> = HashMap::new();
-    for (name, value) in &vars {
-        let Some((index, field)) = parse_key(name) else {
-            continue;
-        };
-        fields
-            .entry(index)
-            .or_default()
-            .insert(field, value.clone());
-    }
-
     let mut out = Vec::new();
-    for (index, f) in fields {
-        let name = f
-            .get("name")
-            .cloned()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+    for (index, f) in group_indexed(vars, parse_key) {
+        let name = field(&f, "name").trim();
         if name.is_empty() {
             continue;
         }
-        let level = atof(f.get("stat_level").map_or("", String::as_str)) as i32;
+        let level = atof(field(&f, "stat_level")) as i32;
         let mut m = Mastery {
             index,
-            name,
-            desc: f
-                .get("description")
-                .cloned()
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
+            name: name.to_string(),
+            desc: field(&f, "description").trim().to_string(),
             level,
-            exp: atof(f.get("stat_exp").map_or("", String::as_str)) as i64,
+            exp: atof(field(&f, "stat_exp")) as i64,
             next_exp: next_level_exp(
-                atof(f.get("start_point").map_or("", String::as_str)),
-                atof(f.get("scale_factor").map_or("", String::as_str)),
+                atof(field(&f, "start_point")),
+                atof(field(&f, "scale_factor")),
                 level,
             ),
             ..Mastery::default()
         };
-        let count = atof(f.get("bonuses").map_or("", String::as_str)) as i32;
+        let count = atof(field(&f, "bonuses")) as i32;
         for j in 0..count {
-            let get = |field: &str| {
-                f.get(&format!("bonuses_{j}_{field}"))
-                    .map_or("", String::as_str)
-            };
+            let get = |what: &str| field(&f, &format!("bonuses_{j}_{what}"));
             let scale = atof(get("scale")).abs();
             let max = atof(get("max")).abs();
             // masteries.js: (scale * level).toFixed(5), then clamp to max.
@@ -81,11 +54,10 @@ pub fn parse(vars: &HashMap<String, String>) -> Vec<Mastery> {
     out
 }
 
-fn parse_key(name: &str) -> Option<(i32, String)> {
-    let rest = name.strip_prefix("mastery_")?;
-    let (idx, field) = rest.split_once('_')?;
-    let index: i32 = idx.parse().ok()?;
-    Some((index, field.to_string()))
+/// `mastery_{index}_{field}`.
+fn parse_key(name: &str) -> Option<(i32, &str)> {
+    let (idx, field) = name.strip_prefix("mastery_")?.split_once('_')?;
+    Some((idx.parse().ok()?, field))
 }
 
 /// `ceil(start_point * scale_factor^(level+1))`, what `exp` has to reach for

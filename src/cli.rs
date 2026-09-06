@@ -386,19 +386,23 @@ pub fn run_headless(config: Option<PathBuf>, print_hud: bool) -> Result<(), Box<
     let path = config.unwrap_or_else(config::default_path);
     match config::write_defaults_if_missing_with_reference(&path, crate::overlay::seed_reference())
     {
-        Ok(true) => eprintln!("config: wrote defaults to {}", path.display()),
+        Ok(true) => info!("config: wrote defaults to {}", path.display()),
         Ok(false) => {}
-        Err(err) => eprintln!("config: could not write defaults: {err}"),
+        Err(err) => error!("config: could not write defaults: {err}"),
     }
     let cfg = Config::load(&path)?;
-    eprintln!(
+    info!(
         "df-hud {} starting ({})",
         env!("CARGO_PKG_VERSION"),
         cfg.describe_source(&path)
     );
     let handle = crate::app::start_with(cfg, crate::app::PrintOpts { hud: print_hud })?;
+    // No surface, so main is the thread that drains the wake pipe: that is
+    // where SIGHUP is serviced and where a stop request lands. Nothing wakes
+    // it periodically; `--duration` is an overlay flag and is rejected here.
     while !handle.stopped() {
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        handle.wake.wait();
+        handle.wake.take();
     }
     Ok(())
 }
@@ -610,9 +614,10 @@ type OneshotContext = (Config, std::sync::Arc<Creds>, Client, Store);
 fn oneshot_setup(config: Option<&Path>) -> Result<OneshotContext, Box<dyn Error>> {
     let path = config.map_or_else(config::default_path, Path::to_path_buf);
     let cfg = Config::load(&path)?;
-    let (creds, catalog) = crate::app::load_creds_and_catalog(&cfg)?;
+    let agent = crate::app::df_agent(&cfg);
+    let (creds, catalog) = crate::app::load_creds_and_catalog(&agent, &cfg)?;
     let store = Store::new(catalog);
-    let client = crate::app::df_client(&cfg);
+    let client = crate::app::df_client(&agent, &cfg);
     Ok((cfg, creds, client, store))
 }
 
@@ -694,7 +699,7 @@ fn dump_challenges(config: Option<&Path>, raw: bool) -> Result<(), Box<dyn Error
                     scheduled: false,
                 });
             }
-            Err(err) => eprintln!("could not read your level ({err}); reward XP will be omitted"),
+            Err(err) => warn!("could not read your level ({err}); reward XP will be omitted"),
         }
     }
     let (level, gold) = store
@@ -763,15 +768,16 @@ fn format_challenge_board(
             ));
         }
         for objective in &challenge.objectives {
+            let score = objective.score.unwrap_or(0);
             let frac = if objective.target <= 0 {
                 0.0
             } else {
-                objective.score as f64 / objective.target as f64 * 100.0
+                score as f64 / objective.target as f64 * 100.0
             };
             out.push_str(&format!(
                 "        {:<28} {} / {}  ({frac:.0}%)\n",
                 objective.name,
-                format::int(objective.score),
+                format::int(score),
                 format::int(objective.target)
             ));
         }

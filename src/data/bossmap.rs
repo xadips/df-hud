@@ -168,8 +168,18 @@ pub fn nearest_mark(marks: &[CityMark]) -> Option<CityMark> {
         .cloned()
 }
 
-pub fn fetch(url: &str, user_agent: &str, timeout: Duration) -> Result<BossMap, String> {
-    let body = crate::net::http::get_bytes(
+/// One poll of the feed over a shared agent. `Ok(None)` when the feed's own
+/// `bosshash` still equals `prev_hash`: an unchanged board costs a download
+/// and a key scan, not a parse and a block index.
+pub fn fetch_if_changed_with(
+    agent: &ureq::Agent,
+    url: &str,
+    user_agent: &str,
+    timeout: Duration,
+    prev_hash: Option<&str>,
+) -> Result<Option<BossMap>, String> {
+    let body = crate::net::http::get_bytes_with(
+        agent,
         url,
         user_agent,
         timeout,
@@ -180,7 +190,61 @@ pub fn fetch(url: &str, user_agent: &str, timeout: Duration) -> Result<BossMap, 
         ],
     )
     .map_err(|e| format!("bossmap: {e}"))?;
-    parse(&body)
+    parse_if_changed(&body, prev_hash)
+}
+
+/// The feed does not honour `If-None-Match`, so the hash is read straight
+/// off the bytes: one key scan against building the whole `Value` tree and
+/// the block index only to drop them. A body with no scannable hash is
+/// parsed and compared the slow way; a feed without any hash always counts
+/// as changed, since there is nothing to compare.
+pub fn parse_if_changed(data: &[u8], prev_hash: Option<&str>) -> Result<Option<BossMap>, String> {
+    let Some(prev) = prev_hash.filter(|h| !h.is_empty()) else {
+        return parse(data).map(Some);
+    };
+    if let Some(hash) = scan_bosshash(data) {
+        return if hash == prev {
+            Ok(None)
+        } else {
+            parse(data).map(Some)
+        };
+    }
+    let m = parse(data)?;
+    Ok((m.hash.is_empty() || m.hash != prev).then_some(m))
+}
+
+/// `"bosshash":"<value>"` as the feed writes it. Escapes and empty values
+/// are left to the parser, which never guesses.
+fn scan_bosshash(data: &[u8]) -> Option<&str> {
+    const KEY: &[u8] = b"\"bosshash\"";
+    let mut from = 0;
+    while let Some(at) = data[from..].windows(KEY.len()).position(|w| w == KEY) {
+        let mut i = from + at + KEY.len();
+        from = i;
+        let skip_ws = |i: &mut usize| {
+            while data.get(*i).is_some_and(u8::is_ascii_whitespace) {
+                *i += 1;
+            }
+        };
+        skip_ws(&mut i);
+        if data.get(i) != Some(&b':') {
+            continue;
+        }
+        i += 1;
+        skip_ws(&mut i);
+        if data.get(i) != Some(&b'"') {
+            continue;
+        }
+        let start = i + 1;
+        let len = data[start..]
+            .iter()
+            .position(|&b| b == b'"' || b == b'\\')?;
+        if data[start + len] == b'\\' || len == 0 {
+            return None;
+        }
+        return std::str::from_utf8(&data[start..start + len]).ok();
+    }
+    None
 }
 
 pub fn parse(data: &[u8]) -> Result<BossMap, String> {
@@ -535,6 +599,41 @@ mod tests {
         let t = v.get("servertime").and_then(|x| x.as_i64()).unwrap();
         let now = DateTime::from_timestamp(t, 0).unwrap();
         (parse(&raw).unwrap(), now)
+    }
+
+    #[test]
+    fn unchanged_hash_skips_the_parse() {
+        let raw =
+            std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/bossmap.json"))
+                .unwrap();
+        let hash = parse(&raw).unwrap().hash;
+        assert_eq!(scan_bosshash(&raw), Some(hash.as_str()));
+        assert!(parse_if_changed(&raw, Some(&hash)).unwrap().is_none());
+        assert!(parse_if_changed(&raw, Some("stale")).unwrap().is_some());
+        assert!(parse_if_changed(&raw, None).unwrap().is_some());
+        assert!(parse_if_changed(&raw, Some("")).unwrap().is_some());
+    }
+
+    #[test]
+    fn bosshash_scan_is_conservative() {
+        assert_eq!(
+            scan_bosshash(br#"{"0":{"title":"bosshash"},"bosshash" : "abc","servertime":1}"#),
+            Some("abc"),
+            "a value spelled like the key is skipped"
+        );
+        assert_eq!(scan_bosshash(br#"{"bosshash":""}"#), None);
+        assert_eq!(scan_bosshash(br#"{"bosshash":"a\"b"}"#), None);
+        assert_eq!(scan_bosshash(br#"{"bosshash":12}"#), None);
+        assert_eq!(scan_bosshash(br#"{"servertime":1}"#), None);
+
+        // No scannable hash: parsed and compared the slow way.
+        let escaped = br#"{"bosshash":"a\"b","servertime":1000,"version":"1"}"#;
+        assert!(parse_if_changed(escaped, Some("a\"b")).unwrap().is_none());
+        assert!(parse_if_changed(escaped, Some("other")).unwrap().is_some());
+        // No hash at all: always changed, there is nothing to compare.
+        let none = br#"{"servertime":1000,"version":"1"}"#;
+        assert!(parse_if_changed(none, Some("abc")).unwrap().is_some());
+        assert!(parse_if_changed(b"not json", Some("abc")).is_err());
     }
 
     #[test]

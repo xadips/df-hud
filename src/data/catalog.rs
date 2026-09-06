@@ -105,13 +105,14 @@ pub fn parse(vars: &HashMap<String, String>, fetched_at: DateTime<Utc>) -> Resul
     Ok(c)
 }
 
-fn fetch(
+fn fetch_with(
+    agent: &ureq::Agent,
     url: &str,
     user_agent: &str,
     timeout: Duration,
     fetched_at: DateTime<Utc>,
 ) -> Result<Catalog, String> {
-    let raw = crate::net::http::get_bytes(url, user_agent, timeout, MAX_BODY, &[])
+    let raw = crate::net::http::get_bytes_with(agent, url, user_agent, timeout, MAX_BODY, &[])
         .map_err(|e| format!("catalog: {e}"))?;
     let body = String::from_utf8_lossy(&raw);
     if dfclient::looks_like_html(&body) {
@@ -160,7 +161,10 @@ fn save_file(path: &Path, c: &Catalog) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
-pub fn ensure(
+/// Cached table if it is younger than `max_age`, else a fresh fetch over
+/// `agent`; the cache stands in when the fetch fails.
+pub fn ensure_with(
+    agent: &ureq::Agent,
     path: &Path,
     feed_url: &str,
     user_agent: &str,
@@ -177,7 +181,7 @@ pub fn ensure(
             return Ok(c.clone());
         }
     }
-    match fetch(feed_url, user_agent, timeout, now) {
+    match fetch_with(agent, feed_url, user_agent, timeout, now) {
         Ok(fresh) => {
             let _ = save_file(path, &fresh);
             Ok(fresh)

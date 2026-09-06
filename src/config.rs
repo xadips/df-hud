@@ -2,8 +2,10 @@
 //! Intervals below their floor are startup errors, not clamps. `notify` is
 //! banned; [`Watch`] stats mtime on the overlay 1s tick.
 
+use crate::wake::lock;
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration as StdDuration, SystemTime};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -175,10 +177,10 @@ pub struct BossMap {
     pub enabled: bool,
     pub url: String,
     pub interval: Duration,
-    /// Unused; kept so existing configs load.
+    /// Deprecated: never read and not validated; parsed so old configs load.
     pub max_interval: Duration,
     pub onslaught_interval: Duration,
-    /// Unused; kept so existing configs load.
+    /// Deprecated: never read and not validated; parsed so old configs load.
     pub onslaught_max_interval: Duration,
 }
 
@@ -662,7 +664,7 @@ impl Hud {
     }
 }
 
-#[cfg(test)]
+/// The one list of layer-shell layers `hud.layer` accepts.
 fn parse_layer(name: &str) -> Result<&'static str, String> {
     match name.trim().to_ascii_lowercase().as_str() {
         "overlay" | "" => Ok("overlay"),
@@ -786,6 +788,22 @@ impl Config {
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(err) => Err(format!("{}: {err}", path.display()).into()),
+        }
+    }
+
+    /// `load` for a running process: logs the outcome and hands back the
+    /// error as the text the HUD banner and tray show. The file watcher and
+    /// the tray/SIGHUP reload both go through here.
+    pub fn reload(path: &Path) -> Result<Self, String> {
+        match Self::load(path) {
+            Ok(cfg) => {
+                info!("reloaded {}", path.display());
+                Ok(cfg)
+            }
+            Err(err) => {
+                error!("config reload failed: {err}");
+                Err(err.to_string())
+            }
         }
     }
 
@@ -981,14 +999,8 @@ impl Config {
             errs.push("game_keys.fps_display is on but game_keys.fps_key is empty".into());
         }
         if self.hud.enabled {
-            if !matches!(
-                self.hud.layer.to_ascii_lowercase().as_str(),
-                "overlay" | "top" | "bottom" | "background" | ""
-            ) {
-                errs.push(format!(
-                    "hud.layer {:?} is not a layer: use overlay (the only one drawn above a fullscreen game), top, bottom or background",
-                    self.hud.layer
-                ));
+            if let Err(e) = parse_layer(&self.hud.layer) {
+                errs.push(format!("hud.layer {e}"));
             }
             self.hud.font = self.hud.font.trim().to_string();
             if self.hud.font_size <= 0.0 {
@@ -1029,13 +1041,6 @@ impl Config {
                 self.bossmap.onslaught_interval.0,
                 FLOOR_BOSSMAP,
             );
-            if self.bossmap.max_interval.0 < self.bossmap.interval.0 {
-                errs.push(format!(
-                    "bossmap.max_interval ({}) is shorter than bossmap.interval ({})",
-                    secs_label(self.bossmap.max_interval.0),
-                    secs_label(self.bossmap.interval.0)
-                ));
-            }
         }
         self.paths.data_dir = expand_home(self.paths.data_dir.trim());
         if self.paths.data_dir.is_empty() {
@@ -1289,15 +1294,33 @@ fn validate_color(s: &str) -> Result<(), String> {
 }
 
 pub(crate) fn expand_home(p: &str) -> String {
+    expand_home_with(p, home_dir().as_deref())
+}
+
+fn expand_home_with(p: &str, home: Option<&str>) -> String {
+    let Some(home) = home else {
+        return p.to_string();
+    };
     if p == "~" {
-        return std::env::var("HOME").unwrap_or_else(|_| p.into());
+        return home.to_string();
     }
-    if let Some(rest) = p.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME")
-    {
-        return format!("{home}/{rest}");
+    match p.strip_prefix("~/") {
+        Some(rest) => format!("{home}/{rest}"),
+        None => p.to_string(),
     }
-    p.to_string()
+}
+
+/// `$HOME`; on Windows, where only shells set that, `%USERPROFILE%` and
+/// then `%HOMEDRIVE%%HOMEPATH%`.
+fn home_dir() -> Option<String> {
+    let var = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
+    if let Some(home) = var("HOME") {
+        return Some(home);
+    }
+    if !cfg!(windows) {
+        return None;
+    }
+    var("USERPROFILE").or_else(|| Some(format!("{}{}", var("HOMEDRIVE")?, var("HOMEPATH")?)))
 }
 
 fn reject_unknown(
@@ -1499,14 +1522,14 @@ pub fn write_defaults_if_missing_with_reference(
 fn log_defaults_written(path: &Path, created: Result<bool, String>, reference: Option<(i32, i32)>) {
     match created {
         Ok(true) => match reference {
-            Some((w, h)) => eprintln!(
+            Some((w, h)) => info!(
                 "config: wrote defaults to {} (reference {w}x{h})",
                 path.display()
             ),
-            None => eprintln!("config: wrote defaults to {}", path.display()),
+            None => info!("config: wrote defaults to {}", path.display()),
         },
         Ok(false) => {}
-        Err(err) => eprintln!("config: could not write defaults: {err}"),
+        Err(err) => error!("config: could not write defaults: {err}"),
     }
 }
 
@@ -1564,21 +1587,46 @@ impl Watch {
         if mtime == self.mtime {
             return false;
         }
-        match Config::load(path) {
+        // Either way the mtime is consumed: a broken file is reported once,
+        // not on every tick until it is fixed.
+        self.mtime = mtime;
+        match Config::reload(path) {
             Ok(cfg) => {
                 self.cfg = cfg;
-                self.mtime = mtime;
                 self.error = None;
-                eprintln!("reloaded {}", path.display());
                 true
             }
             Err(err) => {
-                eprintln!("config reload failed: {err}");
-                self.mtime = mtime;
-                self.error = Some(err.to_string());
+                self.error = Some(err);
                 false
             }
         }
+    }
+}
+
+/// The running config, published as one pointer. Readers take an `Arc` clone
+/// under a lock held for a few instructions and never copy the `Config`
+/// itself; a reload swaps the pointer, so a reader keeps a coherent snapshot
+/// for as long as it holds one.
+pub struct Shared(Mutex<Arc<Config>>);
+
+impl Shared {
+    pub fn new(cfg: Config) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(Arc::new(cfg))))
+    }
+
+    pub fn get(&self) -> Arc<Config> {
+        lock(&self.0).clone()
+    }
+
+    pub fn set(&self, cfg: Arc<Config>) {
+        *lock(&self.0) = cfg;
+    }
+
+    /// Copy-on-write edit for the one-field tray toggles. Copies the `Config`
+    /// only while some reader still holds the previous pointer.
+    pub fn update(&self, f: impl FnOnce(&mut Config)) {
+        f(Arc::make_mut(&mut *lock(&self.0)));
     }
 }
 
@@ -2292,18 +2340,138 @@ window = 120
 
     #[test]
     fn expand_home_only_at_start() {
-        match std::env::var("HOME") {
-            Ok(home) => assert_eq!(
-                expand_home("~/.local/share/df-hud"),
-                format!("{home}/.local/share/df-hud")
-            ),
-            // Windows has no HOME; the prefix must survive untouched.
-            Err(_) => assert_eq!(
-                expand_home("~/.local/share/df-hud"),
-                "~/.local/share/df-hud"
-            ),
-        }
+        // Every supported platform has a home: HOME on Linux, USERPROFILE
+        // (or HOMEDRIVE+HOMEPATH) on Windows. A literal `~/` would land the
+        // data dir in the working directory.
+        let home = home_dir().expect("a home directory");
+        assert!(!home.is_empty());
+        assert_eq!(
+            expand_home("~/.local/share/df-hud"),
+            format!("{home}/.local/share/df-hud")
+        );
+        assert_eq!(expand_home("~"), home);
         assert_eq!(expand_home("/opt/~/x"), "/opt/~/x");
+        assert_eq!(expand_home("~x"), "~x");
+    }
+
+    #[test]
+    fn expand_home_with_a_given_home() {
+        assert_eq!(
+            expand_home_with("~/df-hud", Some(r"C:\Users\tester")),
+            r"C:\Users\tester/df-hud"
+        );
+        assert_eq!(expand_home_with("~", Some("/home/t")), "/home/t");
+        assert_eq!(
+            expand_home_with("~/x", None),
+            "~/x",
+            "nothing to expand with"
+        );
+        assert_eq!(expand_home_with("/abs", Some("/home/t")), "/abs");
+    }
+
+    #[test]
+    fn bossmap_ceilings_are_accepted_but_not_enforced() {
+        // Deprecated keys still parse so old files load, and a value below
+        // the interval is no longer an error because nothing reads it.
+        let cfg = Config::parse(
+            "[bossmap]\ninterval = 120\nmax_interval = 30\nonslaught_max_interval = 1\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.bossmap.max_interval, Duration::from_secs(30));
+        assert_eq!(cfg.bossmap.onslaught_max_interval, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn layer_is_validated_through_the_one_list() {
+        let err = Config::parse("[hud]\nlayer = \"above\"\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("hud.layer \"above\" is not a layer"), "{msg}");
+        assert!(msg.contains("background"), "{msg}");
+        for ok in ["overlay", "TOP", " bottom ", "background", ""] {
+            Config::parse(&format!("[hud]\nlayer = {ok:?}\n")).unwrap();
+        }
+    }
+
+    fn watch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("df-hud-watch-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Rewrites the file and moves its mtime forward by a whole second:
+    /// `poll` compares mtimes, and a filesystem with coarse timestamps could
+    /// otherwise hand back the value it already saw.
+    fn rewrite_bumped(path: &Path, body: &str, bump: StdDuration) {
+        std::fs::write(path, body).unwrap();
+        let was = std::fs::metadata(path).unwrap().modified().unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(was + bump)
+            .unwrap();
+    }
+
+    #[test]
+    fn watch_poll_reloads_on_mtime_change() {
+        let dir = watch_dir("reload");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[widget.block]\nx = 400\n").unwrap();
+        let mut watch = Watch::open_with_reference(Some(path.clone()), None).unwrap();
+        assert_eq!(watch.cfg.widget.block.x, 400);
+        assert!(!watch.poll(), "nothing changed");
+
+        rewrite_bumped(
+            &path,
+            "[widget.block]\nx = 512\n",
+            StdDuration::from_secs(2),
+        );
+        assert!(watch.poll(), "a newer mtime reloads");
+        assert_eq!(watch.cfg.widget.block.x, 512);
+        assert_eq!(watch.cfg.source_path(), Some(path.as_path()));
+        assert!(watch.error().is_none());
+        assert!(!watch.poll(), "the new mtime is remembered");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn watch_poll_keeps_the_old_config_on_a_broken_write() {
+        let dir = watch_dir("broken");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[widget.block]\nx = 400\n").unwrap();
+        let mut watch = Watch::open_with_reference(Some(path.clone()), None).unwrap();
+
+        rewrite_bumped(
+            &path,
+            "[widget.block]\nx = \"wide\"\n",
+            StdDuration::from_secs(2),
+        );
+        assert!(!watch.poll());
+        assert_eq!(watch.cfg.widget.block.x, 400, "the running config survives");
+        let err = watch.error().expect("the failure is reported");
+        assert!(
+            err.contains("widget.block") || err.contains("invalid type"),
+            "{err}"
+        );
+        assert!(
+            !watch.poll(),
+            "a broken file is reported once, not on every tick"
+        );
+        assert!(
+            watch.error().is_some(),
+            "and the banner stays until it is fixed"
+        );
+
+        rewrite_bumped(
+            &path,
+            "[widget.block]\nx = 640\n",
+            StdDuration::from_secs(4),
+        );
+        assert!(watch.poll());
+        assert_eq!(watch.cfg.widget.block.x, 640);
+        assert!(watch.error().is_none(), "a good write clears it");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

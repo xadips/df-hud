@@ -9,6 +9,11 @@
 //! `roundtrip` with no buffer. Swap first → `layerSurface was not configured, but
 //! a buffer was attached`.
 //!
+//! Frames whose draw list did not change are not swapped at all. A pending
+//! configure serial forces the draw so the ack still rides on a real commit;
+//! a size or scale change alters the buffer size and so redraws on its own;
+//! a remap gets a fresh `Gpu` whose first frame always draws.
+//!
 //! This module owns the EGL window and `eglSwapBuffers`. [`crate::overlay::gpu::Gpu`] is
 //! shader + atlas + draw list and must not see `WlSurface`.
 
@@ -28,7 +33,12 @@ use wayland_egl::WlEglSurface;
 use crate::app;
 use crate::cli::OverlayArgs;
 use crate::config::{self, Config};
-use crate::overlay::{self, egl::Egl, gpu::Gpu, present};
+use crate::overlay::{
+    self,
+    egl::Egl,
+    gpu::{Frame, Gpu},
+    present,
+};
 
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_compositor::WlCompositor;
@@ -122,8 +132,11 @@ impl GlWindow {
         egl.make_current(display, surface, surface, context)?;
         egl.swap_interval(display, 0)?;
 
+        // SAFETY: `context` was just made current on this thread, so
+        // `get_proc_address` resolves each GLES entry point for it (or null,
+        // which glow tolerates); `egl` outlives the `Glow` as a field of `Self`.
         let gl = unsafe { Glow::from_loader_function(|name| egl.get_proc_address(name)) };
-        eprintln!(
+        debug!(
             "EGL {major}.{minor} vendor={} version={}",
             egl.query_string(display, crate::overlay::egl::VENDOR),
             egl.query_string(display, crate::overlay::egl::VERSION)
@@ -221,8 +234,6 @@ struct App {
     swaps: u32,
     output_name: String,
     pending_serial: Option<u32>,
-    needs_present: bool,
-    cfg: Config,
     namespace: String,
     cli_output: Option<String>,
     pinned_output: String,
@@ -230,21 +241,6 @@ struct App {
 }
 
 impl App {
-    fn current_cfg(&self) -> Config {
-        self.handle
-            .as_ref()
-            .map_or_else(|| self.cfg.clone(), |h| h.cfg.lock().unwrap().clone())
-    }
-
-    fn sync_config(&mut self) {
-        let Some(handle) = &self.handle else {
-            return;
-        };
-        let cfg = handle.cfg.lock().unwrap().clone();
-        self.cfg = cfg;
-        self.follow_output();
-    }
-
     fn buffer_size(&self) -> (i32, i32) {
         let w = ((self.logical_w as u64 * u64::from(self.frac_scale) + 60) / 120).max(1) as i32;
         let h = ((self.logical_h as u64 * u64::from(self.frac_scale) + 60) / 120).max(1) as i32;
@@ -267,6 +263,8 @@ impl App {
         self.apply_passthrough();
     }
 
+    /// Empty input region = click-through. Surface state, so it survives
+    /// unmap; re-applied with the layer role on every (re)map, not per frame.
     fn apply_passthrough(&self) {
         let (Some(compositor), Some(surface)) = (&self.compositor, &self.surface) else {
             return;
@@ -277,6 +275,8 @@ impl App {
         region.destroy();
     }
 
+    /// Logical size → buffer size. Runs on configure and on a fractional
+    /// scale change, the only two events that move either number.
     fn apply_viewport(&self) {
         if let Some(viewport) = &self.viewport {
             if self.logical_w > 0 && self.logical_h > 0 {
@@ -295,40 +295,45 @@ impl App {
         }
     }
 
-    fn present(&mut self) -> Result<(), Box<dyn Error>> {
+    fn present(&mut self, cfg: &Config) -> Result<(), Box<dyn Error>> {
         if !self.mapped || !self.configured {
             return Ok(());
         }
-        if let Err(err) = self.ensure_gpu() {
-            eprintln!("EGL: {err}");
+        if let Err(err) = self.ensure_gpu(cfg) {
+            error!("EGL: {err}");
             return Ok(());
         }
-        self.apply_passthrough();
-        self.apply_viewport();
-        if let Some(serial) = self.pending_serial.take()
+        let (logical_w, logical_h) = (self.logical_w as f32, self.logical_h as f32);
+        let built = match &self.handle {
+            Some(h) => overlay::scene(h, cfg, logical_w, logical_h),
+            None => present::empty_overlay_scene(cfg, logical_w, logical_h),
+        };
+        let (buf_w, buf_h) = self.buffer_size();
+        let frame = Frame {
+            buf_w,
+            buf_h,
+            logical_w: self.logical_w,
+            logical_h: self.logical_h,
+        };
+        // A pending serial must be acked in the same commit as a buffer, so
+        // it forces the draw even when the scene is unchanged.
+        let serial = self.pending_serial.take();
+        self.gl_window.as_ref().expect("gl_window").make_current()?;
+        let gpu = self.gpu.as_mut().expect("gpu");
+        if !gpu.draw(frame, built, serial.is_some())? {
+            return Ok(());
+        }
+        if let Some(serial) = serial
             && let Some(layer) = &self.layer_surface
         {
             layer.ack_configure(serial);
         }
-        let cfg = self.current_cfg();
-        let built = match &self.handle {
-            Some(h) => overlay::scene(h, self.logical_w as f32, self.logical_h as f32),
-            None => {
-                present::empty_overlay_scene(&cfg, self.logical_w as f32, self.logical_h as f32)
-            }
-        };
-        let (buf_w, buf_h) = self.buffer_size();
-        self.gl_window.as_ref().expect("gl_window").make_current()?;
-        let gpu = self.gpu.as_mut().expect("gpu");
-        gpu.set_font(&cfg.hud.font);
-        gpu.draw(buf_w, buf_h, self.logical_w, self.logical_h, &built)?;
         self.gl_window.as_ref().expect("gl_window").swap()?;
         self.swaps += 1;
-        self.needs_present = false;
         Ok(())
     }
 
-    fn ensure_gpu(&mut self) -> Result<(), Box<dyn Error>> {
+    fn ensure_gpu(&mut self, cfg: &Config) -> Result<(), Box<dyn Error>> {
         if self.gpu.is_some() && self.gl_window.is_some() {
             return Ok(());
         }
@@ -340,9 +345,8 @@ impl App {
             .id();
         let started = Instant::now();
         let (gl_window, gl) = GlWindow::new(self.display_ptr, surface_id, buf_w, buf_h)?;
-        let cfg = self.current_cfg();
         let gpu = Gpu::new(gl, buf_w, buf_h, &cfg.hud.font)?;
-        eprintln!(
+        debug!(
             "EGL context ready in {:.0}ms",
             started.elapsed().as_secs_f64() * 1000.0
         );
@@ -370,9 +374,8 @@ impl App {
         self.configured = false;
         self.awaiting_remap = false;
         self.pending_serial = None;
-        self.needs_present = false;
         if had_gpu {
-            eprintln!("unmapped (EGL context dropped)");
+            info!("unmapped (EGL context dropped)");
         }
     }
 
@@ -383,17 +386,17 @@ impl App {
             .unwrap_or_default()
     }
 
-    fn wanted_output(&self) -> String {
+    fn wanted_output(&self, cfg: &Config) -> String {
         config::overlay_monitor(
             self.cli_output.as_deref(),
-            &self.cfg.hud.monitor,
+            &cfg.hud.monitor,
             &self.vis_monitor(),
         )
     }
 
     /// Name we would pin to: a known `wl_output`, or empty for compositor default.
-    fn resolved_pin(&self) -> String {
-        let want = self.wanted_output();
+    fn resolved_pin(&self, cfg: &Config) -> String {
+        let want = self.wanted_output(cfg);
         if self.lookup_output(&want).is_some() {
             want
         } else {
@@ -402,11 +405,11 @@ impl App {
     }
 
     /// `hud.monitor = "auto"` follows Visibility. Unmap so the next show rebinds.
-    fn follow_output(&mut self) {
+    fn follow_output(&mut self, cfg: &Config) {
         if output_follow_changed(
             self.mapped,
             self.awaiting_remap,
-            &self.resolved_pin(),
+            &self.resolved_pin(cfg),
             &self.pinned_output,
         ) {
             self.unmap();
@@ -423,8 +426,8 @@ impl App {
             .map(|o| o.wl.clone())
     }
 
-    fn pin_output(&mut self) {
-        let want = self.wanted_output();
+    fn pin_output(&mut self, cfg: &Config) {
+        let want = self.wanted_output(cfg);
         let found = self.lookup_output(&want);
         if !want.is_empty() && found.is_none() && self.warned_outputs.insert(want.clone()) {
             let names: Vec<&str> = self
@@ -433,7 +436,7 @@ impl App {
                 .map(|o| o.name.as_str())
                 .filter(|s| !s.is_empty())
                 .collect();
-            eprintln!(
+            warn!(
                 "hud: no output named {want:?} (have {}); using compositor default",
                 names.join(", ")
             );
@@ -475,20 +478,52 @@ impl App {
         self.mapped = false;
     }
 
-    fn request_remap(&mut self) {
+    fn request_remap(&mut self, cfg: &Config) {
         // wlr-layer-shell: after a null attach the surface is back to
         // post-get_layer_surface. Re-apply role, commit *without* a buffer,
         // wait for configure, then ack+swap. Swap first = Hyprland protocol error.
-        self.pin_output();
+        self.pin_output(cfg);
         self.apply_layer_role();
         if let Some(surface) = &self.surface {
             surface.commit();
         }
         self.awaiting_remap = true;
-        eprintln!(
+        debug!(
             "remap: empty commit, waiting for configure (output={})",
             self.output_name
         );
+    }
+}
+
+impl overlay::Hooks for App {
+    fn config_changed(&mut self, cfg: &Config) {
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.set_font(&cfg.hud.font);
+        }
+    }
+
+    fn follow(&mut self, cfg: &Config) {
+        self.follow_output(cfg);
+    }
+
+    fn show(&mut self, cfg: &Config) -> Result<(), Box<dyn Error>> {
+        if !self.mapped && !self.awaiting_remap {
+            self.request_remap(cfg);
+        }
+        Ok(())
+    }
+
+    fn hide(&mut self) {
+        if self.mapped {
+            self.unmap();
+        } else if self.gl_window.is_some() {
+            self.drop_gpu_before_window();
+            info!("unmapped (EGL context dropped)");
+        }
+    }
+
+    fn present(&mut self, cfg: &Config) -> Result<(), Box<dyn Error>> {
+        self.present(cfg)
     }
 }
 
@@ -606,20 +641,20 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for App {
                 if height > 0 {
                     state.logical_h = height as i32;
                 }
+                state.apply_viewport();
                 state.configured = true;
                 if state.awaiting_remap {
                     state.mapped = true;
                     state.awaiting_remap = false;
-                    eprintln!("remap configure — attaching buffer next");
+                    debug!("remap configure — attaching buffer next");
                 }
-                state.needs_present = true;
-                eprintln!(
+                debug!(
                     "configure {}x{}  scale {}/120 serial {serial}",
                     state.logical_w, state.logical_h, state.frac_scale
                 );
             }
             zwlr_layer_surface_v1::Event::Closed => {
-                eprintln!("layer surface closed by compositor");
+                warn!("layer surface closed by compositor");
                 state.closed = true;
             }
             _ => {}
@@ -639,8 +674,7 @@ impl Dispatch<WpFractionalScaleV1, ()> for App {
         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
             state.frac_scale = scale;
             state.apply_viewport();
-            eprintln!("fractional scale {scale}/120 ({:.0}%)", scale as f32 / 1.2);
-            state.needs_present = true;
+            debug!("fractional scale {scale}/120 ({:.0}%)", scale as f32 / 1.2);
         }
     }
 }
@@ -652,7 +686,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
             if args.requested {
                 return Err(format!("wayland: {err}").into());
             }
-            eprintln!("no Wayland display ({err}); overlay skipped");
+            error!("no Wayland display ({err}); overlay skipped");
             return Ok(());
         }
     };
@@ -705,8 +739,6 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         swaps: 0,
         output_name: args.output.clone().unwrap_or_else(|| "auto".into()),
         pending_serial: None,
-        needs_present: false,
-        cfg: Config::default(),
         namespace: args.namespace.clone(),
         cli_output: args.output.clone(),
         pinned_output: String::new(),
@@ -745,7 +777,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
     event_queue.roundtrip(&mut app)?;
 
     for output in &app.outputs {
-        eprintln!(
+        debug!(
             "output: {} ({}) scale {}",
             if output.name.is_empty() {
                 "<unnamed>"
@@ -761,21 +793,22 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
     }
 
     let seed = output_reference(&app.outputs, args.output.as_deref());
-    let mut watch = config::Watch::open_with_reference(args.config.clone(), seed)?;
-    app.cfg = watch.cfg.clone();
+    let watch = config::Watch::open_with_reference(args.config.clone(), seed)?;
 
-    app.handle = Some(app::start_with(
+    let handle = app::start_with(
         watch.cfg.clone(),
         app::PrintOpts {
             hud: args.print_hud,
         },
-    )?);
+    )?;
+    let cfg = handle.config();
+    app.handle = Some(handle.clone());
 
     if viewporter.is_none() {
-        eprintln!("warning: wp_viewporter missing; 125/150% will be blurry");
+        warn!("warning: wp_viewporter missing; 125/150% will be blurry");
     }
     if frac_mgr.is_none() {
-        eprintln!("warning: wp_fractional_scale_v1 missing; using integer wl_output.scale");
+        warn!("warning: wp_fractional_scale_v1 missing; using integer wl_output.scale");
         if let Some(output) = app.outputs.first() {
             app.frac_scale = (output.scale.max(1) as u32) * 120;
         }
@@ -790,7 +823,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         app.viewport = Some(viewporter.get_viewport(&surface, &qh, ()));
     }
     app.surface = Some(surface);
-    app.pin_output();
+    app.pin_output(&cfg);
     if frac_mgr.is_none()
         && let Some(output) = app
             .outputs
@@ -813,28 +846,21 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
         return Err("layer surface never got a non-zero configure".into());
     }
 
-    app.apply_viewport();
-    let vis = app
-        .handle
-        .as_ref()
-        .is_none_or(|h| h.visible.load(Ordering::SeqCst));
-    if vis {
-        app.ensure_gpu()?;
+    if handle.visible.load(Ordering::SeqCst) {
+        app.ensure_gpu(&cfg)?;
     }
 
-    eprintln!(
+    debug!(
         "namespace={} layer=overlay exclusive=-1 keyboard=none output={} swap-interval=0",
         args.namespace, app.output_name
     );
-    eprintln!("check: hyprctl layers | grep -A5 {}", args.namespace);
-    eprintln!(
+    debug!("check: hyprctl layers | grep -A5 {}", args.namespace);
+    debug!(
         "done-when: live HUD (block / XP / challenges / map) at 1 Hz over the game; clicks still pass through"
     );
 
-    app.present()?;
-
-    let started = Instant::now();
-    let mut next_tick = overlay::start_tick(started);
+    let mut rt = overlay::Runtime::new(watch, cfg, args.duration);
+    let wake_fd = handle.wake.read_fd();
 
     loop {
         event_queue.dispatch_pending(&mut app)?;
@@ -842,60 +868,22 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
             app.drop_gpu_before_window();
             return Err("compositor closed the layer surface".into());
         }
-        if overlay::expired(started, args.duration) {
-            eprintln!("clean shutdown after {} swaps", app.swaps);
+        if rt.expired() {
+            info!("clean shutdown after {} swaps", app.swaps);
+            app.drop_gpu_before_window();
+            return Ok(());
+        }
+        if handle.stopped() {
             app.drop_gpu_before_window();
             return Ok(());
         }
 
-        if let Some(h) = &app.handle
-            && h.stopped()
-        {
-            app.drop_gpu_before_window();
-            return Ok(());
-        }
-        let now = Instant::now();
-        if overlay::due(now, &mut next_tick) {
-            app.needs_present = true;
-            if let Some(cfg) = overlay::take_reload(&mut watch) {
-                if let Some(h) = app.handle.as_ref() {
-                    h.note_config_watch(&watch, true);
-                    let applied = match app.gpu.as_mut() {
-                        Some(gpu) => overlay::push_config(h, gpu, &cfg),
-                        None => h.replace_config(cfg),
-                    };
-                    app.cfg = applied;
-                } else {
-                    app.cfg = cfg;
-                }
-            } else if let Some(h) = app.handle.as_ref() {
-                h.note_config_watch(&watch, false);
-            }
-        }
-        app.follow_output();
-        let vis = app
-            .handle
-            .as_ref()
-            .is_none_or(|h| h.visible.load(Ordering::SeqCst));
-        if vis {
-            if !app.mapped && !app.awaiting_remap {
-                app.request_remap();
-            }
-        } else if app.mapped {
-            app.unmap();
-        } else if app.gl_window.is_some() {
-            app.drop_gpu_before_window();
-            eprintln!("unmapped (EGL context dropped)");
-        }
-        if app.needs_present {
-            app.present()?;
-        }
+        overlay::step(&mut rt, &handle, &mut app)?;
 
         event_queue.flush()?;
-        let timeout_ms = overlay::wait_ms(now, started, args.duration, next_tick) as i32;
+        let timeout_ms = rt.wait_ms() as i32;
         if let Some(guard) = event_queue.prepare_read() {
             let fd = event_queue.as_fd().as_raw_fd();
-            let wake_fd = app.handle.as_ref().map_or(-1, |h| h.wake.read_fd());
             let mut pfds = [
                 libc::pollfd {
                     fd,
@@ -908,8 +896,9 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
                     revents: 0,
                 },
             ];
-            let nfds = if wake_fd >= 0 { 2 } else { 1 };
-            let n = unsafe { libc::poll(pfds.as_mut_ptr(), nfds, timeout_ms) };
+            // SAFETY: `pfds` is a live `[pollfd; 2]` and nfds is 2; the fds are
+            // owned by `event_queue` (held by `guard`) and `handle.wake` for the loop.
+            let n = unsafe { libc::poll(pfds.as_mut_ptr(), 2, timeout_ms) };
             if n < 0 {
                 let err = std::io::Error::last_os_error();
                 if err.kind() == std::io::ErrorKind::Interrupted {
@@ -923,12 +912,8 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
             } else {
                 drop(guard);
             }
-            if n > 0 && nfds > 1 && pfds[1].revents != 0 {
-                if let Some(h) = &app.handle {
-                    h.wake.take();
-                }
-                app.sync_config();
-                app.needs_present = true;
+            if n > 0 && pfds[1].revents != 0 {
+                handle.wake.take();
             }
         }
     }

@@ -68,6 +68,13 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# Every unsafe block carries a `// SAFETY:` comment naming the invariant.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
 [profile.dev]
 # Backtraces keep file and line. 150 MB binary becomes 63 MB.
 debug = "line-tables-only"

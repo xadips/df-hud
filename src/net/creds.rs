@@ -4,8 +4,9 @@
 //! - the listener binds loopback only
 //! - request bodies are never logged
 //! - the on-disk file is 0600 (re-verified after write)
-//! - Display and JSON redact (derived Debug does not; do not {:?} a secret)
+//! - Display, Debug and JSON all redact; only the file carries the secrets
 
+use crate::wake::lock;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -16,12 +17,23 @@ use std::sync::Mutex;
 
 const SCHEMA_VERSION: i32 = 1;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Credentials {
     pub user_id: String,
     pub password: String,
     pub sc: String,
     pub cookie: String,
+}
+
+impl fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Credentials")
+            .field("user_id", &self.user_id)
+            .field("password", &redact(&self.password))
+            .field("sc", &redact(&self.sc))
+            .field("cookie", &redact(&self.cookie))
+            .finish()
+    }
 }
 
 impl Credentials {
@@ -66,7 +78,7 @@ impl Serialize for Credentials {
     }
 }
 
-fn redact(s: &str) -> String {
+pub(crate) fn redact(s: &str) -> String {
     if s.is_empty() {
         return String::new();
     }
@@ -103,7 +115,7 @@ pub struct Store {
 
 impl fmt::Display for Store {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let g = self.inner.lock().unwrap();
+        let g = lock(&self.inner);
         write!(
             f,
             "credStore{{path:{} creds:{} salt:{} updated:{}}}",
@@ -152,7 +164,7 @@ impl Store {
                 ));
             }
         };
-        let mut g = self.inner.lock().unwrap();
+        let mut g = lock(&self.inner);
         g.creds = Credentials {
             user_id: file.user_id,
             password: file.password,
@@ -170,7 +182,7 @@ impl Store {
             return Err("refusing to store an incomplete credential triple".into());
         }
         let (changed, snapshot) = {
-            let mut g = self.inner.lock().unwrap();
+            let mut g = lock(&self.inner);
             let mut changed = g.creds != c;
             if !skeygen.is_empty() && skeygen != g.salt {
                 changed = true;
@@ -246,7 +258,7 @@ impl Store {
     }
 
     pub fn get(&self) -> Option<(Credentials, String)> {
-        let g = self.inner.lock().unwrap();
+        let g = lock(&self.inner);
         if g.creds.valid() {
             Some((g.creds.clone(), g.salt.clone()))
         } else {
@@ -255,11 +267,11 @@ impl Store {
     }
 
     pub fn salt(&self) -> String {
-        self.inner.lock().unwrap().salt.clone()
+        lock(&self.inner).salt.clone()
     }
 
     pub fn updated_at(&self) -> Option<DateTime<Utc>> {
-        self.inner.lock().unwrap().updated_at
+        lock(&self.inner).updated_at
     }
 }
 
@@ -309,6 +321,25 @@ mod tests {
         assert!(text.contains("[redacted"));
         let json = serde_json::to_string(&s.get().unwrap().0).unwrap();
         assert!(!json.contains(secret), "JSON leaked the password: {json}");
+    }
+
+    #[test]
+    fn debug_redacts_secrets() {
+        let password = "3a7bd3e2360a3d29eea436fcfb7e44c735d117c4";
+        let sc = "0f9a1c4e8b2d6f3a7c5e9b1d4f8a2c6e";
+        let c = Credentials {
+            user_id: "1234567".into(),
+            password: password.into(),
+            sc: sc.into(),
+            cookie: "session=abcdef".into(),
+        };
+        for text in [format!("{c:?}"), format!("{:?}", c.to_df())] {
+            assert!(text.contains("1234567"), "{text}");
+            assert!(text.contains("[redacted"), "{text}");
+            for secret in [password, sc, "abcdef"] {
+                assert!(!text.contains(secret), "Debug leaked {secret}: {text}");
+            }
+        }
     }
 
     #[test]

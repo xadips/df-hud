@@ -44,8 +44,7 @@ pub fn compute_rate(samples: &[XpSample], mut min_samples: i32, stability: XpSta
     }
     let secs = span.num_milliseconds() as f64 / 1000.0;
     let mut rate = XpRate {
-        available: true,
-        per_hour: gained as f64 / secs * 3600.0,
+        per_hour: Some(gained as f64 / secs * 3600.0),
         gained,
         span: span.to_std().unwrap_or_default(),
         samples: samples.len() as i32,
@@ -143,8 +142,7 @@ mod tests {
             },
         ];
         let rate = compute_rate(&samples, 3, XpStability::Steady);
-        assert!(rate.available);
-        assert_eq!(rate.per_hour, 360_000.0);
+        assert_eq!(rate.per_hour, Some(360_000.0));
         assert_eq!(rate.gained, 2_000);
         assert!(!rate.provisional);
     }
@@ -157,8 +155,7 @@ mod tests {
             3,
             XpStability::Steady,
         );
-        assert!(rate.available);
-        assert_eq!(rate.per_hour, 360_000.0);
+        assert_eq!(rate.per_hour, Some(360_000.0));
         assert_eq!(rate.gained, 3000);
         assert_eq!(rate.span, std::time::Duration::from_secs(30));
         assert_eq!(rate.samples, 4);
@@ -183,7 +180,7 @@ mod tests {
             2,
             XpStability::Steady,
         );
-        assert!(!rate.available);
+        assert_eq!(rate.per_hour, None);
         assert_eq!(rate.why, "XP source changed");
     }
 
@@ -206,10 +203,7 @@ mod tests {
             "ordinary step reset"
         );
         let boosted = Snapshot {
-            boost_exp: Deadline {
-                forever: true,
-                ..Deadline::default()
-            },
+            boost_exp: Deadline::Forever,
             ..next
         };
         assert_eq!(
@@ -266,10 +260,7 @@ mod tests {
             assert_eq!(window_reset(&prev, &snap, window), Some(want));
         }
         let boosted = Snapshot {
-            boost_exp: Deadline {
-                forever: true,
-                ..Deadline::default()
-            },
+            boost_exp: Deadline::Forever,
             ..next.clone()
         };
         assert_eq!(
@@ -277,10 +268,7 @@ mod tests {
             Some("the XP boost changed")
         );
         let prev_boosted = Snapshot {
-            boost_exp: Deadline {
-                forever: true,
-                ..Deadline::default()
-            },
+            boost_exp: Deadline::Forever,
             ..prev.clone()
         };
         assert_eq!(

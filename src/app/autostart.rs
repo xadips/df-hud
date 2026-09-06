@@ -96,6 +96,8 @@ mod win {
         let subkey = wide(RUN_KEY);
         let name = wide(VALUE_NAME);
         let mut key: HKEY = ptr::null_mut();
+        // SAFETY: `subkey` is NUL-terminated and outlives the call; `key` is a
+        // live out-param for the opened handle.
         let status = unsafe {
             RegOpenKeyExW(
                 HKEY_CURRENT_USER,
@@ -113,19 +115,21 @@ mod win {
         }
         let mut ty = 0u32;
         let mut size = 0u32;
+        // SAFETY: `key` was opened above; a null data pointer with `size` is
+        // the documented existence/size query; `name` is NUL-terminated. The
+        // key is closed once, right after.
         let query = unsafe {
-            RegQueryValueExW(
+            let query = RegQueryValueExW(
                 key,
                 name.as_ptr(),
                 ptr::null(),
                 &mut ty,
                 ptr::null_mut(),
                 &mut size,
-            )
-        };
-        unsafe {
+            );
             RegCloseKey(key);
-        }
+            query
+        };
         match query {
             ERROR_SUCCESS | ERROR_MORE_DATA => Ok(true),
             ERROR_FILE_NOT_FOUND => Ok(false),
@@ -137,6 +141,8 @@ mod win {
         let subkey = wide(RUN_KEY);
         let name = wide(VALUE_NAME);
         let mut key: HKEY = ptr::null_mut();
+        // SAFETY: `subkey` is NUL-terminated and outlives the call; `key` is a
+        // live out-param for the opened handle.
         let status = unsafe {
             RegOpenKeyExW(
                 HKEY_CURRENT_USER,
@@ -152,10 +158,13 @@ mod win {
         if status != ERROR_SUCCESS {
             return Err(win_err("RegOpenKeyExW", status));
         }
-        let delete = unsafe { RegDeleteValueW(key, name.as_ptr()) };
-        unsafe {
+        // SAFETY: `key` was opened above and is closed once, right after;
+        // `name` is NUL-terminated.
+        let delete = unsafe {
+            let delete = RegDeleteValueW(key, name.as_ptr());
             RegCloseKey(key);
-        }
+            delete
+        };
         if delete == ERROR_SUCCESS || delete == ERROR_FILE_NOT_FOUND {
             Ok(())
         } else {
@@ -169,6 +178,8 @@ mod win {
         let value = wide(&quote_executable(&exe.to_string_lossy()));
         let mut key: HKEY = ptr::null_mut();
         let mut disposition = 0u32;
+        // SAFETY: `subkey` is NUL-terminated; null class and null security
+        // attributes are the defaults; `key`/`disposition` are live out-params.
         let status = unsafe {
             RegCreateKeyExW(
                 HKEY_CURRENT_USER,
@@ -186,11 +197,14 @@ mod win {
             return Err(win_err("RegCreateKeyExW", status));
         }
         let bytes = (value.len() * 2) as u32;
-        let set =
-            unsafe { RegSetValueExW(key, name.as_ptr(), 0, REG_SZ, value.as_ptr().cast(), bytes) };
-        unsafe {
+        // SAFETY: `key` was created above and is closed once, right after;
+        // `bytes` is the size of `value` in bytes including its terminating
+        // NUL, which is what REG_SZ expects; `name` is NUL-terminated.
+        let set = unsafe {
+            let set = RegSetValueExW(key, name.as_ptr(), 0, REG_SZ, value.as_ptr().cast(), bytes);
             RegCloseKey(key);
-        }
+            set
+        };
         if set == ERROR_SUCCESS {
             Ok(())
         } else {
@@ -239,6 +253,8 @@ mod win {
     pub fn open_file(path: &Path) -> Result<(), String> {
         let file = wide(&path.to_string_lossy());
         let open = wide("open");
+        // SAFETY: `open` and `file` are NUL-terminated and outlive the call;
+        // null parameters/directory and a null owner HWND are the defaults.
         let result = unsafe {
             ShellExecuteW(
                 ptr::null_mut(),

@@ -66,11 +66,29 @@ pub struct TextRun {
 pub struct MapView {
     pub player_x: i32,
     pub player_y: i32,
+    /// The grid cells drawn. `present` already clipped `cells` and `markers`
+    /// to it, so the scene lays out exactly this box and never re-windows.
+    pub window: MapWindow,
     pub cells: Vec<MapCell>,
     pub markers: Vec<MapMarker>,
     pub dividers_x: Vec<i32>,
     pub dividers_y: Vec<i32>,
     pub list: Vec<Line>,
+}
+
+/// Cell-space rectangle: origin and size in city blocks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MapWindow {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+impl MapWindow {
+    pub fn contains(self, x: i32, y: i32) -> bool {
+        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -92,7 +110,10 @@ pub struct MapMarker {
     pub ring: bool,
 }
 
-#[derive(Clone, Debug, Default)]
+/// Built deterministically from `View` + `Config` + viewport, so `PartialEq`
+/// on the f32 fields is exact: same inputs, same bits. `Gpu` compares the last
+/// drawn scene against the next one and skips the swap when nothing changed.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
     /// HUD text, drawn under the map (same order as Go).
     pub texts: Vec<Text>,
@@ -102,7 +123,7 @@ pub struct Scene {
     pub labels: Vec<Text>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Text {
     pub x: f32,
     pub y: f32,
@@ -119,7 +140,7 @@ pub struct Text {
     pub center_h: Option<f32>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Fill {
     pub x: f32,
     pub y: f32,
@@ -128,7 +149,7 @@ pub struct Fill {
     pub color: [f32; 4],
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Stroke {
     pub x0: f32,
     pub y0: f32,
@@ -509,31 +530,15 @@ fn map_cell_px(cfg: &Config) -> i32 {
     px.clamp(MAP_MIN_CELL, MAP_MAX_CELL)
 }
 
-fn map_window(view: &MapView, radius: i32) -> (i32, i32, i32, i32) {
-    if view.cells.is_empty() {
-        return (0, 0, 1, 1);
-    }
-    let min_x = view.cells.iter().map(|c| c.x).min().unwrap_or(0);
-    let max_x = view.cells.iter().map(|c| c.x).max().unwrap_or(0);
-    let min_y = view.cells.iter().map(|c| c.y).min().unwrap_or(0);
-    let max_y = view.cells.iter().map(|c| c.y).max().unwrap_or(0);
-    let city_w = max_x - min_x + 1;
-    let city_h = max_y - min_y + 1;
-    if radius <= 0 {
-        return (min_x, min_y, city_w, city_h);
-    }
-    let w = 2 * radius + 1;
-    let h = w;
-    let mut x = view.player_x - radius;
-    let mut y = view.player_y - radius;
-    x = x.max(min_x).min((max_x - w + 1).max(min_x));
-    y = y.max(min_y).min((max_y - h + 1).max(min_y));
-    (x, y, w, h)
-}
-
 fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: f32) {
     let cell_auth = map_cell_px(cfg) as f32;
-    let (win_x, win_y, win_w, win_h) = map_window(&view.map, cfg.widget.map.radius);
+    let window = view.map.window;
+    let MapWindow {
+        x: win_x,
+        y: win_y,
+        w: win_w,
+        h: win_h,
+    } = window;
     let map_w_auth = win_w as f32 * cell_auth;
     let map_h_auth = win_h as f32 * cell_auth;
 
@@ -622,11 +627,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
 
     let mut stack_n: HashMap<(i32, i32), usize> = HashMap::new();
     for marker in &view.map.markers {
-        if marker.x < win_x
-            || marker.x >= win_x + win_w
-            || marker.y < win_y
-            || marker.y >= win_y + win_h
-        {
+        if !window.contains(marker.x, marker.y) {
             continue;
         }
         *stack_n.entry((marker.x, marker.y)).or_insert(0) += 1;
@@ -635,11 +636,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
 
     let ring_w = xf.size(2.0).max(1.0);
     for marker in &view.map.markers {
-        if marker.x < win_x
-            || marker.x >= win_x + win_w
-            || marker.y < win_y
-            || marker.y >= win_y + win_h
-        {
+        if !window.contains(marker.x, marker.y) {
             continue;
         }
         let cx = ox + (marker.x - win_x) as f32 * cell;
@@ -685,11 +682,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
         });
     }
 
-    if view.map.player_x >= win_x
-        && view.map.player_x < win_x + win_w
-        && view.map.player_y >= win_y
-        && view.map.player_y < win_y + win_h
-    {
+    if window.contains(view.map.player_x, view.map.player_y) {
         let x = ox + (view.map.player_x - win_x) as f32 * cell;
         let y = oy + (view.map.player_y - win_y) as f32 * cell;
         stroke_rect(scene, x, y, cell, cell, ring_w, [1.0, 1.0, 1.0, hud_a]);

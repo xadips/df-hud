@@ -3,14 +3,21 @@
 //! Widget x/y come from defaults (`df-hud.example.toml`).
 //! Map is a tiny fake city, not `citymap.txt`.
 
-use crate::overlay::scene::{Line, MapCell, MapMarker, MapView, View};
+use crate::overlay::scene::{Line, MapCell, MapMarker, MapView, MapWindow, View};
 
 #[cfg(target_os = "linux")]
 pub fn clock_hms() -> String {
     let mut t: libc::time_t = 0;
-    unsafe { libc::time(&mut t) };
-    let mut local = unsafe { std::mem::zeroed::<libc::tm>() };
-    unsafe { libc::localtime_r(&t, &mut local) };
+    // SAFETY: `tm` is plain integers plus a `*const c_char`, so all-zero is a
+    // valid value (libc gives it no `Default`). `time` and `localtime_r` only
+    // write through pointers to the live locals `t` and `local`, and
+    // `localtime_r` is the re-entrant form, so no static buffer is shared.
+    let local = unsafe {
+        let mut local = std::mem::zeroed::<libc::tm>();
+        libc::time(&mut t);
+        libc::localtime_r(&t, &mut local);
+        local
+    };
     format!(
         "{:02}:{:02}:{:02}",
         local.tm_hour, local.tm_min, local.tm_sec
@@ -22,6 +29,7 @@ pub fn clock_hms() -> String {
     use windows_sys::Win32::Foundation::SYSTEMTIME;
     use windows_sys::Win32::System::SystemInformation::GetLocalTime;
     let mut local = SYSTEMTIME::default();
+    // SAFETY: `local` is a live SYSTEMTIME that GetLocalTime only writes into.
     unsafe { GetLocalTime(&mut local) };
     format!(
         "{:02}:{:02}:{:02}",
@@ -82,6 +90,12 @@ fn fake_map() -> MapView {
     MapView {
         player_x: player,
         player_y: player,
+        window: MapWindow {
+            x: origin,
+            y: origin,
+            w: size,
+            h: size,
+        },
         cells,
         markers: vec![
             MapMarker {

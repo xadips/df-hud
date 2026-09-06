@@ -1,5 +1,7 @@
-//! Player-record and challenge-board pollers. The only code that talks to DF.
+//! Player-record and hotrods-board (challenges, masteries) pollers. The only
+//! code that talks to DF.
 
+use crate::wake::lock;
 use chrono::Utc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,11 +11,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::app::rategate::{Cancelled, Gate};
 use crate::app::state;
 use crate::app::store::Store;
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::data::{challenges, masteries};
 use crate::model::{PollerStatus, Tick};
 use crate::net::creds::Store as Creds;
-use crate::net::dfclient::Client;
+use crate::net::dfclient::{self, Client, Vars};
 use crate::wake::Notify;
 
 pub const MIN_REQUEST_GAP: Duration = Duration::from_secs(1);
@@ -34,7 +36,7 @@ const MASTERIES_RETRY: &str = "could not load masteries (retrying)";
 pub struct PollerRuntime {
     pub creds: Arc<Creds>,
     pub store: Arc<Store>,
-    pub cfg: Arc<Mutex<Config>>,
+    pub cfg: Arc<config::Shared>,
     pub gate: Arc<Gate>,
     pub stop: Arc<AtomicBool>,
     pub shutdown: Arc<Notify>,
@@ -149,7 +151,7 @@ pub struct PlayerPoller {
     client: Arc<Mutex<Client>>,
     creds: Arc<Creds>,
     store: Arc<Store>,
-    cfg: Arc<Mutex<Config>>,
+    cfg: Arc<config::Shared>,
     gate: Arc<Gate>,
     stop: Arc<AtomicBool>,
     shutdown: Arc<Notify>,
@@ -179,7 +181,7 @@ impl PlayerPoller {
     }
 
     pub fn set_on_tick(&self, fn_: impl Fn(Tick) + Send + Sync + 'static) {
-        *self.on_tick.lock().unwrap() = Some(Arc::new(fn_));
+        *lock(&self.on_tick) = Some(Arc::new(fn_));
     }
 
     pub fn wake(&self) {
@@ -187,15 +189,15 @@ impl PlayerPoller {
     }
 
     pub fn replace_client(&self, client: Client) {
-        *self.client.lock().unwrap() = client;
+        *lock(&self.client) = client;
         self.wake();
     }
 
     pub fn resume(&self) {
         {
-            let mut st = self.status.lock().unwrap();
+            let mut st = lock(&self.status);
             if st.stale || self.session_stale.load(Ordering::SeqCst) {
-                eprintln!("poller: credentials refreshed, resuming");
+                info!("poller: credentials refreshed, resuming");
             }
             st.stale = false;
             st.failures = 0;
@@ -205,7 +207,7 @@ impl PlayerPoller {
     }
 
     pub fn status(&self) -> PollerStatus {
-        self.status.lock().unwrap().clone()
+        lock(&self.status).clone()
     }
 
     /// The configured account id, when it is the only identity we have. Real
@@ -214,7 +216,7 @@ impl PlayerPoller {
         if self.creds.get().is_some() {
             return None;
         }
-        let id = self.cfg.lock().unwrap().df.user_id.clone();
+        let id = self.cfg.get().df.user_id.clone();
         (!id.is_empty()).then_some(id)
     }
 
@@ -223,7 +225,7 @@ impl PlayerPoller {
             return Some("waiting for the browser bridge to deliver a session".into());
         }
         {
-            let mut st = self.status.lock().unwrap();
+            let mut st = lock(&self.status);
             if self.session_stale.load(Ordering::SeqCst) {
                 st.stale = true;
             }
@@ -233,15 +235,14 @@ impl PlayerPoller {
                 );
             }
         }
-        let cfg = self.cfg.lock().unwrap().clone();
-        if cfg.poll.only_when_game_running && !self.game_running.load(Ordering::SeqCst) {
+        if self.cfg.get().poll.only_when_game_running && !self.game_running.load(Ordering::SeqCst) {
             return Some("the game is not running (poll.only_when_game_running)".into());
         }
         None
     }
 
     fn interval(&self) -> Duration {
-        let cfg = self.cfg.lock().unwrap();
+        let cfg = self.cfg.get();
         if self.game_running.load(Ordering::SeqCst) {
             cfg.poll.active_interval.0
         } else {
@@ -250,11 +251,8 @@ impl PlayerPoller {
     }
 
     fn backoff(&self, n: i32) -> Duration {
-        let (cap, jitter) = {
-            let cfg = self.cfg.lock().unwrap();
-            (cfg.poll.backoff_max.0, cfg.poll.jitter)
-        };
-        exponential_backoff(self.interval(), n, cap, jitter)
+        let cfg = self.cfg.get();
+        exponential_backoff(self.interval(), n, cfg.poll.backoff_max.0, cfg.poll.jitter)
     }
 
     pub fn run(self: Arc<Self>) {
@@ -287,7 +285,7 @@ impl PlayerPoller {
             },
         };
         {
-            let mut st = self.status.lock().unwrap();
+            let mut st = lock(&self.status);
             st.last_attempt = Some(Utc::now());
             st.total_polls += 1;
         }
@@ -302,12 +300,11 @@ impl PlayerPoller {
                 Outcome::Stop,
             );
         }
-        let result = {
-            let client = self.client.lock().unwrap();
-            match &identity {
-                Identity::Session(cr) => client.get_values(&cr.to_df()),
-                Identity::PublicId(id) => client.get_values_public(id),
-            }
+        // A clone, so replace_client never waits on this round-trip.
+        let client = lock(&self.client).clone();
+        let result = match &identity {
+            Identity::Session(cr) => client.get_values(&cr.to_df()),
+            Identity::PublicId(id) => client.get_values_public(id),
         };
         // Read before the error is flattened into Tick.err for display.
         let stale = matches!(&result, Err(err) if err.stale());
@@ -326,7 +323,7 @@ impl PlayerPoller {
             },
         };
         {
-            let mut st = self.status.lock().unwrap();
+            let mut st = lock(&self.status);
             match &tick.err {
                 None => {
                     st.failures = 0;
@@ -338,7 +335,7 @@ impl PlayerPoller {
                     self.session_stale.store(true, Ordering::SeqCst);
                     st.last_error.clone_from(err);
                     st.total_failure += 1;
-                    eprintln!(
+                    error!(
                         "poller: the server rejected our credentials - polling STOPPED. \
                          Open any Dead Frontier page with the bridge userscript installed and it will resume by itself."
                     );
@@ -348,13 +345,13 @@ impl PlayerPoller {
                     st.last_error.clone_from(err);
                     st.total_failure += 1;
                     if st.failures == 1 || st.failures % 10 == 0 {
-                        eprintln!("poller: {err} (backing off; will keep trying)");
+                        warn!("poller: {err} (backing off; will keep trying)");
                     }
                 }
             }
         }
         self.store.set_poller_status(self.status());
-        if let Some(fn_) = self.on_tick.lock().unwrap().clone() {
+        if let Some(fn_) = lock(&self.on_tick).clone() {
             fn_(tick.clone());
         }
         let outcome = if stale {
@@ -383,20 +380,20 @@ impl Schedule for PlayerPoller {
 
     fn on_pause(&self, reason: &str, entered: bool) {
         {
-            let mut st = self.status.lock().unwrap();
+            let mut st = lock(&self.status);
             st.paused = true;
             st.pause_reason = reason.to_string();
             st.next_attempt = None;
         }
         self.store.set_poller_status(self.status());
         if entered {
-            eprintln!("poller: paused - {reason}");
+            info!("poller: paused - {reason}");
         }
     }
 
     fn on_resume(&self) {
-        eprintln!("poller: resumed");
-        let mut st = self.status.lock().unwrap();
+        info!("poller: resumed");
+        let mut st = lock(&self.status);
         st.paused = false;
         st.pause_reason.clear();
     }
@@ -411,7 +408,7 @@ impl Schedule for PlayerPoller {
 
     fn before_wait(&self, next: Instant) {
         {
-            let mut st = self.status.lock().unwrap();
+            let mut st = lock(&self.status);
             st.next_attempt = Some(
                 Utc::now()
                     + chrono::Duration::from_std(next.saturating_duration_since(Instant::now()))
@@ -436,7 +433,7 @@ impl Schedule for PlayerPoller {
     }
 
     fn success_delay(&self) -> Duration {
-        let jitter = self.cfg.lock().unwrap().poll.jitter;
+        let jitter = self.cfg.get().poll.jitter;
         jittered(self.interval(), jitter)
     }
 
@@ -445,12 +442,134 @@ impl Schedule for PlayerPoller {
     }
 }
 
-pub struct ChallengePoller {
+/// What differs between the two hotrods boards. [`BoardPoller`] owns the
+/// schedule, the pause rules and the stale-session handshake.
+pub trait Board: Send + Sync + 'static {
+    /// Log prefix.
+    const NAME: &'static str;
+    /// Pause reason when the widget is switched off.
+    const DISABLED: &'static str;
+    /// Status line while a fetch keeps failing.
+    const RETRY: &'static str;
+
+    fn enabled(cfg: &Config) -> bool;
+    fn interval(cfg: &Config, game_running: bool) -> Duration;
+    fn fetch(
+        client: &Client,
+        cr: &dfclient::Credentials,
+        salt: &str,
+    ) -> Result<Vars, dfclient::Error>;
+    /// Why polling has to wait, when the reply cannot be read without the
+    /// player record.
+    fn wait_for(&self, _store: &Store) -> Option<String> {
+        None
+    }
+    fn store(&self, store: &Store, vars: &Vars);
+    fn clear(store: &Store);
+    fn set_status(store: &Store, reason: String);
+}
+
+/// Sticky completion is remembered across polls, and nothing can be parsed
+/// until the player level is known.
+pub struct ChallengeBoard {
+    persist: Arc<state::Persist>,
+}
+
+/// Needs neither: levels only go up, and nothing in the reply depends on the
+/// player record.
+pub struct MasteryBoard;
+
+pub type ChallengePoller = BoardPoller<ChallengeBoard>;
+pub type MasteryPoller = BoardPoller<MasteryBoard>;
+
+impl Board for ChallengeBoard {
+    const NAME: &'static str = "challenges";
+    const DISABLED: &'static str = "the challenge widget is disabled";
+    const RETRY: &'static str = BOARD_RETRY;
+
+    fn enabled(cfg: &Config) -> bool {
+        cfg.widget.challenges.enabled
+    }
+
+    fn interval(cfg: &Config, game_running: bool) -> Duration {
+        cfg.poll.effective_challenge_interval(game_running)
+    }
+
+    fn fetch(
+        client: &Client,
+        cr: &dfclient::Credentials,
+        salt: &str,
+    ) -> Result<Vars, dfclient::Error> {
+        client.load_challenge(cr, salt)
+    }
+
+    fn wait_for(&self, store: &Store) -> Option<String> {
+        match store.snapshot() {
+            Some(s) if s.level > 0 => None,
+            _ => Some(
+                "waiting for the first player record (the level decides which challenges apply to you)"
+                    .into(),
+            ),
+        }
+    }
+
+    fn store(&self, store: &Store, vars: &Vars) {
+        let (level, gold) = store
+            .snapshot()
+            .map_or((0, false), |s| (s.level, s.gold_member));
+        let board = challenges::parse(vars, level, gold);
+        store.set_challenges(self.persist.remember_challenge_board(board));
+    }
+
+    fn clear(store: &Store) {
+        store.clear_challenges();
+    }
+
+    fn set_status(store: &Store, reason: String) {
+        store.set_challenge_status(reason);
+    }
+}
+
+impl Board for MasteryBoard {
+    const NAME: &'static str = "masteries";
+    const DISABLED: &'static str = "the masteries widget is disabled";
+    const RETRY: &'static str = MASTERIES_RETRY;
+
+    fn enabled(cfg: &Config) -> bool {
+        cfg.widget.masteries.enabled
+    }
+
+    fn interval(cfg: &Config, game_running: bool) -> Duration {
+        cfg.poll.effective_mastery_interval(game_running)
+    }
+
+    fn fetch(
+        client: &Client,
+        cr: &dfclient::Credentials,
+        salt: &str,
+    ) -> Result<Vars, dfclient::Error> {
+        client.load_masteries(cr, salt)
+    }
+
+    fn store(&self, store: &Store, vars: &Vars) {
+        store.set_masteries(masteries::parse(vars));
+    }
+
+    fn clear(store: &Store) {
+        store.clear_masteries();
+    }
+
+    fn set_status(store: &Store, reason: String) {
+        store.set_mastery_status(reason);
+    }
+}
+
+pub struct BoardPoller<B: Board> {
+    board: B,
     client: Arc<Mutex<Client>>,
     creds: Arc<Creds>,
     store: Arc<Store>,
-    persist: Arc<state::Store>,
-    cfg: Arc<Mutex<Config>>,
+    cfg: Arc<config::Shared>,
     gate: Arc<Gate>,
     stop: Arc<AtomicBool>,
     shutdown: Arc<Notify>,
@@ -464,14 +583,26 @@ pub struct ChallengePoller {
 impl ChallengePoller {
     pub fn new(
         client: Arc<Mutex<Client>>,
-        persist: Arc<state::Store>,
+        persist: Arc<state::Persist>,
         runtime: PollerRuntime,
     ) -> Arc<Self> {
+        BoardPoller::with_board(ChallengeBoard { persist }, client, runtime)
+    }
+}
+
+impl MasteryPoller {
+    pub fn new(client: Arc<Mutex<Client>>, runtime: PollerRuntime) -> Arc<Self> {
+        BoardPoller::with_board(MasteryBoard, client, runtime)
+    }
+}
+
+impl<B: Board> BoardPoller<B> {
+    fn with_board(board: B, client: Arc<Mutex<Client>>, runtime: PollerRuntime) -> Arc<Self> {
         Arc::new(Self {
+            board,
             client,
             creds: runtime.creds,
             store: runtime.store,
-            persist,
             cfg: runtime.cfg,
             gate: runtime.gate,
             stop: runtime.stop,
@@ -489,14 +620,14 @@ impl ChallengePoller {
     }
 
     pub fn replace_client(&self, client: Client) {
-        *self.client.lock().unwrap() = client;
+        *lock(&self.client) = client;
         self.wake();
     }
 
     pub fn resume(&self) {
         self.stale.store(false, Ordering::SeqCst);
         self.session_stale.store(false, Ordering::SeqCst);
-        *self.failures.lock().unwrap() = 0;
+        *lock(&self.failures) = 0;
         self.wake();
     }
 
@@ -513,9 +644,9 @@ impl ChallengePoller {
     }
 
     fn pause_reason(&self) -> Option<String> {
-        let cfg = self.cfg.lock().unwrap().clone();
-        if !cfg.widget.challenges.enabled {
-            return Some("the challenge widget is disabled".into());
+        let cfg = self.cfg.get();
+        if !B::enabled(&cfg) {
+            return Some(B::DISABLED.into());
         }
         let Some((cr, salt)) = self.creds.get() else {
             return Some(NEED_SCRIPT.into());
@@ -532,13 +663,7 @@ impl ChallengePoller {
         if cfg.poll.only_when_game_running && !self.game_running.load(Ordering::SeqCst) {
             return Some("the game is not running (poll.only_when_game_running)".into());
         }
-        match self.store.snapshot() {
-            Some(s) if s.level > 0 => None,
-            _ => Some(
-                "waiting for the first player record (the level decides which challenges apply to you)"
-                    .into(),
-            ),
-        }
+        self.board.wait_for(&self.store)
     }
 
     pub fn run(self: Arc<Self>) {
@@ -549,27 +674,18 @@ impl ChallengePoller {
         let Some((cr, salt_stored)) = self.creds.get() else {
             return Outcome::Err;
         };
-        let cfg = self.cfg.lock().unwrap().clone();
-        let salt = cfg.signing_salt(|| salt_stored.clone());
+        let salt = self.cfg.get().signing_salt(|| salt_stored.clone());
         if self.gate.wait(&self.stop, &self.shutdown).is_err() {
             return Outcome::Stop;
         }
-        let vars = {
-            let mut client = self.client.lock().unwrap();
-            client.cookie.clone_from(&cr.cookie);
-            client.load_challenge(&cr.to_df(), &salt)
-        };
-        match vars {
+        // A clone, so replace_client never waits on this round-trip.
+        let mut client = lock(&self.client).clone();
+        client.cookie.clone_from(&cr.cookie);
+        match B::fetch(&client, &cr.to_df(), &salt) {
             Ok(vars) => {
-                *self.failures.lock().unwrap() = 0;
-                let (level, gold) = self
-                    .store
-                    .snapshot()
-                    .map_or((0, false), |s| (s.level, s.gold_member));
-                let board = challenges::parse(&vars, level, gold);
-                let board = self.persist.remember_challenge_board(board);
-                self.store.set_challenges(board);
-                self.store.set_challenge_status(String::new());
+                *lock(&self.failures) = 0;
+                self.board.store(&self.store, &vars);
+                B::set_status(&self.store, String::new());
                 Outcome::Ok
             }
             Err(err) => {
@@ -577,12 +693,12 @@ impl ChallengePoller {
                     self.stale.store(true, Ordering::SeqCst);
                     self.session_stale.store(true, Ordering::SeqCst);
                 } else {
-                    *self.failures.lock().unwrap() += 1;
-                    self.store.set_challenge_status(BOARD_RETRY.into());
+                    *lock(&self.failures) += 1;
+                    B::set_status(&self.store, B::RETRY.into());
                 }
-                let n = *self.failures.lock().unwrap();
+                let n = *lock(&self.failures);
                 if n == 1 || n % 10 == 0 || err.stale() {
-                    eprintln!("challenges: {err}");
+                    warn!("{}: {err}", B::NAME);
                 }
                 if err.stale() {
                     Outcome::Stale
@@ -594,7 +710,7 @@ impl ChallengePoller {
     }
 }
 
-impl Schedule for ChallengePoller {
+impl<B: Board> Schedule for BoardPoller<B> {
     fn stop(&self) -> &AtomicBool {
         &self.stop
     }
@@ -611,16 +727,16 @@ impl Schedule for ChallengePoller {
         if !entered {
             return;
         }
-        eprintln!("challenges: paused - {reason}");
-        self.store.set_challenge_status(reason.to_string());
-        if !self.cfg.lock().unwrap().widget.challenges.enabled {
-            self.store.clear_challenges();
+        info!("{}: paused - {reason}", B::NAME);
+        B::set_status(&self.store, reason.to_string());
+        if !B::enabled(&self.cfg.get()) {
+            B::clear(&self.store);
         }
     }
 
     fn on_resume(&self) {
-        eprintln!("challenges: resumed");
-        self.store.set_challenge_status(String::new());
+        info!("{}: resumed", B::NAME);
+        B::set_status(&self.store, String::new());
     }
 
     fn apply_floor(&self, next: &mut Instant) {
@@ -644,218 +760,16 @@ impl Schedule for ChallengePoller {
     }
 
     fn success_delay(&self) -> Duration {
-        let cfg = self.cfg.lock().unwrap();
+        let cfg = self.cfg.get();
         let running = self.game_running.load(Ordering::SeqCst);
-        jittered(
-            cfg.poll.effective_challenge_interval(running),
-            cfg.poll.jitter,
-        )
+        jittered(B::interval(&cfg, running), cfg.poll.jitter)
     }
 
     fn fail_delay(&self) -> Duration {
-        let n = *self.failures.lock().unwrap();
-        let cfg = self.cfg.lock().unwrap();
+        let n = *lock(&self.failures);
+        let cfg = self.cfg.get();
         exponential_backoff(
-            cfg.poll.effective_challenge_interval(true),
-            n,
-            cfg.poll.backoff_max.0,
-            cfg.poll.jitter,
-        )
-    }
-}
-
-/// The masteries feed. A clone of [`ChallengePoller`] minus the pieces
-/// masteries do not need: no sticky persistence (levels only go up) and no
-/// wait for the player level (nothing in the reply depends on it).
-pub struct MasteryPoller {
-    client: Arc<Mutex<Client>>,
-    creds: Arc<Creds>,
-    store: Arc<Store>,
-    cfg: Arc<Mutex<Config>>,
-    gate: Arc<Gate>,
-    stop: Arc<AtomicBool>,
-    shutdown: Arc<Notify>,
-    wake: Arc<Notify>,
-    game_running: Arc<AtomicBool>,
-    session_stale: Arc<AtomicBool>,
-    stale: AtomicBool,
-    failures: Mutex<i32>,
-}
-
-impl MasteryPoller {
-    pub fn new(client: Arc<Mutex<Client>>, runtime: PollerRuntime) -> Arc<Self> {
-        Arc::new(Self {
-            client,
-            creds: runtime.creds,
-            store: runtime.store,
-            cfg: runtime.cfg,
-            gate: runtime.gate,
-            stop: runtime.stop,
-            shutdown: runtime.shutdown,
-            wake: Arc::new(Notify::new()),
-            game_running: runtime.game_running,
-            session_stale: runtime.session_stale,
-            stale: AtomicBool::new(false),
-            failures: Mutex::new(0),
-        })
-    }
-
-    pub fn wake(&self) {
-        self.wake.ping();
-    }
-
-    pub fn replace_client(&self, client: Client) {
-        *self.client.lock().unwrap() = client;
-        self.wake();
-    }
-
-    pub fn resume(&self) {
-        self.stale.store(false, Ordering::SeqCst);
-        self.session_stale.store(false, Ordering::SeqCst);
-        *self.failures.lock().unwrap() = 0;
-        self.wake();
-    }
-
-    #[cfg(test)]
-    pub fn enter_pause_for_test(&self) -> Option<String> {
-        let reason = self.pause_reason()?;
-        self.on_pause(&reason, true);
-        Some(reason)
-    }
-
-    fn pause_reason(&self) -> Option<String> {
-        let cfg = self.cfg.lock().unwrap().clone();
-        if !cfg.widget.masteries.enabled {
-            return Some("the masteries widget is disabled".into());
-        }
-        let Some((cr, salt)) = self.creds.get() else {
-            return Some(NEED_SCRIPT.into());
-        };
-        if self.session_stale.load(Ordering::SeqCst) || self.stale.load(Ordering::SeqCst) {
-            return Some(SESSION_EXPIRED.into());
-        }
-        if cfg.signing_salt(|| salt.clone()).is_empty() {
-            return Some(SCRIPT_TOO_OLD.into());
-        }
-        if cr.cookie.is_empty() {
-            return Some(NEED_COOKIE.into());
-        }
-        if cfg.poll.only_when_game_running && !self.game_running.load(Ordering::SeqCst) {
-            return Some("the game is not running (poll.only_when_game_running)".into());
-        }
-        None
-    }
-
-    pub fn run(self: Arc<Self>) {
-        run_loop(&*self);
-    }
-
-    fn poll_once(&self) -> Outcome {
-        let Some((cr, salt_stored)) = self.creds.get() else {
-            return Outcome::Err;
-        };
-        let cfg = self.cfg.lock().unwrap().clone();
-        let salt = cfg.signing_salt(|| salt_stored.clone());
-        if self.gate.wait(&self.stop, &self.shutdown).is_err() {
-            return Outcome::Stop;
-        }
-        let vars = {
-            let mut client = self.client.lock().unwrap();
-            client.cookie.clone_from(&cr.cookie);
-            client.load_masteries(&cr.to_df(), &salt)
-        };
-        match vars {
-            Ok(vars) => {
-                *self.failures.lock().unwrap() = 0;
-                self.store.set_masteries(masteries::parse(&vars));
-                self.store.set_mastery_status(String::new());
-                Outcome::Ok
-            }
-            Err(err) => {
-                if err.stale() {
-                    self.stale.store(true, Ordering::SeqCst);
-                    self.session_stale.store(true, Ordering::SeqCst);
-                } else {
-                    *self.failures.lock().unwrap() += 1;
-                    self.store.set_mastery_status(MASTERIES_RETRY.into());
-                }
-                let n = *self.failures.lock().unwrap();
-                if n == 1 || n % 10 == 0 || err.stale() {
-                    eprintln!("masteries: {err}");
-                }
-                if err.stale() {
-                    Outcome::Stale
-                } else {
-                    Outcome::Err
-                }
-            }
-        }
-    }
-}
-
-impl Schedule for MasteryPoller {
-    fn stop(&self) -> &AtomicBool {
-        &self.stop
-    }
-
-    fn wake(&self) -> &Notify {
-        &self.wake
-    }
-
-    fn current_pause(&self) -> Option<String> {
-        self.pause_reason()
-    }
-
-    fn on_pause(&self, reason: &str, entered: bool) {
-        if !entered {
-            return;
-        }
-        eprintln!("masteries: paused - {reason}");
-        self.store.set_mastery_status(reason.to_string());
-        if !self.cfg.lock().unwrap().widget.masteries.enabled {
-            self.store.clear_masteries();
-        }
-    }
-
-    fn on_resume(&self) {
-        eprintln!("masteries: resumed");
-        self.store.set_mastery_status(String::new());
-    }
-
-    fn apply_floor(&self, next: &mut Instant) {
-        if let Some(floor) = self.gate.reserved()
-            && *next < floor
-        {
-            *next = floor;
-        }
-    }
-
-    fn before_wait(&self, _next: Instant) {}
-
-    fn after_wake(&self, next: &mut Instant) {
-        if let Some(floor) = self.gate.reserved() {
-            *next = floor;
-        }
-    }
-
-    fn poll(&self) -> Outcome {
-        self.poll_once()
-    }
-
-    fn success_delay(&self) -> Duration {
-        let cfg = self.cfg.lock().unwrap();
-        let running = self.game_running.load(Ordering::SeqCst);
-        jittered(
-            cfg.poll.effective_mastery_interval(running),
-            cfg.poll.jitter,
-        )
-    }
-
-    fn fail_delay(&self) -> Duration {
-        let n = *self.failures.lock().unwrap();
-        let cfg = self.cfg.lock().unwrap();
-        exponential_backoff(
-            cfg.poll.effective_mastery_interval(true),
+            B::interval(&cfg, true),
             n,
             cfg.poll.backoff_max.0,
             cfg.poll.jitter,
@@ -880,6 +794,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use crate::net::creds::Credentials;
     use crate::net::dfclient::Client;
     use std::collections::HashMap;
@@ -977,7 +892,7 @@ mod tests {
             PollerRuntime {
                 creds,
                 store: Arc::new(Store::new(None)),
-                cfg: Arc::new(Mutex::new(cfg)),
+                cfg: config::Shared::new(cfg),
                 gate: Arc::new(Gate::new(Duration::from_millis(5))),
                 stop: stop.clone(),
                 shutdown: shutdown.clone(),
@@ -1013,7 +928,7 @@ mod tests {
             PollerRuntime {
                 creds: Arc::new(Creds::new("")),
                 store: Arc::new(Store::new(None)),
-                cfg: Arc::new(Mutex::new(cfg)),
+                cfg: config::Shared::new(cfg),
                 gate: Arc::new(Gate::new(Duration::from_millis(5))),
                 stop: Arc::new(AtomicBool::new(false)),
                 shutdown: Arc::new(Notify::new()),
@@ -1037,7 +952,7 @@ mod tests {
     #[test]
     fn a_session_wins_over_a_configured_user_id() {
         let (p, _stop, _) = test_poller("http://127.0.0.1:1");
-        p.cfg.lock().unwrap().df.user_id = "7654321".into();
+        p.cfg.update(|c| c.df.user_id = "7654321".into());
         assert!(
             p.public_only_id().is_none(),
             "bridge credentials must not be displaced by df.user_id"
@@ -1145,7 +1060,7 @@ mod tests {
 
     fn test_challenge_poller(
         session_stale: Arc<AtomicBool>,
-    ) -> (Arc<ChallengePoller>, Arc<Store>, Arc<Mutex<Config>>) {
+    ) -> (Arc<ChallengePoller>, Arc<Store>, Arc<config::Shared>) {
         let mut cfg = Config::default();
         cfg.widget.challenges.enabled = true;
         cfg.poll.only_when_game_running = false;
@@ -1174,14 +1089,14 @@ mod tests {
                 .http_status_as_error(false)
                 .build(),
         );
-        let cfg = Arc::new(Mutex::new(cfg));
+        let cfg = config::Shared::new(cfg);
         let p = ChallengePoller::new(
             Arc::new(Mutex::new(Client::with_agent(
                 agent,
                 "http://127.0.0.1:1",
                 "df-hud-test",
             ))),
-            Arc::new(state::Store::new("")),
+            Arc::new(state::Persist::new("")),
             PollerRuntime {
                 creds,
                 store: store.clone(),
@@ -1238,7 +1153,7 @@ mod tests {
             name: "Travel".into(),
             ..crate::model::Challenge::default()
         }]);
-        cfg.lock().unwrap().widget.challenges.enabled = false;
+        cfg.update(|c| c.widget.challenges.enabled = false);
         let reason = p.enter_pause_for_test().expect("paused");
         assert!(reason.contains("disabled"), "{reason}");
         assert!(store.derive(Utc::now()).challenges.is_none());
@@ -1255,7 +1170,7 @@ mod tests {
 
     fn test_mastery_poller(
         session_stale: Arc<AtomicBool>,
-    ) -> (Arc<MasteryPoller>, Arc<Store>, Arc<Mutex<Config>>) {
+    ) -> (Arc<MasteryPoller>, Arc<Store>, Arc<config::Shared>) {
         let mut cfg = Config::default();
         cfg.widget.masteries.enabled = true;
         cfg.poll.only_when_game_running = false;
@@ -1278,7 +1193,7 @@ mod tests {
                 .http_status_as_error(false)
                 .build(),
         );
-        let cfg = Arc::new(Mutex::new(cfg));
+        let cfg = config::Shared::new(cfg);
         let p = MasteryPoller::new(
             Arc::new(Mutex::new(Client::with_agent(
                 agent,
@@ -1321,7 +1236,7 @@ mod tests {
             name: "Looter".into(),
             ..crate::model::Mastery::default()
         }]);
-        cfg.lock().unwrap().widget.masteries.enabled = false;
+        cfg.update(|c| c.widget.masteries.enabled = false);
         let reason = p.enter_pause_for_test().expect("paused");
         assert!(reason.contains("disabled"), "{reason}");
         assert!(store.derive(Utc::now()).masteries.is_none());

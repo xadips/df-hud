@@ -118,6 +118,38 @@ jobs:
       - name: Compile windows-gnu tests
         run: cargo test --locked --no-run --target x86_64-pc-windows-gnu
 
+  # Cargo.toml's rust-version is only a claim until something builds with it.
+  # Type-check both targets on that exact toolchain; clippy stays on stable.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Wayland headers, MinGW, and Mesa
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libwayland-dev \
+            binutils-mingw-w64-x86-64 \
+            gcc-mingw-w64-x86-64 \
+            libegl1 \
+            libegl-mesa0 \
+            libgles2 \
+            libgl1-mesa-dri
+
+      - uses: dtolnay/rust-toolchain@1.91
+        with:
+          targets: x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check linux-gnu on the MSRV
+        run: cargo check --locked --all-targets --target x86_64-unknown-linux-gnu
+
+      - name: Check windows-gnu on the MSRV
+        run: cargo check --locked --all-targets --target x86_64-pc-windows-gnu
+
   # The release artifact stays MinGW; this runs the windows-gated logic (tray
   # menu, autostart, registry, creds) that the cross-target can never execute.
   windows-tests:
