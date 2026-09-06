@@ -4,6 +4,46 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
+## [Unreleased]
+
+### Added
+
+- `DF_HUD_LOG=error|warn|info|debug` (default `info`) sets how much goes to
+  stderr, or to `df-hud.log` on Windows.
+
+### Fixed
+
+- The public-record probe no longer switches to authenticated requests for
+  good after one transient error (a Cloudflare hiccup, say); it tries the
+  public record again after an hour.
+- Windows: GL objects were deleted after the WGL context was already gone on
+  shutdown, and a `wglGetProcAddress` failure value of `-1` was treated as a
+  valid pointer. Both fixed.
+- `--once` JSON: the `Challenge` serializer declared the wrong field count
+  (harmless with serde_json, now correct).
+- Sticky challenge-completion memory is pruned once a cycle ends instead of
+  growing forever. Old `state.json` files still load.
+- `~/` in config paths (`paths.data_dir`, the font) expands on Windows too, via
+  `USERPROFILE`.
+
+### Changed
+
+- The overlay skips the redraw and buffer swap when nothing on screen changed,
+  so an idle frame costs a comparison.
+- Fewer background wakeups: config reload (`SIGHUP`), the state saver,
+  presence, and the headless loops block instead of polling, and the catalog
+  and city-map fetches share one timer thread. Windows game detection
+  re-checks the known process instead of snapshotting every process each tick.
+- One HTTP connection pool for every request (was up to four). The city map
+  is only re-parsed when its `bosshash` changes.
+- The bridge and presence servers cap concurrent connections at 8; the bridge
+  answers 503 past that.
+- Credentials are redacted from debug output, and the wake pipe is
+  close-on-exec.
+- Internal: `Config` is shared as an `Arc`, one generic board poller, a shared
+  overlay tick, `enum Group`, `Option` instead of `has_*` flags, SAFETY
+  comments on every `unsafe`, `[lints]` at deny, and an MSRV CI job.
+
 ## [0.4.12] - 2026-09-06
 
 ### Fixed
