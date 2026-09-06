@@ -116,6 +116,8 @@ pub struct Handle {
     active_address: Mutex<Option<String>>,
     persist: Arc<state::Persist>,
     stop: Arc<AtomicBool>,
+    /// Set by the first `request_stop`; the state flush runs once.
+    stopping: AtomicBool,
     player: Arc<PlayerPoller>,
     challenges: Arc<ChallengePoller>,
     masteries: Arc<MasteryPoller>,
@@ -186,7 +188,14 @@ impl Handle {
         next
     }
 
+    /// Flushes the run clock, XP ring and challenge memory to the state file
+    /// and wakes every worker so it sees `stop`. Idempotent: the tray's Quit,
+    /// the surface loop's exit and `Drop` may each call it; only the first
+    /// writes.
     pub fn request_stop(&self) {
+        if self.stopping.swap(true, Ordering::SeqCst) {
+            return;
+        }
         self.persist_run();
         if let Err(err) = self.persist.save() {
             error!("state: could not save: {err}");
@@ -464,17 +473,16 @@ impl Handle {
     }
 }
 
-// Never runs today: `start_with` stores `Arc<Handle>` clones in the
-// `set_on_tick` / `set_on_change` closures owned by pollers the `Handle`
-// itself holds, so the count never reaches zero. Nothing relies on that leak
-// (`catch_sighup` dups the wake fd rather than borrowing it).
+/// Runs once the last `Arc<Handle>` goes. The callbacks installed by
+/// [`assemble`] on the pollers and watchers the `Handle` owns hold a
+/// `Weak<Handle>`, so nothing inside the `Handle` keeps it alive; the worker
+/// threads hold strong clones only until `stop` is set. The surface and
+/// headless loops call `request_stop` themselves on the way out, so this is
+/// the fallback for a `Handle` dropped without one, and `request_stop` is
+/// idempotent so a drop after it does not write the state file again.
 impl Drop for Handle {
     fn drop(&mut self) {
-        self.persist_run();
-        if let Err(err) = self.persist.save() {
-            error!("state: could not save: {err}");
-        }
-        self.signal_stop();
+        self.request_stop();
     }
 }
 
@@ -527,18 +535,24 @@ pub fn df_client(agent: &ureq::Agent, cfg: &Config) -> Client {
     Client::with_agent(agent.clone(), &cfg.df.base_url, &cfg.df.user_agent)
 }
 
-pub fn start_with(
+/// What [`assemble`] hands to the thread-spawning half of [`start_with`]
+/// besides the `Handle`: the two things the workers share that the `Handle`
+/// does not carry.
+struct Assembled {
+    handle: Arc<Handle>,
+    gate: Arc<Gate>,
+    pending_launch_at: Arc<AtomicI64>,
+}
+
+/// Builds the `Handle` and installs the poller / watcher callbacks; spawns
+/// nothing. Separate from [`start_with`] so a test can hold a fully wired
+/// `Handle` and check that it still drops.
+fn assemble(
     cfg: Config,
-    print: PrintOpts,
-) -> Result<Arc<Handle>, Box<dyn std::error::Error>> {
-    if let Err(err) = autostart::reconcile() {
-        warn!("startup: could not refresh login launch entry: {err}");
-    }
-    let agent = df_agent(&cfg);
-    let (creds, catalog) = load_creds_and_catalog(&agent, &cfg)?;
-    if let Some(c) = &catalog {
-        info!("catalog: {}", c.summary());
-    }
+    creds: Arc<Creds>,
+    catalog: Option<catalog::Catalog>,
+    agent: ureq::Agent,
+) -> Result<Assembled, Box<dyn std::error::Error>> {
     let store = Arc::new(Store::new(catalog));
     store.set_public_id_configured(!cfg.df.user_id.is_empty());
     if let Some(at) = creds.updated_at() {
@@ -628,6 +642,7 @@ pub fn start_with(
         active_address: Mutex::new(active_address),
         persist: persist.clone(),
         stop: stop.clone(),
+        stopping: AtomicBool::new(false),
         player: player.clone(),
         challenges: challenges.clone(),
         masteries: masteries.clone(),
@@ -638,9 +653,15 @@ pub fn start_with(
         agent: agent.clone(),
     });
 
+    // The pollers and watchers are fields of the `Handle`, so their callbacks
+    // hold a `Weak` and do nothing once the `Handle` is gone; a strong clone
+    // here would be a cycle and `Drop` would never run.
     {
-        let handle = handle.clone();
+        let weak = Arc::downgrade(&handle);
         player.set_on_tick(move |tick: Tick| {
+            let Some(handle) = weak.upgrade() else {
+                return;
+            };
             let xp_window = {
                 let cfg = handle.config();
                 cfg.widget.xp.effective_window(cfg.poll.active_interval.0)
@@ -659,10 +680,12 @@ pub fn start_with(
     }
 
     {
-        let handle = handle.clone();
-        let game = handle.game.clone();
+        let weak = Arc::downgrade(&handle);
         let pending_launch_at = pending_launch_at.clone();
         game.set_on_change(move |st| {
+            let Some(handle) = weak.upgrade() else {
+                return;
+            };
             handle.store.set_game(st);
             handle.game_running.store(st.running, Ordering::SeqCst);
             pending_launch_at.store(0, Ordering::SeqCst);
@@ -675,9 +698,11 @@ pub fn start_with(
         });
     }
     {
-        let handle = handle.clone();
-        let vis = handle.vis.clone();
+        let weak = Arc::downgrade(&handle);
         vis.set_on_change(move |v| {
+            let Some(handle) = weak.upgrade() else {
+                return;
+            };
             handle.store.set_visibility(v.clone());
             handle.visible.store(v.visible, Ordering::SeqCst);
             handle.wake_ui();
@@ -689,6 +714,42 @@ pub fn start_with(
         handle.store.set_visibility(v.clone());
         handle.visible.store(v.visible, Ordering::SeqCst);
     }
+
+    Ok(Assembled {
+        handle,
+        gate,
+        pending_launch_at,
+    })
+}
+
+pub fn start_with(
+    cfg: Config,
+    print: PrintOpts,
+) -> Result<Arc<Handle>, Box<dyn std::error::Error>> {
+    if let Err(err) = autostart::reconcile() {
+        warn!("startup: could not refresh login launch entry: {err}");
+    }
+    let agent = df_agent(&cfg);
+    let (creds, catalog) = load_creds_and_catalog(&agent, &cfg)?;
+    if let Some(c) = &catalog {
+        info!("catalog: {}", c.summary());
+    }
+    let Assembled {
+        handle,
+        gate,
+        pending_launch_at,
+    } = assemble(cfg, creds, catalog, agent)?;
+    let cfg = handle.config();
+    let stop = handle.stop.clone();
+    let store = handle.store.clone();
+    let shared = handle.cfg.clone();
+    let agent = handle.agent.clone();
+    let persist = handle.persist.clone();
+    let shutdown = handle.shutdown.clone();
+    let bossmap_wake = handle.bossmap_wake.clone();
+    let wake = handle.wake.inner.clone();
+    let presence = handle.presence.clone();
+    let creds = handle.creds.clone();
 
     game::spawn(handle.game.clone(), stop.clone());
     visibility::spawn(handle.vis.clone(), stop.clone());
@@ -712,15 +773,15 @@ pub fn start_with(
     crate::game::gamekeys::spawn(handle.clone(), stop.clone());
 
     poller::spawn("df-hud-poller", stop.clone(), {
-        let player = player.clone();
+        let player = handle.player.clone();
         move || player.run()
     });
     poller::spawn("df-hud-challenges", stop.clone(), {
-        let challenges = challenges.clone();
+        let challenges = handle.challenges.clone();
         move || challenges.run()
     });
     poller::spawn("df-hud-masteries", stop.clone(), {
-        let masteries = masteries.clone();
+        let masteries = handle.masteries.clone();
         move || masteries.run()
     });
     poller::spawn("df-hud-state", stop.clone(), {
@@ -1124,6 +1185,69 @@ mod tests {
             err,
             scheduled: true,
         }
+    }
+
+    /// A fully wired `Handle` in a scratch data dir, with no worker threads.
+    fn assembled(dir: &std::path::Path) -> Arc<Handle> {
+        let mut cfg = Config::default();
+        cfg.paths.data_dir = dir.display().to_string();
+        let creds = Arc::new(Creds::new(cfg.credentials_path()));
+        let agent = df_agent(&cfg);
+        assemble(cfg, creds, None, agent).unwrap().handle
+    }
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("df-hud-{tag}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn handle_drops_once_the_last_arc_goes() {
+        let dir = scratch_dir("handle-drop");
+        let handle = assembled(&dir);
+        assert_eq!(
+            Arc::strong_count(&handle),
+            1,
+            "the poller and watcher callbacks must hold Weak, not Arc"
+        );
+        let weak = Arc::downgrade(&handle);
+        drop(handle);
+        assert!(
+            weak.upgrade().is_none(),
+            "the callbacks kept the Handle alive"
+        );
+        assert!(
+            dir.join("state.json").is_file(),
+            "Drop flushes the state file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn request_stop_flushes_once() {
+        let dir = scratch_dir("stop-once");
+        let state = dir.join("state.json");
+        let handle = assembled(&dir);
+        handle.request_stop();
+        assert!(handle.stopped());
+        assert!(state.is_file(), "the first request_stop writes the state");
+        std::fs::remove_file(&state).unwrap();
+        handle.request_stop();
+        assert!(
+            !state.exists(),
+            "a second request_stop does not write again"
+        );
+        drop(handle);
+        assert!(
+            !state.exists(),
+            "Drop after request_stop does not write again"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -55,8 +55,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, QS_ALLINPUT, RegisterClassExW, SW_HIDE,
     SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     SWP_SHOWWINDOW, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, WM_CLOSE, WM_DESTROY, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    TranslateMessage, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows_sys::core::BOOL;
 
@@ -74,7 +74,29 @@ pub const DUMMY_CLASS: &str = "df-hud-wgl-dummy";
 const WINDOW_TITLE: &str = "df-hud";
 const WINDOW_INSET: i32 = 1;
 
+/// The ex-style the overlay must keep. `WS_EX_TRANSPARENT` (with
+/// `WS_EX_LAYERED`) is the click-through; the spike's gate B recorded that
+/// losing it after `SwapBuffers` would be a kill and re-asserting it the
+/// accepted fix, so every present checks these bits are still set.
+const WANTED_EXSTYLE: u32 =
+    WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+
 static CLOSED: AtomicBool = AtomicBool::new(false);
+/// Set by `wndproc` on `WM_DISPLAYCHANGE` / `WM_DPICHANGED`; `follow` takes
+/// it and re-enumerates the monitors, which otherwise stay cached.
+static DISPLAY_CHANGED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the ex-style Windows reports is missing any wanted bit.
+fn needs_reassert(current: u32, wanted: u32) -> bool {
+    current & wanted != wanted
+}
+
+/// Whether `follow` should call `EnumDisplayMonitors` this tick: the display
+/// set or DPI changed, the surface asked for one (config change, unmap), or
+/// the monitor it wants is not the one it picked from last time.
+fn rescan_due(display_changed: bool, surface_dirty: bool, want: &str, previous: &str) -> bool {
+    display_changed || surface_dirty || want != previous
+}
 
 pub struct Args {
     monitor: Option<String>,
@@ -462,6 +484,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             CLOSED.store(true, Ordering::SeqCst);
             0
         }
+        WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            DISPLAY_CHANGED.store(true, Ordering::SeqCst);
+            // SAFETY: forwarding, unchanged, the message the system just
+            // delivered for `hwnd` on this thread.
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
         // SAFETY: forwarding, unchanged, the message the system just
         // delivered for `hwnd` on this thread.
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
@@ -485,8 +513,7 @@ impl OverlayWindow {
             )
             .into());
         }
-        let ex =
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+        let ex = WANTED_EXSTYLE;
         let class = wide(OVERLAY_CLASS);
         let title = wide(WINDOW_TITLE);
         let w = monitor.width - 2 * inset;
@@ -583,17 +610,25 @@ impl OverlayWindow {
         Ok(())
     }
 
+    /// Puts [`WANTED_EXSTYLE`] back if anything cleared a bit. Runs every
+    /// present, but an intact style costs one `GetWindowLongPtrW`; the
+    /// `SetWindowLongPtrW` + `SWP_FRAMECHANGED` that make a style change
+    /// take effect only run when a bit is actually missing.
     fn reassert_exstyle(&self) {
-        let want = (WS_EX_LAYERED
-            | WS_EX_TRANSPARENT
-            | WS_EX_TOPMOST
-            | WS_EX_TOOLWINDOW
-            | WS_EX_NOACTIVATE) as isize;
+        // SAFETY: `self.hwnd` is this window's live handle and this runs on
+        // the thread that created it; GWL_EXSTYLE is an index, not a pointer.
+        let current = unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) };
+        if !needs_reassert(current as u32, WANTED_EXSTYLE) {
+            return;
+        }
+        debug!(
+            "hud: ex-style lost {:#x}; re-asserting",
+            WANTED_EXSTYLE & !(current as u32)
+        );
         // SAFETY: `self.hwnd` is this window's live handle and these run on
         // the thread that created it; the rest are style bits and flags.
         unsafe {
-            let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) | want;
-            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex);
+            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, current | WANTED_EXSTYLE as isize);
             SetWindowPos(
                 self.hwnd,
                 ptr::null_mut(),
@@ -715,7 +750,11 @@ struct Surface {
     gpu: Option<Gpu>,
     gl: Option<GlSurface>,
     win: OverlayWindow,
+    /// Cached `EnumDisplayMonitors` result; see [`rescan_due`] for when it
+    /// is refreshed.
     monitors: Vec<Monitor>,
+    /// Asks `follow` to re-enumerate on its next tick.
+    rescan_monitors: bool,
     current: Monitor,
     /// Monitor `follow` picked this tick; `show` places the window on it.
     picked: Option<Monitor>,
@@ -736,6 +775,8 @@ impl Surface {
         self.gl.take();
         self.win.hide();
         self.mapped = false;
+        // The next map places the window again; do it from a fresh list.
+        self.rescan_monitors = true;
     }
 }
 
@@ -744,13 +785,22 @@ impl overlay::Hooks for Surface {
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.set_font(&cfg.hud.font);
         }
+        self.rescan_monitors = true;
     }
 
     fn follow(&mut self, cfg: &Config) {
         let vis_mon = self.handle.vis.state().monitor;
         let next = config::overlay_monitor(self.cli_monitor.as_deref(), &cfg.hud.monitor, &vis_mon);
-        if let Ok(list) = list_monitors() {
-            self.monitors = list;
+        if rescan_due(
+            DISPLAY_CHANGED.swap(false, Ordering::SeqCst),
+            self.rescan_monitors,
+            &next,
+            &self.monitor_request,
+        ) {
+            self.rescan_monitors = false;
+            if let Ok(list) = list_monitors() {
+                self.monitors = list;
+            }
         }
         self.picked = pick_monitor(
             &self.monitors,
@@ -826,6 +876,7 @@ impl overlay::Hooks for Surface {
 
 pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     CLOSED.store(false, Ordering::SeqCst);
+    DISPLAY_CHANGED.store(false, Ordering::SeqCst);
     enable_per_monitor_v2();
 
     // SAFETY: a null name returns the handle of this executable's own module.
@@ -896,6 +947,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
             hud: args.print_hud,
         },
     )?;
+    let _stop_on_exit = overlay::StopOnExit(&handle);
     let mut surface = Surface {
         instance,
         handle: handle.clone(),
@@ -904,6 +956,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         gl: Some(gl),
         win,
         monitors,
+        rescan_monitors: false,
         current: monitor,
         picked: None,
         monitor_request: want_name,
@@ -967,6 +1020,29 @@ mod tests {
             dpi: 96,
             primary: true,
         }
+    }
+
+    #[test]
+    fn reassert_only_when_a_wanted_bit_is_missing() {
+        assert!(!needs_reassert(WANTED_EXSTYLE, WANTED_EXSTYLE));
+        assert!(
+            !needs_reassert(WANTED_EXSTYLE | 0x0000_0001, WANTED_EXSTYLE),
+            "extra bits are not a reason to touch the window"
+        );
+        assert!(needs_reassert(
+            WANTED_EXSTYLE & !WS_EX_TRANSPARENT,
+            WANTED_EXSTYLE
+        ));
+        assert!(needs_reassert(0, WANTED_EXSTYLE));
+    }
+
+    #[test]
+    fn monitors_rescan_on_change_not_every_tick() {
+        assert!(!rescan_due(false, false, r"\\.\DISPLAY1", r"\\.\DISPLAY1"));
+        assert!(rescan_due(true, false, r"\\.\DISPLAY1", r"\\.\DISPLAY1"));
+        assert!(rescan_due(false, true, r"\\.\DISPLAY1", r"\\.\DISPLAY1"));
+        assert!(rescan_due(false, false, r"\\.\DISPLAY2", r"\\.\DISPLAY1"));
+        assert!(!rescan_due(false, false, "", ""));
     }
 
     #[test]
