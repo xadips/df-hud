@@ -21,9 +21,9 @@ use crate::config;
 use crate::net::creds::{Credentials, Store as Creds};
 
 const MAX_BODY: usize = 1 << 20;
-/// Launch Standalone's POST can land after the 1s process scan has already
-/// flipped `game_running`. A different account is accepted only in this window.
-const LAUNCH_GRACE_SECS: i64 = 15;
+/// After Launch Standalone, block other accounts' periodic syncs until the
+/// process watcher takes over (or this elapses if the client never appears).
+const PENDING_SECS: i64 = 15;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 type Hook = Arc<dyn Fn() + Send + Sync>;
 type WidgetToggleHook = Arc<dyn Fn(&str) -> Result<bool, String> + Send + Sync>;
@@ -57,7 +57,7 @@ pub fn start(
     creds: Arc<Creds>,
     hooks: Hooks,
     game_running: Arc<AtomicBool>,
-    game_started_at: Arc<AtomicI64>,
+    pending_launch_at: Arc<AtomicI64>,
 ) -> Result<Server, String> {
     config::validate_loopback(addr)?;
     let listener =
@@ -71,7 +71,7 @@ pub fn start(
         hooks: Mutex::new(hooks),
         started: Instant::now(),
         game_running,
-        game_started_at,
+        pending_launch_at,
         ignored_other_account: AtomicBool::new(false),
     });
     let stop2 = stop.clone();
@@ -105,7 +105,7 @@ struct Inner {
     hooks: Mutex<Hooks>,
     started: Instant,
     game_running: Arc<AtomicBool>,
-    game_started_at: Arc<AtomicI64>,
+    pending_launch_at: Arc<AtomicI64>,
     ignored_other_account: AtomicBool,
 }
 
@@ -254,13 +254,14 @@ impl Inner {
         let source = parsed.get("source").map(coerce).unwrap_or_default();
         if !self.should_apply(&cr.user_id, &source) {
             if !self.ignored_other_account.swap(true, Ordering::SeqCst) {
-                eprintln!("bridge: keeping the current account while the game is running");
+                eprintln!("bridge: keeping the current account");
             }
-            return (
-                200,
-                "application/json",
-                b"{\"ok\":true,\"applied\":false}".to_vec(),
-            );
+            return applied_reply(false);
+        }
+        self.ignored_other_account.store(false, Ordering::SeqCst);
+        if source.eq_ignore_ascii_case("launch") {
+            self.pending_launch_at
+                .store(chrono::Utc::now().timestamp(), Ordering::SeqCst);
         }
         if let Ok(changed) = self.creds.set(cr, &salt) {
             if changed {
@@ -274,7 +275,7 @@ impl Inner {
                     fn_();
                 }
             }
-            (200, "application/json", b"{\"ok\":true}".to_vec())
+            applied_reply(true)
         } else {
             eprintln!("bridge: could not store credentials");
             (500, "text/plain", b"could not store credentials".to_vec())
@@ -283,25 +284,31 @@ impl Inner {
 
     fn should_apply(&self, user_id: &str, source: &str) -> bool {
         let current = self.creds.get();
-        apply_session(
-            current.as_ref().map(|(c, _)| c.user_id.as_str()),
-            user_id,
+        let now = chrono::Utc::now().timestamp();
+        apply_session(SessionApply {
+            current: current.as_ref().map(|(c, _)| c.user_id.as_str()),
+            incoming: user_id,
             source,
-            self.game_running.load(Ordering::SeqCst),
-            self.game_started_at.load(Ordering::SeqCst),
-            chrono::Utc::now().timestamp(),
-        )
+            game_running: self.game_running.load(Ordering::SeqCst),
+            pending_at: self.pending_launch_at.load(Ordering::SeqCst),
+            now,
+        })
+    }
+
+    fn pending_active(&self, now: i64) -> bool {
+        pending_active(self.pending_launch_at.load(Ordering::SeqCst), now)
     }
 
     fn health(&self) -> (u16, &'static str, Vec<u8>) {
         let have = self.creds.get().is_some();
         let have_salt = !self.creds.salt().is_empty();
         let game_running = self.game_running.load(Ordering::SeqCst);
+        let now = chrono::Utc::now().timestamp();
         let mut obj = json!({
             "ok": true,
             "have_credentials": have,
             "have_signing_salt": have_salt,
-            "session_locked": game_running && have,
+            "session_locked": (game_running || self.pending_active(now)) && have,
             "uptime_seconds": self.started.elapsed().as_secs(),
             "version": VERSION,
         });
@@ -354,30 +361,48 @@ impl Inner {
     }
 }
 
-/// Last write wins unless the game process is up and the incoming `userID`
-/// is someone else. `source=launch` still wins for [`LAUNCH_GRACE_SECS`] after
-/// the process appears, because Launch Standalone's XHR can finish after the
-/// 1s scan.
-fn apply_session(
-    current_user_id: Option<&str>,
-    incoming_user_id: &str,
-    source: &str,
+fn applied_reply(applied: bool) -> (u16, &'static str, Vec<u8>) {
+    (
+        200,
+        "application/json",
+        if applied {
+            b"{\"ok\":true,\"applied\":true}".to_vec()
+        } else {
+            b"{\"ok\":true,\"applied\":false}".to_vec()
+        },
+    )
+}
+
+struct SessionApply<'a> {
+    current: Option<&'a str>,
+    incoming: &'a str,
+    source: &'a str,
     game_running: bool,
-    game_started_at: i64,
+    pending_at: i64,
     now: i64,
-) -> bool {
-    let Some(current) = current_user_id else {
+}
+
+fn pending_active(at: i64, now: i64) -> bool {
+    at > 0 && now.saturating_sub(at) < PENDING_SECS
+}
+
+/// Locked while the game is running, or for [`PENDING_SECS`] after a launch
+/// POST until the watcher takes over. Same account always refreshes.
+/// `source=launch` switches only while the client is down.
+fn apply_session(a: SessionApply<'_>) -> bool {
+    let Some(current) = a.current else {
         return true;
     };
-    if current == incoming_user_id {
+    if current == a.incoming {
         return true;
     }
-    if !game_running {
+    if a.game_running {
+        return false;
+    }
+    if a.source.eq_ignore_ascii_case("launch") {
         return true;
     }
-    source.eq_ignore_ascii_case("launch")
-        && game_started_at > 0
-        && now.saturating_sub(game_started_at) < LAUNCH_GRACE_SECS
+    !pending_active(a.pending_at, a.now)
 }
 
 /// The anti-CSRF / anti-rebinding gate. Returns a refusal reason, or None to
@@ -542,14 +567,13 @@ mod tests {
     }
 
     fn test_srv(hooks: Hooks) -> (Server, Arc<Creds>, std::path::PathBuf) {
-        let (srv, creds, dir, _, _) = test_srv_lock(hooks, false, 0);
+        let (srv, creds, dir, _, _) = test_srv_lock(hooks, false);
         (srv, creds, dir)
     }
 
     fn test_srv_lock(
         hooks: Hooks,
         running: bool,
-        started_at: i64,
     ) -> (
         Server,
         Arc<Creds>,
@@ -569,16 +593,40 @@ mod tests {
         let path = dir.join("credentials.json");
         let creds = Arc::new(Creds::new(&path));
         let game_running = Arc::new(AtomicBool::new(running));
-        let game_started_at = Arc::new(AtomicI64::new(started_at));
+        let pending_launch_at = Arc::new(AtomicI64::new(0));
         let srv = start(
             "127.0.0.1:0",
             creds.clone(),
             hooks,
             game_running.clone(),
-            game_started_at.clone(),
+            pending_launch_at.clone(),
         )
         .unwrap();
-        (srv, creds, dir, game_running, game_started_at)
+        (srv, creds, dir, game_running, pending_launch_at)
+    }
+
+    fn assert_applied(body: &str, want: bool) {
+        let got: Value = serde_json::from_str(body).expect(body);
+        assert_eq!(got["ok"], true, "{body}");
+        assert_eq!(got["applied"], want, "{body}");
+    }
+
+    fn apply(
+        current: Option<&str>,
+        incoming: &str,
+        source: &str,
+        running: bool,
+        pending_at: i64,
+        now: i64,
+    ) -> bool {
+        apply_session(SessionApply {
+            current,
+            incoming,
+            source,
+            game_running: running,
+            pending_at,
+            now,
+        })
     }
 
     fn alt_vars() -> Value {
@@ -881,7 +929,6 @@ mod tests {
     fn game_running_keeps_the_current_account() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let c2 = calls.clone();
-        let now = chrono::Utc::now().timestamp();
         let (srv, creds, _dir, _, _) = test_srv_lock(
             Hooks {
                 on_credentials: Some(Arc::new(move || {
@@ -890,7 +937,6 @@ mod tests {
                 ..Hooks::default()
             },
             true,
-            now,
         );
         let url = format!("http://{}/api/userData", srv.listen);
         let (status, body) = post(
@@ -899,14 +945,14 @@ mod tests {
             &payload(valid_vars(), FAKE_SALT, ""),
         );
         assert_eq!(status, 200);
-        assert!(!body.contains("applied"), "{body}");
+        assert_applied(&body, true);
         let (status, body) = post(
             &url,
             "application/json",
             &payload(alt_vars(), FAKE_SALT, ""),
         );
         assert_eq!(status, 200);
-        assert!(body.contains("\"applied\":false"), "{body}");
+        assert_applied(&body, false);
         let (cr, _) = creds.get().expect("stored");
         assert_eq!(cr.user_id, FAKE_USER);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -915,8 +961,7 @@ mod tests {
 
     #[test]
     fn game_running_still_refreshes_the_same_account() {
-        let now = chrono::Utc::now().timestamp();
-        let (srv, creds, _dir, _, _) = test_srv_lock(Hooks::default(), true, now);
+        let (srv, creds, _dir, _, _) = test_srv_lock(Hooks::default(), true);
         let url = format!("http://{}/api/userData", srv.listen);
         post(
             &url,
@@ -927,7 +972,7 @@ mod tests {
         vars["sc"] = json!("ffffffffffffffffffffffffffffffff");
         let (status, body) = post(&url, "application/json", &payload(vars, FAKE_SALT, ""));
         assert_eq!(status, 200);
-        assert!(!body.contains("applied"), "{body}");
+        assert_applied(&body, true);
         let (cr, _) = creds.get().expect("stored");
         assert_eq!(cr.user_id, FAKE_USER);
         assert_eq!(cr.sc, "ffffffffffffffffffffffffffffffff");
@@ -956,8 +1001,7 @@ mod tests {
 
     #[test]
     fn empty_store_accepts_the_first_account_while_the_game_runs() {
-        let now = chrono::Utc::now().timestamp();
-        let (srv, creds, _dir, _, _) = test_srv_lock(Hooks::default(), true, now);
+        let (srv, creds, _dir, _, _) = test_srv_lock(Hooks::default(), true);
         let url = format!("http://{}/api/userData", srv.listen);
         let (status, body) = post(
             &url,
@@ -965,52 +1009,34 @@ mod tests {
             &payload(valid_vars(), FAKE_SALT, ""),
         );
         assert_eq!(status, 200);
-        assert!(!body.contains("applied"), "{body}");
+        assert_applied(&body, true);
         assert_eq!(creds.get().expect("stored").0.user_id, FAKE_USER);
         srv.stop();
     }
 
     #[test]
-    fn launch_source_wins_only_inside_the_grace_window() {
-        let (srv, creds, _dir, running, started_at) = test_srv_lock(Hooks::default(), false, 0);
+    fn launch_does_not_switch_while_the_game_runs() {
+        let (srv, creds, _dir, _, _) = test_srv_lock(Hooks::default(), true);
         let url = format!("http://{}/api/userData", srv.listen);
         post(
             &url,
             "application/json",
             &payload(valid_vars(), FAKE_SALT, ""),
         );
-        running.store(true, Ordering::SeqCst);
-        started_at.store(chrono::Utc::now().timestamp(), Ordering::SeqCst);
         let (status, body) = post(
             &url,
             "application/json",
             &payload_source(alt_vars(), FAKE_SALT, "", Some("launch")),
         );
         assert_eq!(status, 200);
-        assert!(!body.contains("applied"), "{body}");
-        assert_eq!(creds.get().expect("stored").0.user_id, ALT_USER);
-
-        started_at.store(
-            chrono::Utc::now().timestamp() - LAUNCH_GRACE_SECS - 1,
-            Ordering::SeqCst,
-        );
-        let mut later = valid_vars();
-        later["userID"] = json!("9999999");
-        let (status, body) = post(
-            &url,
-            "application/json",
-            &payload_source(later, FAKE_SALT, "", Some("launch")),
-        );
-        assert_eq!(status, 200);
-        assert!(body.contains("\"applied\":false"), "{body}");
-        assert_eq!(creds.get().expect("stored").0.user_id, ALT_USER);
+        assert_applied(&body, false);
+        assert_eq!(creds.get().expect("stored").0.user_id, FAKE_USER);
         srv.stop();
     }
 
     #[test]
     fn health_session_locked_while_the_game_runs() {
-        let now = chrono::Utc::now().timestamp();
-        let (srv, _, _dir, _, _) = test_srv_lock(Hooks::default(), true, now);
+        let (srv, _, _dir, _, _) = test_srv_lock(Hooks::default(), true);
         let base = format!("http://{}", srv.listen);
         post(
             &format!("{base}/api/userData"),
@@ -1024,27 +1050,92 @@ mod tests {
     }
 
     #[test]
+    fn health_session_locked_during_pending_launch() {
+        let (srv, _, _dir) = test_srv(Hooks::default());
+        let base = format!("http://{}", srv.listen);
+        post(
+            &format!("{base}/api/userData"),
+            "application/json",
+            &payload_source(valid_vars(), FAKE_SALT, "", Some("launch")),
+        );
+        let resp = ureq::get(&format!("{base}/healthz")).call().unwrap();
+        let got: Value = serde_json::from_str(&resp.into_body().read_to_string().unwrap()).unwrap();
+        assert_eq!(got["session_locked"], true);
+        srv.stop();
+    }
+
+    #[test]
     fn apply_session_rules() {
-        assert!(apply_session(None, FAKE_USER, "", true, 1, 1));
-        assert!(apply_session(Some(FAKE_USER), FAKE_USER, "", true, 1, 100));
-        assert!(apply_session(Some(FAKE_USER), ALT_USER, "", false, 0, 100));
-        assert!(!apply_session(Some(FAKE_USER), ALT_USER, "", true, 1, 100));
-        assert!(apply_session(
-            Some(FAKE_USER),
-            ALT_USER,
-            "launch",
-            true,
-            90,
-            100
-        ));
-        assert!(!apply_session(
-            Some(FAKE_USER),
-            ALT_USER,
-            "launch",
-            true,
-            80,
-            100
-        ));
+        assert!(apply(None, FAKE_USER, "", true, 0, 1));
+        assert!(apply(Some(FAKE_USER), FAKE_USER, "", true, 0, 100));
+        assert!(apply(Some(FAKE_USER), ALT_USER, "", false, 0, 100));
+        assert!(!apply(Some(FAKE_USER), ALT_USER, "", true, 0, 100));
+        assert!(
+            !apply(Some(FAKE_USER), ALT_USER, "launch", true, 0, 100),
+            "launch does not switch while the client is running"
+        );
+        assert!(
+            apply(Some(FAKE_USER), ALT_USER, "launch", false, 95, 100),
+            "launch switches while the client is down, even during pending"
+        );
+        assert!(
+            !apply(Some(FAKE_USER), ALT_USER, "", false, 95, 100),
+            "periodic sync loses to a recent launch"
+        );
+        assert!(
+            apply(Some(FAKE_USER), ALT_USER, "", false, 20, 100),
+            "pending launch expires if the client never appears"
+        );
+    }
+
+    #[test]
+    fn pending_launch_blocks_periodic_sync_before_the_process() {
+        let (srv, creds, _dir) = test_srv(Hooks::default());
+        let url = format!("http://{}/api/userData", srv.listen);
+        let (status, body) = post(
+            &url,
+            "application/json",
+            &payload_source(valid_vars(), FAKE_SALT, "", Some("launch")),
+        );
+        assert_eq!(status, 200);
+        assert_applied(&body, true);
+        let (status, body) = post(
+            &url,
+            "application/json",
+            &payload(alt_vars(), FAKE_SALT, ""),
+        );
+        assert_eq!(status, 200);
+        assert_applied(&body, false);
+        assert_eq!(creds.get().expect("stored").0.user_id, FAKE_USER);
+        srv.stop();
+    }
+
+    #[test]
+    fn after_game_close_periodic_can_switch() {
+        let (srv, creds, _dir, _, pending) = test_srv_lock(Hooks::default(), false);
+        let url = format!("http://{}/api/userData", srv.listen);
+        post(
+            &url,
+            "application/json",
+            &payload_source(valid_vars(), FAKE_SALT, "", Some("launch")),
+        );
+        let (status, body) = post(
+            &url,
+            "application/json",
+            &payload(alt_vars(), FAKE_SALT, ""),
+        );
+        assert_eq!(status, 200);
+        assert_applied(&body, false);
+        pending.store(0, Ordering::SeqCst);
+        let (status, body) = post(
+            &url,
+            "application/json",
+            &payload(alt_vars(), FAKE_SALT, ""),
+        );
+        assert_eq!(status, 200);
+        assert_applied(&body, true);
+        assert_eq!(creds.get().expect("stored").0.user_id, ALT_USER);
+        srv.stop();
     }
 
     #[test]

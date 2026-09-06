@@ -91,11 +91,11 @@ until that arrives. The script re-posts every five minutes, so logging in
 again is picked up on its own.
 
 A second logged-in tab (another browser, or Tampermonkey in incognito) can
-also POST. While `DeadFrontier.exe` is running, df-hud keeps the account it
-already has and only refreshes that same `userID`. Close the client, then load
-or Launch Standalone from the other account, to switch. The userscript also
-POSTs at the moment you click Launch Standalone, so that tab wins the race
-before the process scan.
+also POST. Launch Standalone sends `source=launch`, and that account wins over
+any automatic page/timer sync for a few seconds until the client is detected.
+While `DeadFrontier.exe` is running, df-hud keeps that account and only
+refreshes the same `userID` — Launch Standalone does not switch either. Close
+the client, then load or Launch Standalone from the other account, to switch.
 
 The destination is hardcoded to `127.0.0.1`. Nothing leaves your machine, and
 if df-hud is not running the POST just fails and the script goes quiet.

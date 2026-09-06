@@ -4,14 +4,16 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
-## [Unreleased]
+## [0.4.12] - 2026-09-06
 
 ### Fixed
 
 - A second browser tab (including an incognito one with the bridge script)
-  can no longer overwrite the session while `DeadFrontier.exe` is running.
-  The same account still refreshes; switching is load or Launch Standalone
-  after the client is closed.
+  can no longer overwrite the session while `DeadFrontier.exe` is running,
+  or for a few seconds after Launch Standalone (`source=launch`) before the
+  process appears. The same account still refreshes. Launch while the client
+  is already running does not switch; close it first, then load or Launch
+  Standalone from the other account.
 
 ## [0.4.11] - 2026-08-28
 
