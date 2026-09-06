@@ -86,9 +86,33 @@ static CLOSED: AtomicBool = AtomicBool::new(false);
 /// it and re-enumerates the monitors, which otherwise stay cached.
 static DISPLAY_CHANGED: AtomicBool = AtomicBool::new(false);
 
-/// Whether the ex-style Windows reports is missing any wanted bit.
-fn needs_reassert(current: u32, wanted: u32) -> bool {
-    current & wanted != wanted
+/// What `reassert_exstyle` must do about the ex-style Windows reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Repair {
+    /// Every wanted bit is set.
+    None,
+    /// Write these bits back with `SetWindowLongPtrW`; z-order untouched.
+    StyleOnly(u32),
+    /// `WS_EX_TOPMOST` is gone. That bit is z-order, not style: writing it
+    /// with `SetWindowLongPtrW` does nothing (Win32: "to add or remove this
+    /// style, use the SetWindowPos function"), so the window is raised with
+    /// `HWND_TOPMOST` and only `also` goes through the style write.
+    Topmost { also: u32 },
+}
+
+/// The bits of [`WANTED_EXSTYLE`] missing from `current`, sorted into how
+/// each is put back. Extra bits are not a reason to touch the window.
+fn exstyle_repair(current: u32) -> Repair {
+    let missing = WANTED_EXSTYLE & !current;
+    if missing == 0 {
+        Repair::None
+    } else if missing & WS_EX_TOPMOST != 0 {
+        Repair::Topmost {
+            also: missing & !WS_EX_TOPMOST,
+        }
+    } else {
+        Repair::StyleOnly(missing)
+    }
 }
 
 /// Whether `follow` should call `EnumDisplayMonitors` this tick: the display
@@ -611,32 +635,46 @@ impl OverlayWindow {
     }
 
     /// Puts [`WANTED_EXSTYLE`] back if anything cleared a bit. Runs every
-    /// present, but an intact style costs one `GetWindowLongPtrW`; the
-    /// `SetWindowLongPtrW` + `SWP_FRAMECHANGED` that make a style change
-    /// take effect only run when a bit is actually missing.
+    /// present because the spike's gate B made click-through surviving
+    /// `SwapBuffers` a must-pass, but an intact style costs one
+    /// `GetWindowLongPtrW`. When a bit is missing, [`exstyle_repair`] decides
+    /// how: style bits are written back and made effective with
+    /// `SWP_FRAMECHANGED` at the current z-order; a lost `WS_EX_TOPMOST`
+    /// (a game that took topmost, or a shell that demoted us) is instead
+    /// raised again with `HWND_TOPMOST`, which is the only way that bit
+    /// changes.
     fn reassert_exstyle(&self) {
         // SAFETY: `self.hwnd` is this window's live handle and this runs on
         // the thread that created it; GWL_EXSTYLE is an index, not a pointer.
         let current = unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) };
-        if !needs_reassert(current as u32, WANTED_EXSTYLE) {
-            return;
-        }
+        let (style_bits, insert_after, zorder) = match exstyle_repair(current as u32) {
+            Repair::None => return,
+            Repair::StyleOnly(bits) => (bits, ptr::null_mut(), SWP_NOZORDER),
+            Repair::Topmost { also } => (also, HWND_TOPMOST, 0),
+        };
         debug!(
             "hud: ex-style lost {:#x}; re-asserting",
             WANTED_EXSTYLE & !(current as u32)
         );
-        // SAFETY: `self.hwnd` is this window's live handle and these run on
-        // the thread that created it; the rest are style bits and flags.
+        if style_bits != 0 {
+            // SAFETY: `self.hwnd` is this window's live handle and this runs
+            // on the thread that created it; the value is style bits.
+            unsafe {
+                SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, current | style_bits as isize);
+            }
+        }
+        // SAFETY: `self.hwnd` is this window's live handle and this runs on
+        // the thread that created it; `insert_after` is null (ignored under
+        // SWP_NOZORDER) or the HWND_TOPMOST sentinel; the rest are flags.
         unsafe {
-            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, current | WANTED_EXSTYLE as isize);
             SetWindowPos(
                 self.hwnd,
-                ptr::null_mut(),
+                insert_after,
                 0,
                 0,
                 0,
                 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED | zorder,
             );
         }
     }
@@ -797,9 +835,17 @@ impl overlay::Hooks for Surface {
             &next,
             &self.monitor_request,
         ) {
-            self.rescan_monitors = false;
-            if let Ok(list) = list_monitors() {
-                self.monitors = list;
+            match list_monitors() {
+                Ok(list) => {
+                    self.monitors = list;
+                    self.rescan_monitors = false;
+                }
+                // The triggers were consumed above; keep the stale list for
+                // this tick and ask for another go on the next one.
+                Err(err) => {
+                    debug!("hud: monitor enumeration failed ({err}); retrying next tick");
+                    self.rescan_monitors = true;
+                }
             }
         }
         self.picked = pick_monitor(
@@ -1024,16 +1070,43 @@ mod tests {
 
     #[test]
     fn reassert_only_when_a_wanted_bit_is_missing() {
-        assert!(!needs_reassert(WANTED_EXSTYLE, WANTED_EXSTYLE));
-        assert!(
-            !needs_reassert(WANTED_EXSTYLE | 0x0000_0001, WANTED_EXSTYLE),
+        assert_eq!(exstyle_repair(WANTED_EXSTYLE), Repair::None);
+        assert_eq!(
+            exstyle_repair(WANTED_EXSTYLE | 0x0000_0001),
+            Repair::None,
             "extra bits are not a reason to touch the window"
         );
-        assert!(needs_reassert(
-            WANTED_EXSTYLE & !WS_EX_TRANSPARENT,
-            WANTED_EXSTYLE
-        ));
-        assert!(needs_reassert(0, WANTED_EXSTYLE));
+        assert_eq!(
+            exstyle_repair(WANTED_EXSTYLE & !WS_EX_TRANSPARENT),
+            Repair::StyleOnly(WS_EX_TRANSPARENT)
+        );
+        assert_eq!(
+            exstyle_repair(WANTED_EXSTYLE & !(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)),
+            Repair::StyleOnly(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
+        );
+    }
+
+    /// `WS_EX_TOPMOST` is z-order: the style write cannot restore it, so
+    /// the repair goes through `SetWindowPos(HWND_TOPMOST)` and the bit is
+    /// left out of the style bits.
+    #[test]
+    fn lost_topmost_is_raised_not_rewritten() {
+        assert_eq!(
+            exstyle_repair(WANTED_EXSTYLE & !WS_EX_TOPMOST),
+            Repair::Topmost { also: 0 }
+        );
+        assert_eq!(
+            exstyle_repair(WANTED_EXSTYLE & !(WS_EX_TOPMOST | WS_EX_TRANSPARENT)),
+            Repair::Topmost {
+                also: WS_EX_TRANSPARENT
+            }
+        );
+        assert_eq!(
+            exstyle_repair(0),
+            Repair::Topmost {
+                also: WANTED_EXSTYLE & !WS_EX_TOPMOST
+            }
+        );
     }
 
     #[test]
