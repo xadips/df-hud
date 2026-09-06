@@ -4,7 +4,7 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
-## [Unreleased]
+## [0.4.13] - 2026-09-06
 
 ### Added
 
@@ -34,6 +34,9 @@ first within each section.
 
 ### Changed
 
+- `state.json` now stores `challenge_done` as a list. A 0.4.12 binary reading
+  a file written by 0.4.13 moves it aside and starts fresh, so the run clock
+  and XP window are lost on a downgrade.
 - The overlay skips the redraw and buffer swap when nothing on screen changed,
   so an idle frame costs a comparison. On Windows the click-through window
   style is only rewritten when a check finds a bit missing, and the monitor
