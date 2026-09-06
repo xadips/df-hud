@@ -481,20 +481,21 @@ fn loopback_host(hostport: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
-/// Most a refused request is read before the 503; a userscript sync is well
-/// under this.
-const DRAIN_LIMIT: usize = 8 << 10;
+/// Most a refused request is read before the 503. A userscript sync is the
+/// whole `userVars` object plus cookies, tens of KiB on a big account, so
+/// this is generous; the time bounds below stop a slow peer, not the size.
+const DRAIN_LIMIT: usize = 64 << 10;
 
-/// Reads a small request before it is refused. Closing with unread bytes in
-/// the socket turns into a TCP reset, and a client mid-POST then sees the
-/// reset instead of the status. Bounded in bytes and time: this runs on the
-/// accept thread. Stops at the end of the body once `Content-Length` is
-/// known, at [`DRAIN_LIMIT`], or when the peer goes quiet.
+/// Reads a request before it is refused. Closing with unread bytes in the
+/// socket turns into a TCP reset, and a client mid-POST then sees the reset
+/// instead of the status. Bounded in bytes and time: this runs on the accept
+/// thread. Stops at the end of the body once `Content-Length` is known, at
+/// [`DRAIN_LIMIT`], or when the peer goes quiet.
 fn drain_request(stream: &mut TcpStream) {
     let deadline = Instant::now() + Duration::from_secs(1);
     let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
     let mut buf = Vec::new();
-    let mut chunk = [0u8; 1024];
+    let mut chunk = [0u8; 4096];
     let mut want: Option<usize> = None;
     while buf.len() < DRAIN_LIMIT && want.is_none_or(|n| buf.len() < n) && Instant::now() < deadline
     {
@@ -505,9 +506,20 @@ fn drain_request(stream: &mut TcpStream) {
         if want.is_none()
             && let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n")
         {
-            want = Some(end + 4 + content_length(&buf[..end]));
+            want = Some(drain_want(end, content_length(&buf[..end])));
         }
     }
+}
+
+/// Bytes to read in total for a request whose headers end at `header_end`
+/// and declare `content_length`. A hostile length near `usize::MAX` must not
+/// overflow (a panic here would take the accept thread with it), and nothing
+/// past [`DRAIN_LIMIT`] is read anyway.
+fn drain_want(header_end: usize, content_length: usize) -> usize {
+    header_end
+        .saturating_add(4)
+        .saturating_add(content_length)
+        .min(DRAIN_LIMIT)
 }
 
 /// `Content-Length` out of a raw header block; 0 when absent or malformed.
@@ -894,8 +906,11 @@ mod tests {
         read_503(TcpStream::connect(srv.listen).unwrap());
 
         // A real sync: the body must be read before the refusal, or the
-        // close turns into a reset and the client never sees the 503.
-        let payload = payload(valid_vars(), FAKE_SALT, "");
+        // close turns into a reset and the client never sees the 503. A big
+        // account's userVars plus cookies run to tens of KiB.
+        let cookie = "x".repeat(20 << 10);
+        let payload = payload(valid_vars(), FAKE_SALT, &cookie);
+        assert!(payload.len() > 20 << 10 && payload.len() < DRAIN_LIMIT);
         let mut posting = TcpStream::connect(srv.listen).unwrap();
         write!(
             posting,
@@ -906,6 +921,19 @@ mod tests {
         .unwrap();
         posting.write_all(&payload).unwrap();
         read_503(posting);
+
+        // A hostile length must not overflow the drain arithmetic (a panic
+        // would kill the accept thread); the 503 still arrives once the
+        // peer goes quiet.
+        let mut hostile = TcpStream::connect(srv.listen).unwrap();
+        write!(
+            hostile,
+            "POST /api/userData HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{{}}",
+            srv.listen,
+            usize::MAX
+        )
+        .unwrap();
+        read_503(hostile);
 
         drop(idle);
         let health = format!("http://{}/healthz", srv.listen);
@@ -925,6 +953,20 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         srv.stop();
+    }
+
+    #[test]
+    fn drain_want_saturates_and_clamps() {
+        assert_eq!(drain_want(100, 0), 104);
+        assert_eq!(drain_want(100, 2000), 2104);
+        assert_eq!(drain_want(100, DRAIN_LIMIT), DRAIN_LIMIT);
+        assert_eq!(drain_want(100, usize::MAX), DRAIN_LIMIT);
+        assert_eq!(drain_want(usize::MAX, usize::MAX), DRAIN_LIMIT);
+        assert_eq!(
+            content_length(b"Content-Length: 18446744073709551615"),
+            usize::MAX
+        );
+        assert_eq!(content_length(b"Content-Length: 18446744073709551616"), 0);
     }
 
     #[test]

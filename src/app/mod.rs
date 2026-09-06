@@ -475,11 +475,13 @@ impl Handle {
 
 /// Runs once the last `Arc<Handle>` goes. The callbacks installed by
 /// [`assemble`] on the pollers and watchers the `Handle` owns hold a
-/// `Weak<Handle>`, so nothing inside the `Handle` keeps it alive; the worker
-/// threads hold strong clones only until `stop` is set. The surface and
-/// headless loops call `request_stop` themselves on the way out, so this is
-/// the fallback for a `Handle` dropped without one, and `request_stop` is
-/// idempotent so a drop after it does not write the state file again.
+/// `Weak<Handle>`, so nothing inside the `Handle` keeps it alive, but the
+/// bridge accept thread (blocked in `incoming()`) and the tray keep strong
+/// clones until they next wake, which is usually process exit. The flush is
+/// therefore guaranteed by `overlay::StopOnExit` / `request_stop` on every
+/// loop's way out, not by this `Drop`; it is the fallback for a `Handle`
+/// dropped without one, and `request_stop` is idempotent so a drop after it
+/// does not write the state file again.
 impl Drop for Handle {
     fn drop(&mut self) {
         self.request_stop();

@@ -4,6 +4,21 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
+## [Unreleased]
+
+### Fixed
+
+- A request that arrives past the bridge's connection cap always gets the 503
+  now, including a large sync (tens of KiB of `userVars` and cookies) and a
+  request with an absurd `Content-Length`. The former stopped draining early
+  and the client saw a connection reset; the latter could stop the bridge
+  from accepting connections in debug builds.
+- Windows: when a game takes topmost, the overlay is raised back above it
+  instead of only re-writing the style bit, which Windows ignores for
+  z-order.
+- Windows: a failed monitor enumeration is retried on the next tick instead
+  of leaving a stale monitor list until the next display change.
+
 ## [0.4.13] - 2026-09-06
 
 ### Added
