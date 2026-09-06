@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(test)]
 use std::net::SocketAddr;
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -21,6 +21,9 @@ use crate::config;
 use crate::net::creds::{Credentials, Store as Creds};
 
 const MAX_BODY: usize = 1 << 20;
+/// Launch Standalone's POST can land after the 1s process scan has already
+/// flipped `game_running`. A different account is accepted only in this window.
+const LAUNCH_GRACE_SECS: i64 = 15;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 type Hook = Arc<dyn Fn() + Send + Sync>;
 type WidgetToggleHook = Arc<dyn Fn(&str) -> Result<bool, String> + Send + Sync>;
@@ -49,7 +52,13 @@ impl Server {
     }
 }
 
-pub fn start(addr: &str, creds: Arc<Creds>, hooks: Hooks) -> Result<Server, String> {
+pub fn start(
+    addr: &str,
+    creds: Arc<Creds>,
+    hooks: Hooks,
+    game_running: Arc<AtomicBool>,
+    game_started_at: Arc<AtomicI64>,
+) -> Result<Server, String> {
     config::validate_loopback(addr)?;
     let listener =
         TcpListener::bind(addr).map_err(|e| format!("bridge cannot listen on {addr}: {e}"))?;
@@ -61,6 +70,9 @@ pub fn start(addr: &str, creds: Arc<Creds>, hooks: Hooks) -> Result<Server, Stri
         creds,
         hooks: Mutex::new(hooks),
         started: Instant::now(),
+        game_running,
+        game_started_at,
+        ignored_other_account: AtomicBool::new(false),
     });
     let stop2 = stop.clone();
     thread::Builder::new()
@@ -92,6 +104,9 @@ struct Inner {
     creds: Arc<Creds>,
     hooks: Mutex<Hooks>,
     started: Instant,
+    game_running: Arc<AtomicBool>,
+    game_started_at: Arc<AtomicI64>,
+    ignored_other_account: AtomicBool,
 }
 
 impl Inner {
@@ -236,6 +251,17 @@ impl Inner {
             );
         }
         let salt = parsed.get("skeygen").map(coerce).unwrap_or_default();
+        let source = parsed.get("source").map(coerce).unwrap_or_default();
+        if !self.should_apply(&cr.user_id, &source) {
+            if !self.ignored_other_account.swap(true, Ordering::SeqCst) {
+                eprintln!("bridge: keeping the current account while the game is running");
+            }
+            return (
+                200,
+                "application/json",
+                b"{\"ok\":true,\"applied\":false}".to_vec(),
+            );
+        }
         if let Ok(changed) = self.creds.set(cr, &salt) {
             if changed {
                 let extra = if salt.is_empty() {
@@ -255,13 +281,27 @@ impl Inner {
         }
     }
 
+    fn should_apply(&self, user_id: &str, source: &str) -> bool {
+        let current = self.creds.get();
+        apply_session(
+            current.as_ref().map(|(c, _)| c.user_id.as_str()),
+            user_id,
+            source,
+            self.game_running.load(Ordering::SeqCst),
+            self.game_started_at.load(Ordering::SeqCst),
+            chrono::Utc::now().timestamp(),
+        )
+    }
+
     fn health(&self) -> (u16, &'static str, Vec<u8>) {
         let have = self.creds.get().is_some();
         let have_salt = !self.creds.salt().is_empty();
+        let game_running = self.game_running.load(Ordering::SeqCst);
         let mut obj = json!({
             "ok": true,
             "have_credentials": have,
             "have_signing_salt": have_salt,
+            "session_locked": game_running && have,
             "uptime_seconds": self.started.elapsed().as_secs(),
             "version": VERSION,
         });
@@ -312,6 +352,32 @@ impl Inner {
             ),
         }
     }
+}
+
+/// Last write wins unless the game process is up and the incoming `userID`
+/// is someone else. `source=launch` still wins for [`LAUNCH_GRACE_SECS`] after
+/// the process appears, because Launch Standalone's XHR can finish after the
+/// 1s scan.
+fn apply_session(
+    current_user_id: Option<&str>,
+    incoming_user_id: &str,
+    source: &str,
+    game_running: bool,
+    game_started_at: i64,
+    now: i64,
+) -> bool {
+    let Some(current) = current_user_id else {
+        return true;
+    };
+    if current == incoming_user_id {
+        return true;
+    }
+    if !game_running {
+        return true;
+    }
+    source.eq_ignore_ascii_case("launch")
+        && game_started_at > 0
+        && now.saturating_sub(game_started_at) < LAUNCH_GRACE_SECS
 }
 
 /// The anti-CSRF / anti-rebinding gate. Returns a refusal reason, or None to
@@ -418,17 +484,25 @@ mod tests {
     use serde_json::json;
 
     const FAKE_USER: &str = "1234567";
+    const ALT_USER: &str = "7654321";
     const FAKE_PASSWORD: &str = "3a7bd3e2360a3d29eea436fcfb7e44c735d117c4";
     const FAKE_SC: &str = "0f9a1c4e8b2d6f3a7c5e9b1d4f8a2c6e";
     const FAKE_SALT: &str = "y27bigaOAA1";
 
     fn payload(vars: Value, salt: &str, cookies: &str) -> Vec<u8> {
-        serde_json::to_vec(&json!({
+        payload_source(vars, salt, cookies, None)
+    }
+
+    fn payload_source(vars: Value, salt: &str, cookies: &str, source: Option<&str>) -> Vec<u8> {
+        let mut obj = json!({
             "userVars": vars,
             "skeygen": salt,
             "cookies": cookies,
-        }))
-        .unwrap()
+        });
+        if let Some(source) = source {
+            obj["source"] = json!(source);
+        }
+        serde_json::to_vec(&obj).unwrap()
     }
 
     fn valid_vars() -> Value {
@@ -468,6 +542,21 @@ mod tests {
     }
 
     fn test_srv(hooks: Hooks) -> (Server, Arc<Creds>, std::path::PathBuf) {
+        let (srv, creds, dir, _, _) = test_srv_lock(hooks, false, 0);
+        (srv, creds, dir)
+    }
+
+    fn test_srv_lock(
+        hooks: Hooks,
+        running: bool,
+        started_at: i64,
+    ) -> (
+        Server,
+        Arc<Creds>,
+        std::path::PathBuf,
+        Arc<AtomicBool>,
+        Arc<AtomicI64>,
+    ) {
         let dir = std::env::temp_dir().join(format!(
             "df-hud-bridge-{}-{}",
             std::process::id(),
@@ -479,8 +568,23 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("credentials.json");
         let creds = Arc::new(Creds::new(&path));
-        let srv = start("127.0.0.1:0", creds.clone(), hooks).unwrap();
-        (srv, creds, dir)
+        let game_running = Arc::new(AtomicBool::new(running));
+        let game_started_at = Arc::new(AtomicI64::new(started_at));
+        let srv = start(
+            "127.0.0.1:0",
+            creds.clone(),
+            hooks,
+            game_running.clone(),
+            game_started_at.clone(),
+        )
+        .unwrap();
+        (srv, creds, dir, game_running, game_started_at)
+    }
+
+    fn alt_vars() -> Value {
+        let mut vars = valid_vars();
+        vars["userID"] = json!(ALT_USER);
+        vars
     }
 
     #[test]
@@ -666,6 +770,7 @@ mod tests {
         let got: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(got["have_credentials"], true);
         assert_eq!(got["have_signing_salt"], true);
+        assert_eq!(got["session_locked"], false);
         for secret in [FAKE_PASSWORD, FAKE_SC, FAKE_SALT, FAKE_USER] {
             assert!(!text.contains(secret), "healthz leaked {secret}: {text}");
         }
@@ -770,6 +875,176 @@ mod tests {
         assert_eq!(status, 400);
         assert!(body.contains("challenges"), "{body}");
         srv.stop();
+    }
+
+    #[test]
+    fn game_running_keeps_the_current_account() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c2 = calls.clone();
+        let now = chrono::Utc::now().timestamp();
+        let (srv, creds, _dir, _, _) = test_srv_lock(
+            Hooks {
+                on_credentials: Some(Arc::new(move || {
+                    c2.fetch_add(1, Ordering::SeqCst);
+                })),
+                ..Hooks::default()
+            },
+            true,
+            now,
+        );
+        let url = format!("http://{}/api/userData", srv.listen);
+        let (status, body) = post(
+            &url,
+            "application/json",
+            &payload(valid_vars(), FAKE_SALT, ""),
+        );
+        assert_eq!(status, 200);
+        assert!(!body.contains("applied"), "{body}");
+        let (status, body) = post(
+            &url,
+            "application/json",
+            &payload(alt_vars(), FAKE_SALT, ""),
+        );
+        assert_eq!(status, 200);
+        assert!(body.contains("\"applied\":false"), "{body}");
+        let (cr, _) = creds.get().expect("stored");
+        assert_eq!(cr.user_id, FAKE_USER);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        srv.stop();
+    }
+
+    #[test]
+    fn game_running_still_refreshes_the_same_account() {
+        let now = chrono::Utc::now().timestamp();
+        let (srv, creds, _dir, _, _) = test_srv_lock(Hooks::default(), true, now);
+        let url = format!("http://{}/api/userData", srv.listen);
+        post(
+            &url,
+            "application/json",
+            &payload(valid_vars(), FAKE_SALT, ""),
+        );
+        let mut vars = valid_vars();
+        vars["sc"] = json!("ffffffffffffffffffffffffffffffff");
+        let (status, body) = post(&url, "application/json", &payload(vars, FAKE_SALT, ""));
+        assert_eq!(status, 200);
+        assert!(!body.contains("applied"), "{body}");
+        let (cr, _) = creds.get().expect("stored");
+        assert_eq!(cr.user_id, FAKE_USER);
+        assert_eq!(cr.sc, "ffffffffffffffffffffffffffffffff");
+        srv.stop();
+    }
+
+    #[test]
+    fn game_not_running_still_takes_the_last_account() {
+        let (srv, creds, _dir) = test_srv(Hooks::default());
+        let url = format!("http://{}/api/userData", srv.listen);
+        post(
+            &url,
+            "application/json",
+            &payload(valid_vars(), FAKE_SALT, ""),
+        );
+        let (status, _) = post(
+            &url,
+            "application/json",
+            &payload(alt_vars(), FAKE_SALT, ""),
+        );
+        assert_eq!(status, 200);
+        let (cr, _) = creds.get().expect("stored");
+        assert_eq!(cr.user_id, ALT_USER);
+        srv.stop();
+    }
+
+    #[test]
+    fn empty_store_accepts_the_first_account_while_the_game_runs() {
+        let now = chrono::Utc::now().timestamp();
+        let (srv, creds, _dir, _, _) = test_srv_lock(Hooks::default(), true, now);
+        let url = format!("http://{}/api/userData", srv.listen);
+        let (status, body) = post(
+            &url,
+            "application/json",
+            &payload(valid_vars(), FAKE_SALT, ""),
+        );
+        assert_eq!(status, 200);
+        assert!(!body.contains("applied"), "{body}");
+        assert_eq!(creds.get().expect("stored").0.user_id, FAKE_USER);
+        srv.stop();
+    }
+
+    #[test]
+    fn launch_source_wins_only_inside_the_grace_window() {
+        let (srv, creds, _dir, running, started_at) = test_srv_lock(Hooks::default(), false, 0);
+        let url = format!("http://{}/api/userData", srv.listen);
+        post(
+            &url,
+            "application/json",
+            &payload(valid_vars(), FAKE_SALT, ""),
+        );
+        running.store(true, Ordering::SeqCst);
+        started_at.store(chrono::Utc::now().timestamp(), Ordering::SeqCst);
+        let (status, body) = post(
+            &url,
+            "application/json",
+            &payload_source(alt_vars(), FAKE_SALT, "", Some("launch")),
+        );
+        assert_eq!(status, 200);
+        assert!(!body.contains("applied"), "{body}");
+        assert_eq!(creds.get().expect("stored").0.user_id, ALT_USER);
+
+        started_at.store(
+            chrono::Utc::now().timestamp() - LAUNCH_GRACE_SECS - 1,
+            Ordering::SeqCst,
+        );
+        let mut later = valid_vars();
+        later["userID"] = json!("9999999");
+        let (status, body) = post(
+            &url,
+            "application/json",
+            &payload_source(later, FAKE_SALT, "", Some("launch")),
+        );
+        assert_eq!(status, 200);
+        assert!(body.contains("\"applied\":false"), "{body}");
+        assert_eq!(creds.get().expect("stored").0.user_id, ALT_USER);
+        srv.stop();
+    }
+
+    #[test]
+    fn health_session_locked_while_the_game_runs() {
+        let now = chrono::Utc::now().timestamp();
+        let (srv, _, _dir, _, _) = test_srv_lock(Hooks::default(), true, now);
+        let base = format!("http://{}", srv.listen);
+        post(
+            &format!("{base}/api/userData"),
+            "application/json",
+            &payload(valid_vars(), FAKE_SALT, ""),
+        );
+        let resp = ureq::get(&format!("{base}/healthz")).call().unwrap();
+        let got: Value = serde_json::from_str(&resp.into_body().read_to_string().unwrap()).unwrap();
+        assert_eq!(got["session_locked"], true);
+        srv.stop();
+    }
+
+    #[test]
+    fn apply_session_rules() {
+        assert!(apply_session(None, FAKE_USER, "", true, 1, 1));
+        assert!(apply_session(Some(FAKE_USER), FAKE_USER, "", true, 1, 100));
+        assert!(apply_session(Some(FAKE_USER), ALT_USER, "", false, 0, 100));
+        assert!(!apply_session(Some(FAKE_USER), ALT_USER, "", true, 1, 100));
+        assert!(apply_session(
+            Some(FAKE_USER),
+            ALT_USER,
+            "launch",
+            true,
+            90,
+            100
+        ));
+        assert!(!apply_session(
+            Some(FAKE_USER),
+            ALT_USER,
+            "launch",
+            true,
+            80,
+            100
+        ));
     }
 
     #[test]

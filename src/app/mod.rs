@@ -12,7 +12,7 @@ pub mod updates;
 pub mod visibility;
 
 use chrono::{DateTime, Utc};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -479,6 +479,7 @@ pub fn start_with(
     let cfg = Arc::new(Mutex::new(cfg));
     let stop = Arc::new(AtomicBool::new(false));
     let game_running = Arc::new(AtomicBool::new(false));
+    let game_started_at = Arc::new(AtomicI64::new(0));
     let visible = Arc::new(AtomicBool::new(true));
     let gate = Arc::new(Gate::new(MIN_REQUEST_GAP));
     let groups = Arc::new(Groups::new());
@@ -573,9 +574,18 @@ pub fn start_with(
     {
         let handle = handle.clone();
         let game = handle.game.clone();
+        let game_started_at = game_started_at.clone();
         game.set_on_change(move |st| {
             handle.store.set_game(st);
             handle.game_running.store(st.running, Ordering::SeqCst);
+            game_started_at.store(
+                if st.running {
+                    st.started_at.map(|t| t.timestamp()).unwrap_or(0)
+                } else {
+                    0
+                },
+                Ordering::SeqCst,
+            );
             handle.vis.poke();
             if st.running {
                 handle.refresh_feeds();
@@ -727,6 +737,8 @@ pub fn start_with(
                         move |g| handle.toggle_group(g).map(|_| true)
                     })),
                 },
+                handle.game_running.clone(),
+                game_started_at.clone(),
             ) {
                 Ok(_) => {}
                 Err(err) => eprintln!("bridge: {err}"),
