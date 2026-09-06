@@ -1,93 +1,51 @@
 //! Parse the Dead Frontier challenge board from Flash key/value pairs.
 
-use chrono::{DateTime, TimeZone, Utc};
-use std::collections::HashMap;
+use chrono::{DateTime, Days, NaiveDate, TimeZone, Utc};
+use std::collections::{HashMap, HashSet};
 
-use crate::data::{TIME_OFFSET, repair_glued_pairs};
+use crate::data::{TIME_OFFSET, field, group_indexed};
 use crate::model::{Challenge, Objective};
 
 pub fn parse(vars: &HashMap<String, String>, level: i32, gold: bool) -> Vec<Challenge> {
-    let mut vars = vars.clone();
-    repair_glued_pairs(&mut vars);
-
-    let mut fields: HashMap<(bool, i32), HashMap<String, String>> = HashMap::new();
-    for (name, value) in &vars {
-        let Some((clan, index, field)) = parse_key(name) else {
-            continue;
-        };
-        fields
-            .entry((clan, index))
-            .or_default()
-            .insert(field, value.clone());
-    }
-
     let mut out = Vec::new();
-    for ((clan, index), f) in fields {
+    for ((clan, index), f) in group_indexed(vars, parse_key) {
         let mut c = Challenge {
             index,
             clan,
-            id: f.get("challenge_id").cloned().unwrap_or_default(),
-            name: f
-                .get("name")
-                .cloned()
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
-            desc: f
-                .get("description")
-                .cloned()
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
-            start: challenge_time(f.get("start_time").map_or("", String::as_str)),
-            end: challenge_time(f.get("end_time").map_or("", String::as_str)),
-            min_level: atoi(f.get("min_level").map_or("", String::as_str)),
-            max_level: atoi(f.get("max_level").map_or("", String::as_str)),
-            repeatable: f.get("repeatable").map(String::as_str) == Some("1"),
-            reward_cash: atoi64(f.get("reward_cash").map_or("", String::as_str)),
-            reward_credits: atoi64(f.get("reward_credits").map_or("", String::as_str)),
-            reward_points: atoi64(f.get("reward_points").map_or("", String::as_str)),
-            reward_items: f
-                .get("reward_items")
-                .cloned()
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
-            reward_special: f
-                .get("reward_special")
-                .cloned()
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
+            id: field(&f, "challenge_id").to_string(),
+            name: field(&f, "name").trim().to_string(),
+            desc: field(&f, "description").trim().to_string(),
+            start: challenge_time(field(&f, "start_time")),
+            end: challenge_time(field(&f, "end_time")),
+            min_level: atoi(field(&f, "min_level")),
+            max_level: atoi(field(&f, "max_level")),
+            repeatable: field(&f, "repeatable") == "1",
+            reward_cash: atoi64(field(&f, "reward_cash")),
+            reward_credits: atoi64(field(&f, "reward_credits")),
+            reward_points: atoi64(field(&f, "reward_points")),
+            reward_items: field(&f, "reward_items").trim().to_string(),
+            reward_special: field(&f, "reward_special").trim().to_string(),
             ..Challenge::default()
         };
-        let exp = atoi64(f.get("reward_exp").map_or("", String::as_str));
+        let exp = atoi64(field(&f, "reward_exp"));
         if exp > 0 && level > 0 {
             c.reward_exp = exp * i64::from(level);
             if gold {
                 c.reward_exp *= 2;
             }
         }
-        let count = atoi(f.get("objectives").map_or("", String::as_str));
+        let count = atoi(field(&f, "objectives"));
         for j in 1..=count {
-            let suffix = j.to_string();
             let mut o = Objective {
-                name: f
-                    .get(&format!("objectives_{suffix}_name"))
-                    .cloned()
-                    .unwrap_or_default()
+                name: field(&f, &format!("objectives_{j}_name"))
                     .trim()
                     .to_string(),
-                target: atoi64(
-                    f.get(&format!("objectives_{suffix}_target"))
-                        .map_or("", String::as_str),
-                ),
+                target: atoi64(field(&f, &format!("objectives_{j}_target"))),
                 ..Objective::default()
             };
-            if let Some(raw) = f.get(&format!("objective_{suffix}_player_score")) {
-                o.score = atoi64(raw);
-                o.has_score = true;
-            }
+            o.score = f
+                .get(format!("objective_{j}_player_score").as_str())
+                .map(|raw| atoi64(raw));
             c.objectives.push(o);
         }
         if c.eligible(level) {
@@ -102,16 +60,15 @@ pub fn parse(vars: &HashMap<String, String>, level: i32, gold: bool) -> Vec<Chal
     out
 }
 
-fn parse_key(name: &str) -> Option<(bool, i32, String)> {
+/// `challenge_{index}_{field}` or `challenge_clan_{index}_{field}`.
+fn parse_key(name: &str) -> Option<((bool, i32), &str)> {
     let rest = name.strip_prefix("challenge_")?;
-    let (clan, rest) = if let Some(r) = rest.strip_prefix("clan_") {
-        (true, r)
-    } else {
-        (false, rest)
+    let (clan, rest) = match rest.strip_prefix("clan_") {
+        Some(r) => (true, r),
+        None => (false, rest),
     };
     let (idx, field) = rest.split_once('_')?;
-    let index: i32 = idx.parse().ok()?;
-    Some((clan, index, field.to_string()))
+    Some(((clan, idx.parse().ok()?), field))
 }
 
 fn challenge_time(raw: &str) -> DateTime<Utc> {
@@ -132,24 +89,42 @@ fn atoi64(raw: &str) -> i64 {
     raw.trim().parse().unwrap_or(0)
 }
 
+/// `name|YYYY-MM-DD` of the cycle's end (UTC), or `name|` when the board
+/// gave no end time.
 pub fn cycle_key(c: &Challenge) -> String {
     let day = if c.end.timestamp() > 0 {
-        c.end.format("%Y-%m-%d").to_string()
+        c.end.format(CYCLE_DAY).to_string()
     } else {
         String::new()
     };
     format!("{}|{day}", c.name)
 }
 
+const CYCLE_DAY: &str = "%Y-%m-%d";
+
+/// Whether the cycle a key names has been over for a whole day, so its key
+/// cannot come round again (the next cycle ends on a later date). Dateless
+/// keys never expire; there is one per challenge name, so they cannot pile up.
+pub fn cycle_ended(key: &str, now: DateTime<Utc>) -> bool {
+    let Some((_, day)) = key.rsplit_once('|') else {
+        return false;
+    };
+    let Ok(end) = NaiveDate::parse_from_str(day, CYCLE_DAY) else {
+        return false;
+    };
+    end.checked_add_days(Days::new(1))
+        .is_some_and(|grace| grace < now.date_naive())
+}
+
 /// Overlay sticky completion. Returns cycle keys that just finished so the
-/// persist map can latch them. A later board that un-completes the same cycle
+/// persist set can latch them. A later board that un-completes the same cycle
 /// (clan-size target recompute) stays done.
-pub fn apply_sticky(board: &mut [Challenge], done: &HashMap<String, bool>) -> Vec<String> {
+pub fn apply_sticky(board: &mut [Challenge], done: &HashSet<String>) -> Vec<String> {
     let mut newly = Vec::new();
     for c in board.iter_mut() {
         let key = cycle_key(c);
         let live = c.live_complete();
-        let was = done.get(&key).copied().unwrap_or(false);
+        let was = done.contains(&key);
         if live && !was {
             newly.push(key.clone());
         }
@@ -204,38 +179,14 @@ mod tests {
     }
 
     #[test]
-    fn repair_glued_pairs_cases() {
-        let mut vars = HashMap::from([(
-            "max_challenges".into(),
-            "15challenge_clan_0_challenge_id=210".into(),
-        )]);
-        repair_glued_pairs(&mut vars);
-        assert_eq!(vars.get("max_challenges").unwrap(), "15");
-        assert_eq!(vars.get("challenge_clan_0_challenge_id").unwrap(), "210");
-
-        let mut vars = HashMap::from([("armour".into(), "hazardResistance=0.25".into())]);
-        repair_glued_pairs(&mut vars);
-        assert_eq!(vars.get("armour").unwrap(), "hazardResistance=0.25");
-
-        let mut vars = HashMap::from([
-            (
-                "max_challenges".into(),
-                "15challenge_clan_0_challenge_id=210".into(),
-            ),
-            ("challenge_clan_0_challenge_id".into(), "999".into()),
-        ]);
-        repair_glued_pairs(&mut vars);
-        assert_eq!(vars.get("challenge_clan_0_challenge_id").unwrap(), "999");
-    }
-
-    #[test]
     fn parse_fixture() {
         let got = parse(&response(), 415, false);
         assert_eq!(got.len(), 4, "{got:?}");
         assert_eq!(got[0].name, "Summer Death");
         assert_eq!(got[3].name, "Weekly Challenge - Travel Blocks");
-        assert_eq!(got[0].objectives[0].score, 55);
-        assert!(got[0].objectives[0].has_score);
+        assert_eq!(got[2].id, "210", "glued onto max_challenges");
+        assert!(got[2].clan);
+        assert_eq!(got[0].objectives[0].score, Some(55));
         assert!(!got[0].objectives[0].done());
         assert!(got[0].repeatable);
         assert_eq!(got[0].reward_special, "summerticket|10");
@@ -288,14 +239,12 @@ mod tests {
             objectives: vec![
                 Objective {
                     target: 10,
-                    score: 4,
-                    has_score: true,
+                    score: Some(4),
                     ..Objective::default()
                 },
                 Objective {
                     target: 20,
-                    score: 20,
-                    has_score: true,
+                    score: Some(20),
                     ..Objective::default()
                 },
             ],
@@ -309,7 +258,7 @@ mod tests {
         assert!(!Challenge::default().complete());
         assert!(
             !Objective {
-                score: 5,
+                score: Some(5),
                 ..Objective::default()
             }
             .done()
@@ -344,7 +293,7 @@ mod tests {
                 min_level: 10,
                 max_level: 20,
                 objectives: vec![Objective {
-                    has_score: true,
+                    score: Some(0),
                     ..Objective::default()
                 }],
                 ..Challenge::default()
@@ -395,13 +344,12 @@ mod tests {
             end,
             objectives: vec![Objective {
                 target: 500,
-                score: 500,
-                has_score: true,
+                score: Some(500),
                 ..Objective::default()
             }],
             ..Challenge::default()
         }];
-        let newly = apply_sticky(&mut board, &HashMap::new());
+        let newly = apply_sticky(&mut board, &HashSet::new());
         assert_eq!(newly, vec![cycle_key(&board[0])]);
         assert!(board[0].complete());
 
@@ -410,16 +358,37 @@ mod tests {
             end,
             objectives: vec![Objective {
                 target: 800,
-                score: 500,
-                has_score: true,
+                score: Some(500),
                 ..Objective::default()
             }],
             ..Challenge::default()
         }];
-        let done = HashMap::from([(cycle_key(&later[0]), true)]);
+        let done = HashSet::from([cycle_key(&later[0])]);
         assert!(apply_sticky(&mut later, &done).is_empty());
         assert!(later[0].complete());
         assert!(!later[0].live_complete());
+    }
+
+    #[test]
+    fn cycle_ended_a_day_after_the_embedded_date() {
+        let now = "2026-09-06T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert!(cycle_ended("Travel|2026-09-04", now));
+        assert!(!cycle_ended("Travel|2026-09-05", now), "a day of grace");
+        assert!(!cycle_ended("Travel|2026-09-06", now));
+        assert!(!cycle_ended("Travel|2026-09-30", now));
+        assert!(!cycle_ended("Travel|", now), "no end time: never");
+        assert!(!cycle_ended("Travel", now));
+        assert!(!cycle_ended("Travel|soon", now));
+        assert!(
+            cycle_ended("Kill|Loot|2026-01-01", now),
+            "a pipe in the name does not hide the date"
+        );
+        let ended = Challenge {
+            name: "Travel".into(),
+            end: now - chrono::Duration::days(2),
+            ..Challenge::default()
+        };
+        assert!(cycle_ended(&cycle_key(&ended), now));
     }
 
     #[test]

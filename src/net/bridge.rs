@@ -6,27 +6,31 @@
 //! client sends either (GM.xmlHttpRequest sends no Origin or an
 //! extension-scheme one).
 
+use crate::wake::lock;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(test)]
 use std::net::SocketAddr;
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use crate::app::groups;
+use crate::app::groups::Group;
 use crate::config;
 use crate::net::creds::{Credentials, Store as Creds};
 
 const MAX_BODY: usize = 1 << 20;
+/// Connections served at once; one thread each. The userscript sends one
+/// request at a time, so anything past this is a stuck or hostile peer.
+const MAX_CONNECTIONS: usize = 8;
 /// After Launch Standalone, block other accounts' periodic syncs until the
 /// process watcher takes over (or this elapses if the client never appears).
 const PENDING_SECS: i64 = 15;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 type Hook = Arc<dyn Fn() + Send + Sync>;
-type WidgetToggleHook = Arc<dyn Fn(&str) -> Result<bool, String> + Send + Sync>;
+type WidgetToggleHook = Arc<dyn Fn(Group) + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct Hooks {
@@ -64,7 +68,7 @@ pub fn start(
         TcpListener::bind(addr).map_err(|e| format!("bridge cannot listen on {addr}: {e}"))?;
     listener.set_nonblocking(false).map_err(|e| e.to_string())?;
     let listen = listener.local_addr().map_err(|e| e.to_string())?;
-    eprintln!("bridge: listening on {listen} (waiting for a browser payload)");
+    info!("bridge: listening on {listen} (waiting for a browser payload)");
     let stop = Arc::new(AtomicBool::new(false));
     let inner = Arc::new(Inner {
         creds,
@@ -73,6 +77,7 @@ pub fn start(
         game_running,
         pending_launch_at,
         ignored_other_account: AtomicBool::new(false),
+        in_flight: AtomicUsize::new(0),
     });
     let stop2 = stop.clone();
     thread::Builder::new()
@@ -83,10 +88,7 @@ pub fn start(
                     break;
                 }
                 match stream {
-                    Ok(s) => {
-                        let inner = inner.clone();
-                        thread::spawn(move || inner.serve(s));
-                    }
+                    Ok(s) => inner.dispatch(s),
                     Err(_) => break,
                 }
             }
@@ -107,11 +109,41 @@ struct Inner {
     game_running: Arc<AtomicBool>,
     pending_launch_at: Arc<AtomicI64>,
     ignored_other_account: AtomicBool,
+    in_flight: AtomicUsize,
+}
+
+/// One connection's place under [`MAX_CONNECTIONS`]. Released on drop, so a
+/// handler that panics still gives it back.
+struct Slot(Arc<Inner>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl Inner {
+    /// Hand the connection to its own thread, or answer 503 from the accept
+    /// thread when [`MAX_CONNECTIONS`] are already being served.
+    fn dispatch(self: &Arc<Self>, mut stream: TcpStream) {
+        if self.in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+            let _ = write_http(&mut stream, 503, "text/plain", b"too many connections");
+            return;
+        }
+        let slot = Slot(self.clone());
+        // A failed spawn drops the closure, and the slot with it.
+        if let Err(err) = thread::Builder::new()
+            .name("df-hud-bridge-conn".into())
+            .spawn(move || slot.0.serve(stream))
+        {
+            warn!("bridge: could not start a connection thread ({err})");
+        }
+    }
+
     fn serve(&self, stream: TcpStream) {
-        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
         let mut stream = stream;
         let Ok(clone) = stream.try_clone() else {
             return;
@@ -206,12 +238,12 @@ impl Inner {
         let parsed: Value = if let Ok(v) = serde_json::from_slice(body) {
             v
         } else {
-            eprintln!("bridge: rejected a payload: malformed JSON");
+            warn!("bridge: rejected a payload: malformed JSON");
             return (400, "text/plain", b"malformed JSON".to_vec());
         };
         let vars = parsed.get("userVars").and_then(Value::as_object);
         let Some(vars) = vars else {
-            eprintln!("bridge: payload missing userVars (are you on a logged-in page?)");
+            warn!("bridge: payload missing userVars (are you on a logged-in page?)");
             return (
                 400,
                 "text/plain",
@@ -240,7 +272,7 @@ impl Inner {
             if cr.sc.is_empty() {
                 missing.push("sc");
             }
-            eprintln!(
+            warn!(
                 "bridge: payload missing {} (are you on a logged-in page?)",
                 missing.join(", ")
             );
@@ -254,7 +286,7 @@ impl Inner {
         let source = parsed.get("source").map(coerce).unwrap_or_default();
         if !self.should_apply(&cr.user_id, &source) {
             if !self.ignored_other_account.swap(true, Ordering::SeqCst) {
-                eprintln!("bridge: keeping the current account");
+                info!("bridge: keeping the current account");
             }
             return applied_reply(false);
         }
@@ -270,14 +302,14 @@ impl Inner {
                 } else {
                     ", signing salt reported"
                 };
-                eprintln!("bridge: credentials updated from browser{extra}");
-                if let Some(fn_) = self.hooks.lock().unwrap().on_credentials.clone() {
+                info!("bridge: credentials updated from browser{extra}");
+                if let Some(fn_) = lock(&self.hooks).on_credentials.clone() {
                     fn_();
                 }
             }
             applied_reply(true)
         } else {
-            eprintln!("bridge: could not store credentials");
+            error!("bridge: could not store credentials");
             (500, "text/plain", b"could not store credentials".to_vec())
         }
     }
@@ -327,7 +359,7 @@ impl Inner {
         what: &str,
         get: impl Fn(&Hooks) -> Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> (u16, &'static str, Vec<u8>) {
-        let fn_ = get(&self.hooks.lock().unwrap());
+        let fn_ = get(&lock(&self.hooks));
         match fn_ {
             Some(fn_) => {
                 fn_();
@@ -342,7 +374,17 @@ impl Inner {
     }
 
     fn widget(&self, group: &str) -> (u16, &'static str, Vec<u8>) {
-        let fn_ = self.hooks.lock().unwrap().widget_toggle.clone();
+        let group = match group.parse::<Group>() {
+            Ok(g) => g,
+            Err(err) => {
+                return (
+                    400,
+                    "text/plain",
+                    format!("{err}; known groups: {}", Group::names()).into_bytes(),
+                );
+            }
+        };
+        let fn_ = lock(&self.hooks).widget_toggle.clone();
         let Some(fn_) = fn_ else {
             return (
                 503,
@@ -350,14 +392,8 @@ impl Inner {
                 b"widget toggling is not wired up".to_vec(),
             );
         };
-        match fn_(group) {
-            Ok(_) => (204, "text/plain", Vec::new()),
-            Err(err) => (
-                400,
-                "text/plain",
-                format!("{err}; known groups: {}", groups::TOGGLEABLE.join(", ")).into_bytes(),
-            ),
-        }
+        fn_(group);
+        (204, "text/plain", Vec::new())
     }
 }
 
@@ -780,6 +816,52 @@ mod tests {
         srv.stop();
     }
 
+    /// Idle connections each hold a handler thread. Past the cap the accept
+    /// thread answers 503 itself, and the slots come back once they close.
+    #[test]
+    fn saturated_bridge_answers_503_then_recovers() {
+        let (srv, _, _dir) = test_srv(Hooks::default());
+        let idle: Vec<TcpStream> = (0..MAX_CONNECTIONS)
+            .map(|_| TcpStream::connect(srv.listen).unwrap())
+            .collect();
+        let extra = TcpStream::connect(srv.listen).unwrap();
+        extra
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut reader = BufReader::new(extra);
+        let mut status_line = String::new();
+        reader.read_line(&mut status_line).unwrap();
+        assert!(status_line.starts_with("HTTP/1.1 503"), "{status_line}");
+        let mut headers = String::new();
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                break;
+            }
+            headers.push_str(&line.to_ascii_lowercase());
+        }
+        assert!(headers.contains("connection: close"), "{headers}");
+
+        drop(idle);
+        let health = format!("http://{}/healthz", srv.listen);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let status = lenient_agent()
+                .get(&health)
+                .call()
+                .map_or(0, |r| r.status().as_u16());
+            if status == 200 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "still refused after the idle connections closed ({status})"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        srv.stop();
+    }
+
     #[test]
     fn loopback_host_shapes() {
         for host in [
@@ -905,11 +987,7 @@ mod tests {
                 t2.fetch_add(1, Ordering::SeqCst);
             })),
             widget_toggle: Some(Arc::new(move |g| {
-                if !groups::known(g) {
-                    return Err(format!("unknown group {g:?}"));
-                }
-                g2.lock().unwrap().push(g.to_string());
-                Ok(true)
+                g2.lock().unwrap().push(g);
             })),
             ..Hooks::default()
         });
@@ -918,10 +996,12 @@ mod tests {
         assert_eq!(toggles.load(Ordering::SeqCst), 1);
         let (status, _) = post(&format!("{base}/api/widget/challenges/toggle"), "", b"");
         assert_eq!(status, 204);
-        assert_eq!(*groups_hit.lock().unwrap(), ["challenges"]);
+        assert_eq!(*groups_hit.lock().unwrap(), [Group::Challenges]);
         let (status, body) = post(&format!("{base}/api/widget/challenge/toggle"), "", b"");
         assert_eq!(status, 400);
+        assert!(body.contains("unknown group \"challenge\""), "{body}");
         assert!(body.contains("challenges"), "{body}");
+        assert_eq!(*groups_hit.lock().unwrap(), [Group::Challenges]);
         srv.stop();
     }
 

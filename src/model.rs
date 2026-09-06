@@ -50,29 +50,26 @@ impl XpSource {
     }
 }
 
+/// A game deadline. `Forever` is the server's "never expires" sentinel; it
+/// counts as set but has no countdown.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Deadline {
-    pub at: Option<DateTime<Utc>>,
-    pub forever: bool,
+pub enum Deadline {
+    #[default]
+    None,
+    At(DateTime<Utc>),
+    Forever,
 }
 
 impl Deadline {
     #[cfg(test)]
     pub fn set(self) -> bool {
-        self.forever || self.at.is_some()
+        self != Self::None
     }
 
     pub fn remaining(self, now: DateTime<Utc>) -> Duration {
-        if self.forever {
-            return Duration::ZERO;
-        }
-        let Some(at) = self.at else {
-            return Duration::ZERO;
-        };
-        if at > now {
-            (at - now).to_std().unwrap_or(Duration::ZERO)
-        } else {
-            Duration::ZERO
+        match self {
+            Self::At(at) if at > now => (at - now).to_std().unwrap_or(Duration::ZERO),
+            _ => Duration::ZERO,
         }
     }
 }
@@ -87,24 +84,18 @@ pub struct Snapshot {
     pub exp_needed: i64,
     pub pending_levels: i32,
     pub free_points: i32,
-    pub exp_since_start: i64,
-    pub has_exp_since_start: bool,
-    pub position_x: i32,
-    pub position_y: i32,
-    pub position_z: i32,
-    pub has_position: bool,
+    pub exp_since_start: Option<i64>,
+    /// `(x, y, z)` city coordinates.
+    pub position: Option<(i32, i32, i32)>,
     pub trade_zone: i32,
     pub in_outpost: bool,
-    pub danger_level: i32,
-    pub has_danger: bool,
+    pub danger_level: Option<i32>,
     pub block_support: Deadline,
     pub hp: i32,
     pub hp_max: i32,
-    pub cash: i64,
-    pub has_cash: bool,
+    pub cash: Option<i64>,
     pub bank_cash: i64,
-    pub nourishment: i32,
-    pub has_hunger: bool,
+    pub nourishment: Option<i32>,
     /// Remaining XP boost. Copied onto View only when the overlay draws it.
     pub boost_exp: Deadline,
     pub session_3d: String,
@@ -156,9 +147,8 @@ pub struct Visibility {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PresenceState {
     pub at: DateTime<Utc>,
-    pub has_position: bool,
-    pub x: i32,
-    pub y: i32,
+    /// `(x, y)` city block the client reports standing in.
+    pub position: Option<(i32, i32)>,
     pub place: String,
     pub indoors: bool,
     pub in_outpost: bool,
@@ -229,8 +219,8 @@ impl Serialize for XpStability {
 
 #[derive(Clone, Debug, Default)]
 pub struct XpRate {
-    pub available: bool,
-    pub per_hour: f64,
+    /// `None` while the window cannot yield a rate; `why` says why.
+    pub per_hour: Option<f64>,
     pub gained: i64,
     pub span: Duration,
     pub samples: i32,
@@ -259,35 +249,41 @@ impl Serialize for CityEventKind {
 pub struct Objective {
     pub name: String,
     pub target: i64,
-    pub score: i64,
-    pub has_score: bool,
+    /// `None` when the server sent no player score for this objective.
+    pub score: Option<i64>,
 }
 
 impl Objective {
     pub fn done(&self) -> bool {
-        self.target > 0 && self.score >= self.target
+        self.target > 0 && self.score.unwrap_or(0) >= self.target
     }
 }
 
+/// Hand-written to keep the Go wire shape: `Score` is always present (`0`
+/// when unknown) and `HasScore` says whether it was.
 impl Serialize for Objective {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut st = s.serialize_struct("Objective", 4)?;
         st.serialize_field("Name", &self.name)?;
         st.serialize_field("Target", &self.target)?;
-        st.serialize_field("Score", &self.score)?;
-        st.serialize_field("HasScore", &self.has_score)?;
+        st.serialize_field("Score", &self.score.unwrap_or(0))?;
+        st.serialize_field("HasScore", &self.score.is_some())?;
         st.end()
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct Challenge {
     pub index: i32,
+    #[serde(rename = "ID")]
     pub id: String,
     pub name: String,
     pub desc: String,
     pub clan: bool,
+    #[serde(serialize_with = "rfc3339_secs")]
     pub start: DateTime<Utc>,
+    #[serde(serialize_with = "rfc3339_secs")]
     pub end: DateTime<Utc>,
     pub objectives: Vec<Objective>,
     pub min_level: i32,
@@ -299,9 +295,10 @@ pub struct Challenge {
     pub reward_points: i64,
     pub reward_items: String,
     pub reward_special: String,
-    /// Sticky completion for this cycle. Not in `--once` JSON (`Challenge`
-    /// has no such field); `complete()` consults it so a clan-size target
-    /// recompute cannot un-finish a challenge already seen done.
+    /// Sticky completion for this cycle. Not in `--once` JSON; `complete()`
+    /// consults it so a clan-size target recompute cannot un-finish a
+    /// challenge already seen done.
+    #[serde(skip)]
     pub remembered: bool,
 }
 
@@ -332,49 +329,23 @@ impl Challenge {
         if level >= self.min_level && level <= self.max_level {
             return true;
         }
-        self.objectives.iter().any(|o| o.has_score)
+        self.objectives.iter().any(|o| o.score.is_some())
     }
 
     pub fn progress(&self) -> (i64, i64) {
         self.objectives.iter().fold((0, 0), |(score, target), o| {
-            (score + o.score, target + o.target)
+            (score + o.score.unwrap_or(0), target + o.target)
         })
     }
 
     #[cfg(test)]
     pub fn started(&self) -> bool {
-        self.objectives.iter().any(|o| o.score > 0)
+        self.objectives.iter().any(|o| o.score.unwrap_or(0) > 0)
     }
 }
 
-impl Serialize for Challenge {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut st = s.serialize_struct("Challenge", 16)?;
-        st.serialize_field("Index", &self.index)?;
-        st.serialize_field("ID", &self.id)?;
-        st.serialize_field("Name", &self.name)?;
-        st.serialize_field("Desc", &self.desc)?;
-        st.serialize_field("Clan", &self.clan)?;
-        st.serialize_field(
-            "Start",
-            &self.start.to_rfc3339_opts(SecondsFormat::Secs, true),
-        )?;
-        st.serialize_field("End", &self.end.to_rfc3339_opts(SecondsFormat::Secs, true))?;
-        st.serialize_field("Objectives", &self.objectives)?;
-        st.serialize_field("MinLevel", &self.min_level)?;
-        st.serialize_field("MaxLevel", &self.max_level)?;
-        st.serialize_field("Repeatable", &self.repeatable)?;
-        st.serialize_field("RewardExp", &self.reward_exp)?;
-        st.serialize_field("RewardCash", &self.reward_cash)?;
-        st.serialize_field("RewardCredits", &self.reward_credits)?;
-        st.serialize_field("RewardPoints", &self.reward_points)?;
-        st.serialize_field("RewardItems", &self.reward_items)?;
-        st.serialize_field("RewardSpecial", &self.reward_special)?;
-        st.end()
-    }
-}
-
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct MasteryBonus {
     pub name: String,
     /// Percent per level, absolute value.
@@ -388,17 +359,6 @@ pub struct MasteryBonus {
 impl MasteryBonus {
     pub fn capped(&self) -> bool {
         self.max != 0.0 && self.value >= self.max
-    }
-}
-
-impl Serialize for MasteryBonus {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut st = s.serialize_struct("MasteryBonus", 4)?;
-        st.serialize_field("Name", &self.name)?;
-        st.serialize_field("Scale", &self.scale)?;
-        st.serialize_field("Max", &self.max)?;
-        st.serialize_field("Value", &self.value)?;
-        st.end()
     }
 }
 
@@ -423,6 +383,8 @@ impl Mastery {
     }
 }
 
+/// Hand-written because `Mastered` is computed, not stored; a derive cannot
+/// add a key without a field behind it.
 impl Serialize for Mastery {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut st = s.serialize_struct("Mastery", 8)?;
@@ -438,8 +400,10 @@ impl Serialize for Mastery {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct CityEvent {
+    #[serde(rename = "ID")]
     pub id: String,
     pub kind: CityEventKind,
     pub event_type: String,
@@ -449,7 +413,9 @@ pub struct CityEvent {
     pub reward_exp: i64,
     pub slot: i32,
     pub locations: Vec<[i32; 2]>,
+    #[serde(serialize_with = "rfc3339_secs")]
     pub start: DateTime<Utc>,
+    #[serde(serialize_with = "rfc3339_secs")]
     pub end: DateTime<Utc>,
     pub started: bool,
     pub ended: bool,
@@ -479,56 +445,28 @@ impl CityEvent {
     }
 }
 
-impl Serialize for CityEvent {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut st = s.serialize_struct("CityEvent", 14)?;
-        st.serialize_field("ID", &self.id)?;
-        st.serialize_field("Kind", &self.kind)?;
-        st.serialize_field("EventType", &self.event_type)?;
-        st.serialize_field("Title", &self.title)?;
-        st.serialize_field("Enemies", &self.enemies)?;
-        st.serialize_field("Objectives", &self.objectives)?;
-        st.serialize_field("RewardExp", &self.reward_exp)?;
-        st.serialize_field("Slot", &self.slot)?;
-        st.serialize_field("Locations", &self.locations)?;
-        st.serialize_field(
-            "Start",
-            &self.start.to_rfc3339_opts(SecondsFormat::Secs, true),
-        )?;
-        st.serialize_field("End", &self.end.to_rfc3339_opts(SecondsFormat::Secs, true))?;
-        st.serialize_field("Started", &self.started)?;
-        st.serialize_field("Ended", &self.ended)?;
-        st.serialize_field("Onslaught", &self.onslaught)?;
-        st.end()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct Walk {
     pub blocks: i32,
+    #[serde(rename = "DX")]
     pub dx: i32,
+    #[serde(rename = "DY")]
     pub dy: i32,
     pub detour: i32,
 }
 
-impl Serialize for Walk {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut st = s.serialize_struct("Walk", 4)?;
-        st.serialize_field("Blocks", &self.blocks)?;
-        st.serialize_field("DX", &self.dx)?;
-        st.serialize_field("DY", &self.dy)?;
-        st.serialize_field("Detour", &self.detour)?;
-        st.end()
-    }
-}
-
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct CityMark {
     pub marker: String,
     pub label: String,
     pub enemies: Vec<String>,
     pub objectives: Vec<String>,
     pub kind: CityEventKind,
+    /// Overlay-only: tells a Death Row QRF from a Wasteland one. Not in
+    /// `--once` JSON, which already carries the resolved marker and label.
+    #[serde(skip)]
     pub event_type: String,
     pub x: i32,
     pub y: i32,
@@ -536,24 +474,6 @@ pub struct CityMark {
     pub off_map: bool,
     pub walk: Walk,
     pub reachable: bool,
-}
-
-impl Serialize for CityMark {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut st = s.serialize_struct("CityMark", 11)?;
-        st.serialize_field("Marker", &self.marker)?;
-        st.serialize_field("Label", &self.label)?;
-        st.serialize_field("Enemies", &self.enemies)?;
-        st.serialize_field("Objectives", &self.objectives)?;
-        st.serialize_field("Kind", &self.kind)?;
-        st.serialize_field("X", &self.x)?;
-        st.serialize_field("Y", &self.y)?;
-        st.serialize_field("EndsIn", &self.ends_in)?;
-        st.serialize_field("OffMap", &self.off_map)?;
-        st.serialize_field("Walk", &self.walk)?;
-        st.serialize_field("Reachable", &self.reachable)?;
-        st.end()
-    }
 }
 
 /// model.View. Not [`crate::overlay::scene::View`]. Overlay and tray fields only;
@@ -657,4 +577,329 @@ pub fn marshal_indent(view: &View) -> Result<String, serde_json::Error> {
         out.push('\n');
     }
     Ok(out)
+}
+
+/// The `--once` JSON wire shape, pinned field by field. Every value is
+/// non-default so a dropped or renamed key, a changed timestamp format, or a
+/// leaked internal field (`remembered`, `event_type` on a mark) shows up.
+#[cfg(test)]
+mod json_tests {
+    use super::*;
+
+    fn t(secs: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(secs, 0).unwrap()
+    }
+
+    fn objective() -> Objective {
+        Objective {
+            name: "Kill Regular Infected".into(),
+            target: 100,
+            score: Some(55),
+        }
+    }
+
+    fn challenge() -> Challenge {
+        Challenge {
+            index: 3,
+            id: "8017".into(),
+            name: "Summer Death".into(),
+            desc: "Kill \"things\" & more".into(),
+            clan: true,
+            start: t(1_784_880_000),
+            end: t(1_787_299_200),
+            objectives: vec![
+                objective(),
+                Objective {
+                    name: "Travel Blocks".into(),
+                    target: 360,
+                    score: None,
+                },
+            ],
+            min_level: 1,
+            max_level: 415,
+            repeatable: true,
+            reward_exp: 1_037_500,
+            reward_cash: 31_000,
+            reward_credits: 5,
+            reward_points: 20,
+            reward_items: "medkit|2".into(),
+            reward_special: "summerticket|10".into(),
+            remembered: true,
+        }
+    }
+
+    fn bonus() -> MasteryBonus {
+        MasteryBonus {
+            name: "Item Find Chance".into(),
+            scale: 0.005,
+            max: 5.0,
+            value: 1.02,
+        }
+    }
+
+    fn mastery() -> Mastery {
+        Mastery {
+            index: 2,
+            name: "Artisan".into(),
+            desc: "Craft anything.".into(),
+            level: 400,
+            exp: 37,
+            next_exp: 103,
+            bonuses: vec![MasteryBonus {
+                name: "Damage".into(),
+                scale: 0.05,
+                max: 20.0,
+                value: 20.0,
+            }],
+        }
+    }
+
+    fn mastery_in_progress() -> Mastery {
+        Mastery {
+            index: 0,
+            name: "Looter".into(),
+            desc: "Loot anything.".into(),
+            level: 204,
+            exp: 37,
+            next_exp: 103,
+            bonuses: vec![bonus()],
+        }
+    }
+
+    fn city_event() -> CityEvent {
+        CityEvent {
+            id: "509679".into(),
+            kind: CityEventKind::Mission,
+            event_type: "mission".into(),
+            title: "The Clue".into(),
+            enemies: vec!["3 x Flaming Titan".into(), "1 x Bandits".into()],
+            objectives: vec!["Find the clue (2)".into()],
+            reward_exp: 4000,
+            slot: 4,
+            locations: vec![[1002, 1000], [3000, 3000]],
+            start: t(1_786_527_000),
+            end: t(1_786_530_600),
+            started: true,
+            ended: true,
+            onslaught: true,
+        }
+    }
+
+    fn walk() -> Walk {
+        Walk {
+            blocks: 12,
+            dx: -3,
+            dy: 9,
+            detour: 2,
+        }
+    }
+
+    fn city_mark() -> CityMark {
+        CityMark {
+            marker: "M5".into(),
+            label: "To The Slaughter".into(),
+            enemies: vec!["2 x Bandits".into()],
+            objectives: vec!["Eliminate the Flaming Titans (3)".into()],
+            kind: CityEventKind::Qrf,
+            event_type: "qrfdr".into(),
+            x: 1047,
+            y: 987,
+            ends_in: Ns(90 * 1_000_000_000 + 999),
+            off_map: true,
+            walk: walk(),
+            reachable: true,
+        }
+    }
+
+    fn pretty<T: Serialize>(v: &T) -> String {
+        serde_json::to_string_pretty(v).unwrap()
+    }
+
+    #[test]
+    fn objective_json() {
+        assert_eq!(
+            pretty(&objective()),
+            r#"{
+  "Name": "Kill Regular Infected",
+  "Target": 100,
+  "Score": 55,
+  "HasScore": true
+}"#
+        );
+    }
+
+    #[test]
+    fn challenge_json() {
+        assert_eq!(
+            pretty(&challenge()),
+            r#"{
+  "Index": 3,
+  "ID": "8017",
+  "Name": "Summer Death",
+  "Desc": "Kill \"things\" & more",
+  "Clan": true,
+  "Start": "2026-07-24T08:00:00Z",
+  "End": "2026-08-21T08:00:00Z",
+  "Objectives": [
+    {
+      "Name": "Kill Regular Infected",
+      "Target": 100,
+      "Score": 55,
+      "HasScore": true
+    },
+    {
+      "Name": "Travel Blocks",
+      "Target": 360,
+      "Score": 0,
+      "HasScore": false
+    }
+  ],
+  "MinLevel": 1,
+  "MaxLevel": 415,
+  "Repeatable": true,
+  "RewardExp": 1037500,
+  "RewardCash": 31000,
+  "RewardCredits": 5,
+  "RewardPoints": 20,
+  "RewardItems": "medkit|2",
+  "RewardSpecial": "summerticket|10"
+}"#
+        );
+    }
+
+    #[test]
+    fn mastery_bonus_json() {
+        assert_eq!(
+            pretty(&bonus()),
+            r#"{
+  "Name": "Item Find Chance",
+  "Scale": 0.005,
+  "Max": 5.0,
+  "Value": 1.02
+}"#
+        );
+    }
+
+    #[test]
+    fn mastery_json() {
+        assert_eq!(
+            pretty(&mastery()),
+            r#"{
+  "Index": 2,
+  "Name": "Artisan",
+  "Desc": "Craft anything.",
+  "Level": 400,
+  "Exp": 37,
+  "NextExp": 103,
+  "Bonuses": [
+    {
+      "Name": "Damage",
+      "Scale": 0.05,
+      "Max": 20.0,
+      "Value": 20.0
+    }
+  ],
+  "Mastered": true
+}"#
+        );
+        assert_eq!(
+            pretty(&mastery_in_progress()),
+            r#"{
+  "Index": 0,
+  "Name": "Looter",
+  "Desc": "Loot anything.",
+  "Level": 204,
+  "Exp": 37,
+  "NextExp": 103,
+  "Bonuses": [
+    {
+      "Name": "Item Find Chance",
+      "Scale": 0.005,
+      "Max": 5.0,
+      "Value": 1.02
+    }
+  ],
+  "Mastered": false
+}"#
+        );
+    }
+
+    #[test]
+    fn city_event_json() {
+        assert_eq!(
+            pretty(&city_event()),
+            r#"{
+  "ID": "509679",
+  "Kind": 1,
+  "EventType": "mission",
+  "Title": "The Clue",
+  "Enemies": [
+    "3 x Flaming Titan",
+    "1 x Bandits"
+  ],
+  "Objectives": [
+    "Find the clue (2)"
+  ],
+  "RewardExp": 4000,
+  "Slot": 4,
+  "Locations": [
+    [
+      1002,
+      1000
+    ],
+    [
+      3000,
+      3000
+    ]
+  ],
+  "Start": "2026-08-12T09:30:00Z",
+  "End": "2026-08-12T10:30:00Z",
+  "Started": true,
+  "Ended": true,
+  "Onslaught": true
+}"#
+        );
+    }
+
+    #[test]
+    fn walk_json() {
+        assert_eq!(
+            pretty(&walk()),
+            r#"{
+  "Blocks": 12,
+  "DX": -3,
+  "DY": 9,
+  "Detour": 2
+}"#
+        );
+    }
+
+    #[test]
+    fn city_mark_json() {
+        assert_eq!(
+            pretty(&city_mark()),
+            r#"{
+  "Marker": "M5",
+  "Label": "To The Slaughter",
+  "Enemies": [
+    "2 x Bandits"
+  ],
+  "Objectives": [
+    "Eliminate the Flaming Titans (3)"
+  ],
+  "Kind": 2,
+  "X": 1047,
+  "Y": 987,
+  "EndsIn": 90,
+  "OffMap": true,
+  "Walk": {
+    "Blocks": 12,
+    "DX": -3,
+    "DY": 9,
+    "Detour": 2
+  },
+  "Reachable": true
+}"#
+        );
+    }
 }

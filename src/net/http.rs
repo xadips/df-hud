@@ -1,22 +1,27 @@
-//! One-shot ureq GET. Long-lived clients stay on [`super::dfclient`] / `app`.
+//! Plain ureq GET over a caller-supplied agent. Long-lived clients stay on
+//! [`super::dfclient`] / `app`, and the process shares one agent (see
+//! `app::df_agent`).
 
 use std::io::Read;
 use std::time::Duration;
 
-pub fn get_bytes(
+/// Body of a 200 GET. Timeout and status handling are set on the request, so
+/// the agent's own defaults do not matter.
+pub fn get_bytes_with(
+    agent: &ureq::Agent,
     url: &str,
     user_agent: &str,
     timeout: Duration,
     max_body: u64,
     headers: &[(&str, &str)],
 ) -> Result<Vec<u8>, String> {
-    let agent = ureq::Agent::new_with_config(
-        ureq::Agent::config_builder()
-            .timeout_global(Some(timeout))
-            .http_status_as_error(false)
-            .build(),
-    );
-    let mut req = agent.get(url).header("User-Agent", user_agent);
+    let mut req = agent
+        .get(url)
+        .config()
+        .timeout_global(Some(timeout))
+        .http_status_as_error(false)
+        .build()
+        .header("User-Agent", user_agent);
     for &(k, v) in headers {
         req = req.header(k, v);
     }

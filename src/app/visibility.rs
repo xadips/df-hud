@@ -3,11 +3,12 @@
 //! Config and manual overlay gates win; then `hud.only_when_game_running`;
 //! launcher titles; then `hud.follow_game_workspace`. Unknown placement shows.
 
+use crate::wake::lock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::config::Config;
+use crate::config;
 use crate::game;
 use crate::game::desktop::{Client, Match, Placement};
 use crate::model::{GameState, Visibility};
@@ -78,7 +79,7 @@ impl Querier for Box<dyn Client> {
 
 pub struct Watcher {
     game: Arc<game::Watcher>,
-    cfg: Arc<Mutex<Config>>,
+    cfg: Arc<config::Shared>,
     query: Option<Arc<dyn Querier>>,
     poke: Notify,
     enabled: Mutex<bool>,
@@ -93,7 +94,7 @@ pub struct Watcher {
 impl Watcher {
     pub fn new(
         game: Arc<game::Watcher>,
-        cfg: Arc<Mutex<Config>>,
+        cfg: Arc<config::Shared>,
         query: Option<Arc<dyn Querier>>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -115,20 +116,20 @@ impl Watcher {
     }
 
     pub fn set_on_change(&self, f: impl Fn(Visibility) + Send + Sync + 'static) {
-        *self.on_change.lock().unwrap() = Some(Arc::new(f));
+        *lock(&self.on_change) = Some(Arc::new(f));
     }
 
     pub fn state(&self) -> Visibility {
-        self.state.lock().unwrap().clone()
+        lock(&self.state).clone()
     }
 
     pub fn placement(&self) -> Placement {
-        self.place.lock().unwrap().clone()
+        lock(&self.place).clone()
     }
 
     pub fn set_enabled(&self, on: bool) {
         let changed = {
-            let mut e = self.enabled.lock().unwrap();
+            let mut e = lock(&self.enabled);
             let changed = *e != on;
             *e = on;
             changed
@@ -140,7 +141,7 @@ impl Watcher {
 
     #[cfg(test)]
     pub fn enabled(&self) -> bool {
-        *self.enabled.lock().unwrap()
+        *lock(&self.enabled)
     }
 
     pub fn poke(&self) {
@@ -159,17 +160,17 @@ impl Watcher {
     }
 
     pub fn refresh(&self) {
-        let cfg = self.cfg.lock().unwrap().clone();
+        let cfg = self.cfg.get();
         let game = self.game.state();
         let rules = Rules {
             only_when_game_running: cfg.hud.only_when_game_running,
             follow_game_workspace: cfg.hud.follow_game_workspace,
             config_enabled: cfg.hud.enabled,
-            manual_enabled: *self.enabled.lock().unwrap(),
+            manual_enabled: *lock(&self.enabled),
         };
         let session_changed = {
-            let mut session = self.window_session.lock().unwrap();
-            let mut seen = self.window_seen.lock().unwrap();
+            let mut session = lock(&self.window_session);
+            let mut seen = lock(&self.window_seen);
             if !game.running {
                 let changed = session.running;
                 *session = GameState::default();
@@ -184,11 +185,11 @@ impl Watcher {
             }
         };
         if session_changed {
-            *self.place.lock().unwrap() = Placement::default();
-            *self.last_query_error.lock().unwrap() = None;
+            *lock(&self.place) = Placement::default();
+            *lock(&self.last_query_error) = None;
         }
-        let mut window_seen = *self.window_seen.lock().unwrap();
-        let mut place = self.place.lock().unwrap().clone();
+        let mut window_seen = *lock(&self.window_seen);
+        let mut place = lock(&self.place).clone();
         let can_query = game.running && self.query.is_some();
         let mut query_failed_now = false;
         if can_query && let Some(q) = &self.query {
@@ -197,12 +198,12 @@ impl Watcher {
                 Err(err) => {
                     query_failed_now = true;
                     let now = Instant::now();
-                    let mut last = self.last_query_error.lock().unwrap();
+                    let mut last = lock(&self.last_query_error);
                     if last
                         .map(|at| now.saturating_duration_since(at) >= QUERY_ERROR_LOG_INTERVAL)
                         .unwrap_or(true)
                     {
-                        eprintln!(
+                        warn!(
                             "hud: cannot ask the desktop where the game's window is ({err}); \
                                  keeping the last placement and retrying"
                         );
@@ -210,14 +211,14 @@ impl Watcher {
                     }
                 }
                 Ok(got) => {
-                    if self.last_query_error.lock().unwrap().take().is_some() {
-                        eprintln!("hud: desktop query recovered");
+                    if lock(&self.last_query_error).take().is_some() {
+                        info!("hud: desktop query recovered");
                     }
                     place = got;
                     if place.known {
                         window_seen = true;
-                        if game.same_session(*self.window_session.lock().unwrap()) {
-                            *self.window_seen.lock().unwrap() = true;
+                        if game.same_session(*lock(&self.window_session)) {
+                            *lock(&self.window_seen) = true;
                         }
                     }
                 }
@@ -240,8 +241,8 @@ impl Watcher {
             monitor: place.monitor.clone(),
         };
         let (prev, prev_place) = {
-            let mut st = self.state.lock().unwrap();
-            let mut pl = self.place.lock().unwrap();
+            let mut st = lock(&self.state);
+            let mut pl = lock(&self.place);
             let prev = st.clone();
             let prev_place = pl.clone();
             *st = next.clone();
@@ -250,12 +251,12 @@ impl Watcher {
         };
         if prev_place.matched_by != place.matched_by && place.known {
             if place.foreground_rule {
-                eprintln!(
+                info!(
                     "hud: the game's window is on {} (matched by {}, class {:?})",
                     place.monitor, place.matched_by, place.class
                 );
             } else {
-                eprintln!(
+                info!(
                     "hud: the game's window is on {} workspace {} (matched by {}, class {:?})",
                     place.monitor, place.workspace_name, place.matched_by, place.class
                 );
@@ -265,14 +266,14 @@ impl Watcher {
             return;
         }
         match (next.visible, prev.visible) {
-            (true, false) => eprintln!("hud: showing"),
-            (false, true) => eprintln!("hud: hiding - {}", next.reason),
+            (true, false) => info!("hud: showing"),
+            (false, true) => info!("hud: hiding - {}", next.reason),
             (false, false) if prev.reason != next.reason => {
-                eprintln!("hud: still hidden - {}", next.reason);
+                info!("hud: still hidden - {}", next.reason);
             }
             _ => {}
         }
-        if let Some(f) = self.on_change.lock().unwrap().clone() {
+        if let Some(f) = lock(&self.on_change).clone() {
             f(next);
         }
     }
@@ -288,6 +289,7 @@ pub fn spawn(watcher: Arc<Watcher>, stop: Arc<AtomicBool>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use crate::game::desktop::Placement;
     use chrono::Utc;
     use std::sync::mpsc;
@@ -470,11 +472,8 @@ mod tests {
 
     fn test_visibility(q: Arc<dyn Querier>) -> (Arc<Watcher>, Arc<game::Watcher>) {
         let game = game::Watcher::new("DeadFrontier.exe", Duration::from_secs(3600));
-        let cfg = Config::default();
-        (
-            Watcher::new(game.clone(), Arc::new(Mutex::new(cfg)), Some(q)),
-            game,
-        )
+        let cfg = config::Shared::new(Config::default());
+        (Watcher::new(game.clone(), cfg, Some(q)), game)
     }
 
     #[test]
@@ -679,7 +678,7 @@ mod tests {
             ..Placement::default()
         });
         let game = game::Watcher::new("DeadFrontier.exe", Duration::from_secs(3600));
-        let cfg = Arc::new(Mutex::new(Config::default()));
+        let cfg = config::Shared::new(Config::default());
         let w = Watcher::new(game.clone(), cfg.clone(), Some(q));
         game.set_state_for_testing(GameState {
             running: true,
@@ -689,7 +688,7 @@ mod tests {
 
         w.refresh();
         assert!(w.state().visible);
-        cfg.lock().unwrap().hud.enabled = false;
+        cfg.update(|c| c.hud.enabled = false);
         w.refresh();
         let state = w.state();
         assert!(
@@ -701,15 +700,15 @@ mod tests {
             "config must not overwrite the manual preference"
         );
 
-        cfg.lock().unwrap().hud.enabled = true;
+        cfg.update(|c| c.hud.enabled = true);
         w.refresh();
         assert!(w.state().visible);
 
         w.set_enabled(false);
         w.refresh();
-        cfg.lock().unwrap().hud.enabled = false;
+        cfg.update(|c| c.hud.enabled = false);
         w.refresh();
-        cfg.lock().unwrap().hud.enabled = true;
+        cfg.update(|c| c.hud.enabled = true);
         w.refresh();
         assert!(!w.state().visible);
         assert!(!w.enabled());

@@ -2,6 +2,8 @@
 //! Hyprland talks to the Unix socket, not the `hyprctl` binary.
 
 #[cfg(any(test, target_os = "linux"))]
+use crate::wake::lock;
+#[cfg(any(test, target_os = "linux"))]
 use serde::Deserialize;
 #[cfg(unix)]
 use std::path::Path;
@@ -247,7 +249,7 @@ static HYPR_DIRS_OVERRIDE: Mutex<Option<Vec<PathBuf>>> = Mutex::new(None);
 
 #[cfg(test)]
 pub fn set_hypr_dirs_for_testing(dirs: Option<Vec<PathBuf>>) {
-    *HYPR_DIRS_OVERRIDE.lock().unwrap() = dirs;
+    *lock(&HYPR_DIRS_OVERRIDE) = dirs;
 }
 
 #[cfg(any(test, target_os = "linux"))]
@@ -258,12 +260,12 @@ static HYPR_SIG_OVERRIDE: Mutex<Option<String>> = Mutex::new(None);
 /// makes that unsafe, correctly.
 #[cfg(test)]
 pub fn set_hypr_signature_for_testing(sig: Option<&str>) {
-    *HYPR_SIG_OVERRIDE.lock().unwrap() = sig.map(str::to_owned);
+    *lock(&HYPR_SIG_OVERRIDE) = sig.map(str::to_owned);
 }
 
 #[cfg(any(test, target_os = "linux"))]
 fn hypr_signature() -> Option<String> {
-    if let Some(sig) = HYPR_SIG_OVERRIDE.lock().unwrap().clone() {
+    if let Some(sig) = lock(&HYPR_SIG_OVERRIDE).clone() {
         return Some(sig);
     }
     std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()
@@ -271,7 +273,7 @@ fn hypr_signature() -> Option<String> {
 
 #[cfg(any(test, target_os = "linux"))]
 fn hypr_dirs() -> Vec<PathBuf> {
-    if let Some(dirs) = HYPR_DIRS_OVERRIDE.lock().unwrap().clone() {
+    if let Some(dirs) = lock(&HYPR_DIRS_OVERRIDE).clone() {
         return dirs;
     }
     let mut dirs = Vec::new();
@@ -383,7 +385,7 @@ pub fn watch_events(
         let path = match hypr_socket_path(".socket2.sock") {
             Ok(path) => path,
             Err(e) => {
-                eprintln!("game: no Hyprland event stream ({e}); retrying in {backoff:?}");
+                warn!("game: no Hyprland event stream ({e}); retrying in {backoff:?}");
                 std::thread::sleep(backoff);
                 if backoff < std::time::Duration::from_secs(30) {
                     backoff *= 2;
@@ -398,7 +400,7 @@ pub fn watch_events(
                 if stop.load(std::sync::atomic::Ordering::SeqCst) {
                     return;
                 }
-                eprintln!("game: Hyprland event stream ended ({e}); retrying in {backoff:?}");
+                warn!("game: Hyprland event stream ended ({e}); retrying in {backoff:?}");
             }
         }
         if stop.load(std::sync::atomic::Ordering::SeqCst) {
@@ -460,6 +462,14 @@ fn dispatch_hypr_event(
     }
 }
 
+/// The focused top-level window, or null when the desktop has none.
+#[cfg(windows)]
+pub fn foreground_window() -> windows_sys::Win32::Foundation::HWND {
+    // SAFETY: no arguments; returns a handle we only compare or pass to
+    // functions that accept any HWND value.
+    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() }
+}
+
 #[cfg(windows)]
 pub fn watch_events(
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -467,11 +477,10 @@ pub fn watch_events(
     on_place: impl Fn(),
     on_focus: impl Fn(),
 ) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-    let mut last = unsafe { GetForegroundWindow() };
+    let mut last = foreground_window();
     while !stop.load(std::sync::atomic::Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(200));
-        let next = unsafe { GetForegroundWindow() };
+        let next = foreground_window();
         if next != last {
             last = next;
             on_game();
@@ -717,27 +726,28 @@ pub struct Win32Client;
 impl Client for Win32Client {
     fn game_window(&self, pid: i32, m: &Match) -> Result<Placement, String> {
         let list = enumerate_windows()?;
-        let fg = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+        let fg = foreground_window();
         Ok(find_windows_game_window(&list, fg as usize, pid, m))
     }
 
     fn send_key(&self, key: &str, address: &str) -> Result<(), String> {
         let hwnd = parse_windows_address(address)?;
-        unsafe {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow};
-            if IsWindow(hwnd) == 0 {
-                return Err(format!(
-                    "windows: target window {address:?} no longer exists"
-                ));
-            }
-            if GetForegroundWindow() != hwnd {
-                return Err(format!(
-                    "windows: target window {address:?} is not in the foreground"
-                ));
-            }
+        // SAFETY: `hwnd` is a number parsed from the bridge request; IsWindow
+        // is defined for any value (it reports whether one is a live window).
+        if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsWindow(hwnd) } == 0 {
+            return Err(format!(
+                "windows: target window {address:?} no longer exists"
+            ));
+        }
+        if foreground_window() != hwnd {
+            return Err(format!(
+                "windows: target window {address:?} is not in the foreground"
+            ));
         }
         let vk = windows_virtual_key(key)
             .ok_or_else(|| format!("windows: unsupported key name {key:?}"))?;
+        // SAFETY: plain integer arguments; synthesises a key press and release
+        // into this session's input queue.
         unsafe {
             windows_sys::Win32::UI::Input::KeyboardAndMouse::keybd_event(vk as u8, 0, 0, 0);
             windows_sys::Win32::UI::Input::KeyboardAndMouse::keybd_event(
@@ -751,7 +761,7 @@ impl Client for Win32Client {
     }
 
     fn active_address(&self) -> Option<String> {
-        let hwnd = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+        let hwnd = foreground_window();
         if hwnd.is_null() {
             None
         } else {
@@ -780,12 +790,17 @@ fn windows_monitor_name(hwnd: windows_sys::Win32::Foundation::HWND) -> String {
         GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromWindow,
     };
 
+    // SAFETY: `hwnd` came from EnumWindows moments ago; MonitorFromWindow
+    // accepts any HWND and DEFAULTTONEAREST covers a window gone since.
     let hmon = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
     if hmon.is_null() {
         return String::new();
     }
-    let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+    let mut info = MONITORINFOEXW::default();
     info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+    // SAFETY: `hmon` is non-null from the call above; `cbSize` tells
+    // GetMonitorInfoW that `info` is the extended struct (with `szDevice`), so
+    // the MONITORINFO* cast is the documented way to receive it.
     if unsafe { GetMonitorInfoW(hmon, &mut info as *mut _ as *mut _) } == 0 {
         return String::new();
     }
@@ -810,6 +825,10 @@ fn enumerate_windows() -> Result<Vec<WinWindow>, String> {
         windows: Vec<WinWindow>,
     }
     unsafe extern "system" fn cb(hwnd: HWND, lp: LPARAM) -> BOOL {
+        // SAFETY: `lp` is the `&mut State` that `enumerate_windows` passed to
+        // EnumWindows, which calls back synchronously on this thread, so the
+        // borrow is live and unaliased; `hwnd` is the window being enumerated;
+        // every buffer is passed with the length it really has.
         unsafe {
             let state = &mut *(lp as *mut State);
             if IsWindowVisible(hwnd) == 0 {
@@ -854,10 +873,10 @@ fn enumerate_windows() -> Result<Vec<WinWindow>, String> {
     let mut state = State {
         windows: Vec::new(),
     };
-    unsafe {
-        if EnumWindows(Some(cb), &mut state as *mut State as LPARAM) == 0 {
-            return Err("EnumWindows failed".into());
-        }
+    // SAFETY: `cb` only dereferences `lp` as the `State` it is, and
+    // EnumWindows returns before `state` goes out of scope.
+    if unsafe { EnumWindows(Some(cb), &mut state as *mut State as LPARAM) } == 0 {
+        return Err("EnumWindows failed".into());
     }
     Ok(state.windows)
 }

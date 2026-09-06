@@ -28,20 +28,20 @@ pub enum Status {
     Failed,
 }
 
-pub fn check(current: &str) -> Result<Check, String> {
-    check_at(LATEST_URL, current)
+/// One HEAD over the shared agent. Timeout and redirect handling are set on
+/// the request, so the agent's own defaults do not matter.
+pub fn check_with(agent: &ureq::Agent, current: &str) -> Result<Check, String> {
+    check_at(agent, LATEST_URL, current)
 }
 
-fn check_at(url: &str, current: &str) -> Result<Check, String> {
-    let agent = ureq::Agent::new_with_config(
-        ureq::Agent::config_builder()
-            .timeout_global(Some(TIMEOUT))
-            .http_status_as_error(false)
-            .max_redirects(0)
-            .build(),
-    );
+fn check_at(agent: &ureq::Agent, url: &str, current: &str) -> Result<Check, String> {
     let resp = agent
         .head(url)
+        .config()
+        .timeout_global(Some(TIMEOUT))
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .build()
         .header("User-Agent", format!("df-hud/{current}"))
         .call()
         .map_err(|e| e.to_string())?;
@@ -62,14 +62,14 @@ fn check_at(url: &str, current: &str) -> Result<Check, String> {
 pub fn open_release_page() {
     #[cfg(windows)]
     if let Err(err) = super::autostart::open_file(std::path::Path::new(LATEST_URL)) {
-        eprintln!("updates: could not open the release page: {err}");
+        warn!("updates: could not open the release page: {err}");
     }
     #[cfg(not(windows))]
     if let Err(err) = std::process::Command::new("xdg-open")
         .arg(LATEST_URL)
         .spawn()
     {
-        eprintln!("updates: could not open the release page: {err}");
+        warn!("updates: could not open the release page: {err}");
     }
 }
 
@@ -130,6 +130,10 @@ mod tests {
             !newer("0.4.10", "v0.5.0"),
             "tag_version strips the v, not this"
         );
+    }
+
+    fn check_at(url: &str, current: &str) -> Result<Check, String> {
+        super::check_at(&ureq::Agent::new_with_defaults(), url, current)
     }
 
     fn serve_once(status_line: &str, location: Option<&str>) -> String {

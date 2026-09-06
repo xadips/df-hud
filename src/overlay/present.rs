@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::app::groups::Groups;
+use crate::app::groups::{Group, Groups};
 use crate::config::{Config, MasteriesWidget};
 use crate::data::bossmap::{self, MarkCategory};
 use crate::data::citymap;
@@ -11,7 +11,7 @@ use crate::model::{
     Challenge, CityEvent, CityEventKind, CityMark, Mastery, View as ModelView, XpStability,
 };
 use crate::overlay::layout::Viewport;
-use crate::overlay::scene::{self, Line, MapCell, MapMarker, MapView, TextRun, View};
+use crate::overlay::scene::{self, Line, MapCell, MapMarker, MapView, MapWindow, TextRun, View};
 
 const BOARD_GAP_PX: f32 = 6.0;
 const DONE_RGB: [f32; 4] = [
@@ -169,36 +169,36 @@ pub fn from_view(v: &ModelView, cfg: &Config, groups: &Groups) -> View {
         },
         ..View::default()
     };
-    if !groups.hidden("session")
+    if groups.shown(Group::Session)
         && let Some(text) = session_line(v, cfg)
     {
         out.clock = text;
     }
-    if !groups.hidden("xp")
+    if groups.shown(Group::Xp)
         && let Some((text, color)) = xp_line(v, cfg)
     {
         out.xp = text;
         out.xp_color = color;
     }
-    if !groups.hidden("block")
+    if groups.shown(Group::Block)
         && let Some((head, sub)) = block_lines(v, cfg)
     {
         out.block = head;
         out.block_sub = sub;
     }
-    if !groups.hidden("challenges") {
+    if groups.shown(Group::Challenges) {
         out.challenges = challenge_lines(v, cfg);
     }
-    if !groups.hidden("masteries") {
+    if groups.shown(Group::Masteries) {
         out.masteries = mastery_lines(v, cfg);
     }
-    if !groups.hidden("bosses") {
+    if groups.shown(Group::Bosses) {
         out.bosses = boss_lines(v, cfg);
     }
-    if !groups.hidden("keybinds") && cfg.widget.keybinds.enabled {
+    if groups.shown(Group::Keybinds) && cfg.widget.keybinds.enabled {
         out.keybinds = keybind_lines(cfg);
     }
-    if !groups.hidden("map") && cfg.widget.map.enabled && v.has_position && !in_onslaught(v) {
+    if groups.shown(Group::Map) && cfg.widget.map.enabled && v.has_position && !in_onslaught(v) {
         out.map = map_view(v, cfg);
     }
     out
@@ -877,7 +877,11 @@ fn challenge_rows(c: &Challenge, now: DateTime<Utc>, cfg: &Config) -> Vec<Challe
     for o in &c.objectives {
         rows.push(ChallengeRow {
             objective: o.name.clone(),
-            progress: format!("{}/{}", format::int(o.score), format::int(o.target)),
+            progress: format!(
+                "{}/{}",
+                format::int(o.score.unwrap_or(0)),
+                format::int(o.target)
+            ),
             done: o.done(),
             urgent: urgent && !o.done(),
             sub: true,
@@ -991,11 +995,12 @@ fn mastery_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
 
 fn map_view(v: &ModelView, cfg: &Config) -> MapView {
     let city = citymap::default();
-    let radius = cfg.widget.map.radius;
-    let (origin_x, origin_y, w, h) = map_window(v, city, radius);
+    let standing = (v.has_position && city.is_block(v.position_x, v.position_y))
+        .then_some((v.position_x, v.position_y));
+    let window = map_window(city, standing, cfg.widget.map.radius);
     let mut cells = Vec::new();
-    for y in origin_y..origin_y + h {
-        for x in origin_x..origin_x + w {
+    for y in window.y..window.y + window.h {
+        for x in window.x..window.x + window.w {
             if !city.is_block(x, y) {
                 continue;
             }
@@ -1015,10 +1020,7 @@ fn map_view(v: &ModelView, cfg: &Config) -> MapView {
     }
     let mut markers = Vec::new();
     for o in citymap::outposts() {
-        if o.x >= origin_x
-            && o.x < origin_x + w
-            && o.y >= origin_y
-            && o.y < origin_y + h
+        if window.contains(o.x, o.y)
             && let Some(letter) = outpost_letter(o.name)
         {
             let outpost = [0.75, 1.0, 0.75, 1.0];
@@ -1036,13 +1038,7 @@ fn map_view(v: &ModelView, cfg: &Config) -> MapView {
     if let Some(marks) = &v.city_marks {
         let visible: Vec<&CityMark> = marks
             .iter()
-            .filter(|m| {
-                m.off_map
-                    || (m.x >= origin_x
-                        && m.x < origin_x + w
-                        && m.y >= origin_y
-                        && m.y < origin_y + h)
-            })
+            .filter(|m| m.off_map || window.contains(m.x, m.y))
             .collect();
         for m in &visible {
             markers.push(MapMarker {
@@ -1061,6 +1057,7 @@ fn map_view(v: &ModelView, cfg: &Config) -> MapView {
     MapView {
         player_x: v.position_x,
         player_y: v.position_y,
+        window,
         cells,
         markers,
         dividers_x: city.dividers_x.clone(),
@@ -1069,23 +1066,35 @@ fn map_view(v: &ModelView, cfg: &Config) -> MapView {
     }
 }
 
-fn map_window(v: &ModelView, city: &citymap::Map, radius: i32) -> (i32, i32, i32, i32) {
-    if radius <= 0 || !v.has_position || !city.is_block(v.position_x, v.position_y) {
-        return (city.origin_x, city.origin_y, city.width, city.height);
-    }
+/// `radius` blocks around the standing cell, clamped inside the city. The
+/// whole city when there is no radius, the player is off the grid, or the
+/// window would not be smaller than the city anyway.
+fn map_window(city: &citymap::Map, standing: Option<(i32, i32)>, radius: i32) -> MapWindow {
+    let whole = MapWindow {
+        x: city.origin_x,
+        y: city.origin_y,
+        w: city.width,
+        h: city.height,
+    };
+    let Some((px, py)) = standing.filter(|_| radius > 0) else {
+        return whole;
+    };
     let side = 2 * radius + 1;
     if side >= city.width && side >= city.height {
-        return (city.origin_x, city.origin_y, city.width, city.height);
+        return whole;
     }
     let w = side.min(city.width);
     let h = side.min(city.height);
-    let x = (v.position_x - radius)
-        .max(city.origin_x)
-        .min(city.origin_x + city.width - w);
-    let y = (v.position_y - radius)
-        .max(city.origin_y)
-        .min(city.origin_y + city.height - h);
-    (x, y, w, h)
+    MapWindow {
+        x: (px - radius)
+            .max(city.origin_x)
+            .min(city.origin_x + city.width - w),
+        y: (py - radius)
+            .max(city.origin_y)
+            .min(city.origin_y + city.height - h),
+        w,
+        h,
+    }
 }
 
 fn outpost_letter(name: &str) -> Option<&'static str> {
@@ -1346,8 +1355,7 @@ mod tests {
                 objectives: vec![Objective {
                     name: "Kill Regular Infected".into(),
                     target: 100,
-                    score: 55,
-                    has_score: true,
+                    score: Some(55),
                 }],
                 ..Challenge::default()
             },
@@ -1358,8 +1366,7 @@ mod tests {
                 objectives: vec![Objective {
                     name: "Loot Anything".into(),
                     target: 10,
-                    score: 10,
-                    has_score: true,
+                    score: Some(10),
                 }],
                 ..Challenge::default()
             },
@@ -1379,8 +1386,7 @@ mod tests {
                 objectives: vec![Objective {
                     name: "Kill Dogs".into(),
                     target: 100,
-                    score: 95,
-                    has_score: true,
+                    score: Some(95),
                 }],
                 ..Challenge::default()
             },
@@ -1390,8 +1396,7 @@ mod tests {
                 objectives: vec![Objective {
                     name: "Kill Anything".into(),
                     target: 10,
-                    score: 10,
-                    has_score: true,
+                    score: Some(10),
                 }],
                 ..Challenge::default()
             },
@@ -1402,8 +1407,7 @@ mod tests {
                 objectives: vec![Objective {
                     name: "Kill Infected".into(),
                     target: 162401,
-                    score: 159487,
-                    has_score: true,
+                    score: Some(159487),
                 }],
                 ..Challenge::default()
             },
@@ -1534,7 +1538,7 @@ mod tests {
                 "U - XP/hr",
             ]
         );
-        assert!(g.toggle("keybinds").unwrap());
+        assert!(g.toggle(Group::Keybinds));
         assert!(
             from_view(&ModelView::default(), &cfg, &g)
                 .keybinds
@@ -1557,7 +1561,7 @@ mod tests {
         };
         let cfg = Config::default();
         let g = Groups::new();
-        assert!(!g.toggle("map").unwrap());
+        assert!(!g.toggle(Group::Map));
         let s = from_view(&v, &cfg, &g);
         assert!(s.map.cells.is_empty());
         assert!(s.map.markers.is_empty());
@@ -1736,8 +1740,7 @@ mod tests {
             objectives: vec![Objective {
                 name: "Kill Infected".into(),
                 target: 162401,
-                score: 162423,
-                has_score: true,
+                score: Some(162423),
             }],
             ..Challenge::default()
         };
@@ -1800,8 +1803,7 @@ mod tests {
             objectives: vec![Objective {
                 name: "Loot Anything".into(),
                 target: 10,
-                score: 10,
-                has_score: true,
+                score: Some(10),
             }],
             ..Challenge::default()
         };
@@ -1814,8 +1816,7 @@ mod tests {
             objectives: vec![Objective {
                 name: "Loot Food".into(),
                 target: 25,
-                score: 8,
-                has_score: true,
+                score: Some(8),
             }],
             ..Challenge::default()
         };
@@ -1829,8 +1830,7 @@ mod tests {
             objectives: vec![Objective {
                 name: "Kill Dog Infected".into(),
                 target: 1000,
-                score: 316,
-                has_score: true,
+                score: Some(316),
             }],
             ..Challenge::default()
         };
@@ -1842,8 +1842,7 @@ mod tests {
             objectives: vec![Objective {
                 name: "Kill Anything".into(),
                 target: 5,
-                score: 5,
-                has_score: true,
+                score: Some(5),
             }],
             ..Challenge::default()
         };
@@ -1866,8 +1865,7 @@ mod tests {
             objectives: vec![Objective {
                 name: "Loot Anything".into(),
                 target: 100,
-                score: 4,
-                has_score: true,
+                score: Some(4),
             }],
             ..Challenge::default()
         });
@@ -1964,8 +1962,7 @@ mod tests {
                     objectives: vec![Objective {
                         name: "Kill Any Boss".into(),
                         target: 7,
-                        score: 2,
-                        has_score: true,
+                        score: Some(2),
                     }],
                     ..Challenge::default()
                 },
@@ -1976,8 +1973,7 @@ mod tests {
                     objectives: vec![Objective {
                         name: "Loot Anything".into(),
                         target: 10,
-                        score: 10,
-                        has_score: true,
+                        score: Some(10),
                     }],
                     ..Challenge::default()
                 },
@@ -2205,7 +2201,7 @@ mod tests {
         let cfg = masteries_on();
         let g = Groups::new();
         assert!(!from_view(&v, &cfg, &g).masteries.is_empty());
-        assert!(g.toggle("masteries").unwrap());
+        assert!(g.toggle(Group::Masteries));
         assert!(from_view(&v, &cfg, &g).masteries.is_empty());
     }
 
@@ -2430,6 +2426,46 @@ mod tests {
         assert_ne!(mark_color(&boss)[0], mark_color(&mission)[0]);
         assert!(mark_color(&mission)[0] > 0.9 && mark_color(&mission)[1] < 0.4);
         assert!(mark_color(&boss)[2] > 0.6);
+    }
+
+    #[test]
+    fn map_window_clamps_around_the_standing_block() {
+        let city = citymap::default();
+        let whole = MapWindow {
+            x: city.origin_x,
+            y: city.origin_y,
+            w: city.width,
+            h: city.height,
+        };
+        let standing = (city.origin_x..city.origin_x + city.width)
+            .flat_map(|x| (city.origin_y..city.origin_y + city.height).map(move |y| (x, y)))
+            .find(|&(x, y)| city.is_block(x, y))
+            .expect("the city has a block");
+        assert_eq!(map_window(city, None, 8), whole, "off the grid");
+        assert_eq!(map_window(city, Some(standing), 0), whole, "no radius");
+        assert_eq!(
+            map_window(city, Some(standing), 10_000),
+            whole,
+            "radius covers the city"
+        );
+
+        let win = map_window(city, Some(standing), 8);
+        assert_eq!((win.w, win.h), (17, 17));
+        assert!(win.contains(standing.0, standing.1));
+        assert!(win.x >= city.origin_x && win.x + win.w <= city.origin_x + city.width);
+        assert!(win.y >= city.origin_y && win.y + win.h <= city.origin_y + city.height);
+
+        let v = ModelView {
+            have_data: true,
+            has_position: true,
+            position_x: standing.0,
+            position_y: standing.1,
+            ..ModelView::default()
+        };
+        let mv = map_view(&v, &Config::default());
+        assert_eq!(mv.window, win);
+        assert!(mv.cells.iter().all(|c| win.contains(c.x, c.y)));
+        assert!(mv.markers.iter().all(|m| win.contains(m.x, m.y)));
     }
 
     #[test]
@@ -2808,7 +2844,7 @@ mod tests {
     fn map_is_hidden_in_onslaught() {
         let cfg = Config::default();
         let g = Groups::new();
-        assert!(!g.toggle("map").unwrap());
+        assert!(!g.toggle(Group::Map));
         let onslaught = ModelView {
             city_marks: Some(vec![mark(
                 "z",

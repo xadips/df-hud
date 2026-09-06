@@ -1,12 +1,15 @@
 //! Allowlisted Dead Frontier HTTP client. Wire format is the game's own:
 //! unescaped `k=v&k=v` and Flash `&k=v` replies. Write endpoints are unreachable.
 
+use crate::wake::lock;
 use md5::{Digest, Md5};
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(test)]
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use crate::net::creds::redact;
 
 const GET_VALUES: &str = "get_values";
 const LOAD_CHALLENGE: &str = "hotrods/load_challenge";
@@ -14,11 +17,26 @@ const LOAD_MASTERIES: &str = "hotrods/load_masteries";
 
 const FORBIDDEN: &[&str] = &["hunger", "itemspawn", "modify_values"];
 
-#[derive(Clone, Debug)]
+/// How long a "no public record" verdict stands before the credential-free
+/// probe is tried again. Bounds the cost of a wrong `df.user_id` or a public
+/// endpoint that came back: one extra GET per hour, not one per poll.
+const PUBLIC_RETRY: Duration = Duration::from_secs(60 * 60);
+
+#[derive(Clone)]
 pub struct Credentials {
     pub user_id: String,
     pub password: String,
     pub sc: String,
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("user_id", &self.user_id)
+            .field("password", &redact(&self.password))
+            .field("sc", &redact(&self.sc))
+            .finish()
+    }
 }
 
 /// Split by what the caller does: `Stale` pauses the pollers until the bridge
@@ -169,13 +187,40 @@ fn allowed(endpoint: &str) -> bool {
     endpoint == GET_VALUES || endpoint == LOAD_CHALLENGE || endpoint == LOAD_MASTERIES
 }
 
+fn prefixed(err: Error, call: &str) -> Error {
+    match err {
+        Error::Other(msg) => Error::Other(format!("{call}: {msg}")),
+        stale => stale,
+    }
+}
+
+/// What the credential-free `get_values` GET came back with.
+enum Probe {
+    Record(Vars),
+    /// The server answered and there is nothing public behind this id (an
+    /// empty or `status=` reply, a 404). Asking again next poll will not
+    /// change that, so the caller latches onto authenticated calls.
+    NoRecord(Error),
+    /// Transport, Cloudflare, a 5xx: no verdict either way. Worth asking again.
+    Unavailable(Error),
+}
+
+/// Cheap to clone: the agent is a handle onto a shared pool and the
+/// public-probe latch is shared, so a clone taken out of a mutex sees the
+/// same state as the original.
+#[derive(Clone)]
 pub struct Client {
     agent: ureq::Agent,
     pub base_url: String,
     pub user_agent: String,
     pub max_body: u64,
     pub cookie: String,
-    public_failed: AtomicBool,
+    /// Set once the credential-free probe came back [`Probe::NoRecord`];
+    /// `get_values` then goes straight to the authenticated POST.
+    public_failed: Arc<AtomicBool>,
+    /// When `public_failed` was set, so a stale verdict can be retried.
+    public_failed_at: Arc<Mutex<Option<Instant>>>,
+    public_retry: Duration,
 }
 
 impl Client {
@@ -200,13 +245,40 @@ impl Client {
             user_agent: user_agent.to_string(),
             max_body: 8 << 20,
             cookie: String::new(),
-            public_failed: AtomicBool::new(false),
+            public_failed: Arc::new(AtomicBool::new(false)),
+            public_failed_at: Arc::new(Mutex::new(None)),
+            public_retry: PUBLIC_RETRY,
         }
     }
 
+    /// Never probe: stays latched for good since no time is recorded.
     #[cfg(test)]
     pub fn disable_public_get_values(&self) {
         self.public_failed.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    fn set_public_retry(&mut self, retry: Duration) {
+        self.public_retry = retry;
+    }
+
+    fn latch_public(&self) {
+        *lock(&self.public_failed_at) = Some(Instant::now());
+        self.public_failed.store(true, Ordering::SeqCst);
+    }
+
+    /// Called after an authenticated poll succeeded: once the verdict is
+    /// `public_retry` old the next poll probes again, in case the public
+    /// record came back or `df.user_id` was fixed.
+    fn expire_public_latch(&self) {
+        if !self.public_failed.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut at = lock(&self.public_failed_at);
+        if at.is_some_and(|t| t.elapsed() >= self.public_retry) {
+            *at = None;
+            self.public_failed.store(false, Ordering::SeqCst);
+        }
     }
 
     fn call(
@@ -247,11 +319,12 @@ impl Client {
         self.read_flash(resp, endpoint)
     }
 
-    fn read_flash(
+    /// Status, size and HTML checks shared by every call; the body as text.
+    fn read_text(
         &self,
         resp: ureq::http::Response<ureq::Body>,
         call: &str,
-    ) -> Result<Vars, Error> {
+    ) -> Result<String, Error> {
         if resp.status() != 200 {
             return Err(Error::Other(format!("{call}: HTTP {}", resp.status())));
         }
@@ -261,29 +334,35 @@ impl Client {
             .take(self.max_body)
             .read_to_end(&mut raw)
             .map_err(|e| Error::Other(format!("{call}: {e}")))?;
-        let text = String::from_utf8_lossy(&raw).into_owned();
+        let text = String::from_utf8(raw)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
         if looks_like_html(&text) {
             return Err(Error::Other(format!(
                 "{call}: got an HTML page instead of data{}",
                 describe_html(&text)
             )));
         }
-        parse_flash(&text).map_err(|err| match err {
-            Error::Other(msg) => Error::Other(format!("{call}: {msg}")),
-            stale => stale,
-        })
+        Ok(text)
+    }
+
+    fn read_flash(
+        &self,
+        resp: ureq::http::Response<ureq::Body>,
+        call: &str,
+    ) -> Result<Vars, Error> {
+        let text = self.read_text(resp, call)?;
+        parse_flash(&text).map_err(|err| prefixed(err, call))
     }
 
     pub fn get_values(&self, cr: &Credentials) -> Result<Vars, Error> {
         if !self.public_failed.load(Ordering::SeqCst) {
-            match self.fetch_public(&cr.user_id) {
-                Ok(vars) if record_looks_real(&vars) => return Ok(vars),
-                Ok(_) | Err(_) => {
-                    self.public_failed.store(true, Ordering::SeqCst);
-                }
+            match self.probe_public(&cr.user_id) {
+                Probe::Record(vars) => return Ok(vars),
+                Probe::NoRecord(_) => self.latch_public(),
+                Probe::Unavailable(_) => {}
             }
         }
-        self.call(
+        let vars = self.call(
             GET_VALUES,
             &[
                 Param {
@@ -301,7 +380,9 @@ impl Client {
             ],
             false,
             "",
-        )
+        )?;
+        self.expire_public_latch();
+        Ok(vars)
     }
 
     /// `get_values` for a bare account id, with no session behind it. This is
@@ -313,27 +394,39 @@ impl Client {
     /// failure and the next poll should try again. An empty record is an error
     /// rather than a blank HUD, since the usual cause is a wrong `df.user_id`.
     pub fn get_values_public(&self, user_id: &str) -> Result<Vars, Error> {
-        let vars = self.fetch_public(user_id)?;
-        if !record_looks_real(&vars) {
-            return Err(Error::Other(format!(
-                "{GET_VALUES}: no public record for user id {user_id:?}; check df.user_id"
-            )));
+        match self.probe_public(user_id) {
+            Probe::Record(vars) => Ok(vars),
+            Probe::NoRecord(err) | Probe::Unavailable(err) => Err(err),
         }
-        Ok(vars)
     }
 
-    fn fetch_public(&self, user_id: &str) -> Result<Vars, Error> {
+    fn probe_public(&self, user_id: &str) -> Probe {
         if !numeric_id(user_id) {
-            return Err(Error::Other(format!("{user_id:?} is not a user id")));
+            return Probe::NoRecord(Error::Other(format!("{user_id:?} is not a user id")));
         }
         let url = format!("{}/{GET_VALUES}.php?userID={user_id}", self.base_url);
-        let resp = self
+        let resp = match self
             .agent
             .get(&url)
             .header("User-Agent", &self.user_agent)
             .call()
-            .map_err(|e| Error::Other(format!("{GET_VALUES}: {e}")))?;
-        self.read_flash(resp, GET_VALUES)
+        {
+            Ok(resp) => resp,
+            Err(e) => return Probe::Unavailable(Error::Other(format!("{GET_VALUES}: {e}"))),
+        };
+        let gone = matches!(resp.status().as_u16(), 404 | 410);
+        let text = match self.read_text(resp, GET_VALUES) {
+            Ok(text) => text,
+            Err(err) if gone => return Probe::NoRecord(err),
+            Err(err) => return Probe::Unavailable(err),
+        };
+        match parse_flash(&text) {
+            Ok(vars) if record_looks_real(&vars) => Probe::Record(vars),
+            Ok(_) => Probe::NoRecord(Error::Other(format!(
+                "{GET_VALUES}: no public record for user id {user_id:?}; check df.user_id"
+            ))),
+            Err(err) => Probe::NoRecord(prefixed(err, GET_VALUES)),
+        }
     }
 
     pub fn load_challenge(&self, cr: &Credentials, salt: &str) -> Result<Vars, Error> {
@@ -378,7 +471,6 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
-    use std::sync::{Arc, Mutex};
     use std::thread;
 
     const TEST_SALT: &str = "y27bigaOAA1";
@@ -805,5 +897,83 @@ mod tests {
         }
         assert_eq!(*gets.lock().unwrap(), 1);
         assert_eq!(*posts.lock().unwrap(), 5);
+    }
+
+    #[test]
+    fn transport_trouble_does_not_latch_the_public_probe() {
+        let gets = Arc::new(Mutex::new(0u32));
+        let posts = Arc::new(Mutex::new(0u32));
+        let g = gets.clone();
+        let p = posts.clone();
+        let (base, _) = spawn(move |hit| {
+            if hit.method == "GET" {
+                let mut n = g.lock().unwrap();
+                *n += 1;
+                match *n {
+                    1 => (503, "busy".into()),
+                    2 => (200, "<!DOCTYPE html><title>Just a moment...</title>".into()),
+                    _ => (200, "&id_member=1&df_level=415".into()),
+                }
+            } else {
+                *p.lock().unwrap() += 1;
+                (200, "&id_member=1&df_level=415".into())
+            }
+        });
+        let c = Client::new(&base, "df-hud/test");
+        let cr = Credentials {
+            user_id: "1".into(),
+            password: "p".into(),
+            sc: "s".into(),
+        };
+        for _ in 0..3 {
+            c.get_values(&cr).unwrap();
+        }
+        assert_eq!(*gets.lock().unwrap(), 3, "every poll probed again");
+        assert_eq!(
+            *posts.lock().unwrap(),
+            2,
+            "only the failed probes fell back"
+        );
+    }
+
+    #[test]
+    fn public_probe_is_retried_once_the_verdict_is_old() {
+        let gets = Arc::new(Mutex::new(0u32));
+        let posts = Arc::new(Mutex::new(0u32));
+        let g = gets.clone();
+        let p = posts.clone();
+        let (base, _) = spawn(move |hit| {
+            if hit.method == "GET" {
+                let mut n = g.lock().unwrap();
+                *n += 1;
+                if *n == 1 {
+                    (200, "&something=else".into())
+                } else {
+                    (200, "&id_member=1&df_level=415".into())
+                }
+            } else {
+                *p.lock().unwrap() += 1;
+                (200, "&id_member=1&df_level=415".into())
+            }
+        });
+        let mut c = Client::new(&base, "df-hud/test");
+        let cr = Credentials {
+            user_id: "1".into(),
+            password: "p".into(),
+            sc: "s".into(),
+        };
+        let counts = || (*gets.lock().unwrap(), *posts.lock().unwrap());
+        c.get_values(&cr).unwrap();
+        c.get_values(&cr).unwrap();
+        assert_eq!(counts(), (1, 2), "no record: latched after one probe");
+        c.set_public_retry(Duration::ZERO);
+        c.get_values(&cr).unwrap();
+        assert_eq!(
+            counts(),
+            (1, 3),
+            "the poll that finds the verdict old still POSTs"
+        );
+        c.get_values(&cr).unwrap();
+        assert_eq!(counts(), (2, 3), "then the probe is tried again");
     }
 }

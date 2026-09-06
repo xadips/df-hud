@@ -1,8 +1,10 @@
 //! Single source of HUD truth. Poller writes snapshots in; UI calls Derive.
 
+use crate::wake::lock;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,11 +32,11 @@ pub fn parse_snapshot(
         at,
         ..Snapshot::default()
     };
-    s.level = int_var(vars, "df_level").unwrap_or(0);
-    s.exp_in_level = int64_var(vars, "df_exp").unwrap_or(0);
-    s.free_points = int_var(vars, "df_freepoints").unwrap_or(0);
+    s.level = num_var(vars, "df_level").unwrap_or(0);
+    s.exp_in_level = num_var(vars, "df_exp").unwrap_or(0);
+    s.free_points = num_var(vars, "df_freepoints").unwrap_or(0);
 
-    if let Some(total) = int64_var(vars, "df_exptotal").filter(|v| *v > 0) {
+    if let Some(total) = num_var::<i64>(vars, "df_exptotal").filter(|v| *v > 0) {
         s.cumulative_xp = total;
         s.xp_source = XpSource::ExpTotal;
     } else if let Some(c) = catalog
@@ -51,42 +53,24 @@ pub fn parse_snapshot(
         s.pending_levels = pending_levels(c, s.level, s.exp_in_level);
     }
 
-    let x = int_var(vars, "df_positionx");
-    let y = int_var(vars, "df_positiony");
-    if let (Some(x), Some(y)) = (x, y) {
-        s.position_x = x;
-        s.position_y = y;
-        s.has_position = true;
-        s.position_z = int_var(vars, "df_positionz").unwrap_or(0);
+    if let (Some(x), Some(y)) = (num_var(vars, "df_positionx"), num_var(vars, "df_positiony")) {
+        s.position = Some((x, y, num_var(vars, "df_positionz").unwrap_or(0)));
     }
 
-    s.trade_zone = int_var(vars, "df_tradezone").unwrap_or(0);
+    s.trade_zone = num_var(vars, "df_tradezone").unwrap_or(0);
     s.in_outpost = bool_var(vars, "df_inoutpost");
-    if let Some(d) = int_var(vars, "df_dangerlevel") {
-        s.danger_level = d;
-        s.has_danger = true;
-    }
+    s.danger_level = num_var(vars, "df_dangerlevel");
     s.block_support = deadline_var(vars, "df_block_support_until", at);
 
-    if let Some(start) = int64_var(vars, "df_expstart")
-        && s.xp_source == XpSource::ExpTotal
-        && s.cumulative_xp >= start
-    {
-        s.exp_since_start = s.cumulative_xp - start;
-        s.has_exp_since_start = true;
-    }
+    s.exp_since_start = num_var::<i64>(vars, "df_expstart")
+        .filter(|start| s.xp_source == XpSource::ExpTotal && s.cumulative_xp >= *start)
+        .map(|start| s.cumulative_xp - start);
 
-    s.hp = int_var(vars, "df_hpcurrent").unwrap_or(0);
-    s.hp_max = int_var(vars, "df_hpmax").unwrap_or(0);
-    if let Some(cash) = int64_var(vars, "df_cash") {
-        s.cash = cash;
-        s.has_cash = true;
-    }
-    s.bank_cash = int64_var(vars, "df_bankcash").unwrap_or(0);
-    if let Some(n) = int_var(vars, "df_hungerhp") {
-        s.nourishment = n;
-        s.has_hunger = true;
-    }
+    s.hp = num_var(vars, "df_hpcurrent").unwrap_or(0);
+    s.hp_max = num_var(vars, "df_hpmax").unwrap_or(0);
+    s.cash = num_var(vars, "df_cash");
+    s.bank_cash = num_var(vars, "df_bankcash").unwrap_or(0);
+    s.nourishment = num_var(vars, "df_hungerhp");
     s.boost_exp = deadline_var(vars, "df_boostexpuntil", at);
     s.gold_member = bool_var(vars, "df_goldmember");
     s.dead = bool_var(vars, "df_dead");
@@ -121,11 +105,7 @@ fn fingerprint(v: &str) -> String {
     format!("{:08x}", hasher.finish() as u32)
 }
 
-fn int_var(vars: &HashMap<String, String>, key: &str) -> Option<i32> {
-    vars.get(key)?.trim().parse().ok()
-}
-
-fn int64_var(vars: &HashMap<String, String>, key: &str) -> Option<i64> {
+fn num_var<T: FromStr>(vars: &HashMap<String, String>, key: &str) -> Option<T> {
     vars.get(key)?.trim().parse().ok()
 }
 
@@ -134,7 +114,7 @@ fn bool_var(vars: &HashMap<String, String>, key: &str) -> bool {
 }
 
 fn df_compact_time_var(vars: &HashMap<String, String>, key: &str) -> Option<DateTime<Utc>> {
-    let v = int64_var(vars, key)?;
+    let v = num_var::<i64>(vars, key)?;
     if v <= 0 {
         return None;
     }
@@ -142,20 +122,17 @@ fn df_compact_time_var(vars: &HashMap<String, String>, key: &str) -> Option<Date
 }
 
 fn deadline_var(vars: &HashMap<String, String>, key: &str, now: DateTime<Utc>) -> Deadline {
-    let Some(v) = int64_var(vars, key) else {
-        return Deadline::default();
+    let Some(v) = num_var::<i64>(vars, key) else {
+        return Deadline::None;
     };
     if v <= 0 {
-        return Deadline::default();
+        return Deadline::None;
     }
     if v >= DF_FOREVER {
-        return Deadline {
-            forever: true,
-            ..Deadline::default()
-        };
+        return Deadline::Forever;
     }
     let Some(at) = DateTime::from_timestamp(v, 0) else {
-        return Deadline::default();
+        return Deadline::None;
     };
     let skew = if now >= at {
         (now - at).to_std().unwrap_or(Duration::MAX)
@@ -163,21 +140,16 @@ fn deadline_var(vars: &HashMap<String, String>, key: &str, now: DateTime<Utc>) -
         (at - now).to_std().unwrap_or(Duration::MAX)
     };
     if skew > DF_PLAUSIBLE_WINDOW {
-        return Deadline::default();
+        return Deadline::None;
     }
-    Deadline {
-        at: Some(at),
-        forever: false,
-    }
+    Deadline::At(at)
 }
 
 struct Inner {
-    snapshot: Snapshot,
-    have_snap: bool,
-    prev_snap: Snapshot,
-    have_prev: bool,
+    snapshot: Option<Snapshot>,
+    prev_snap: Option<Snapshot>,
     game: GameState,
-    catalog: Option<Catalog>,
+    catalog: Option<Arc<Catalog>>,
     poller: PollerStatus,
     creds_at: Option<DateTime<Utc>>,
     public_id_configured: bool,
@@ -185,21 +157,23 @@ struct Inner {
     run_seed: Option<RunState>,
     run_terminal: bool,
     on_run_change: Option<Arc<dyn Fn() + Send + Sync>>,
-    presence: PresenceState,
-    have_presence: bool,
+    presence: Option<PresenceState>,
     presence_connected: bool,
     boss_map: Option<BossMap>,
-    board: Vec<Challenge>,
-    have_board: bool,
+    board: Option<Vec<Challenge>>,
     board_status: String,
-    masteries: Vec<Mastery>,
-    have_masteries: bool,
+    masteries: Option<Vec<Mastery>>,
     mastery_status: String,
     config_error: String,
-    xp_samples: Option<Arc<dyn Fn() -> Vec<XpSample> + Send + Sync>>,
+    /// The rate window. Mirrors the persisted ring; both are written from
+    /// `app::write_xp_sample`, so the HUD never reaches into the state file.
+    xp_samples: Vec<XpSample>,
     xp_min_samples: i32,
     missed_ticks: i32,
     visibility: crate::model::Visibility,
+    /// `walk_distances` from the last derived position. The BFS covers the
+    /// whole city; `derive` runs every frame and the player moves rarely.
+    walk_cache: Option<((i32, i32), Vec<i32>)>,
 }
 
 pub struct Store {
@@ -209,12 +183,10 @@ pub struct Store {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrayHint {
     pub game_running: bool,
-    pub has_session: bool,
-    pub session_time: Ns,
+    pub session_time: Option<Ns>,
     pub client_uptime: Ns,
     pub have_data: bool,
-    pub xp_available: bool,
-    pub xp_per_hour: f64,
+    pub xp_per_hour: Option<f64>,
     pub status: String,
 }
 
@@ -222,12 +194,10 @@ impl Store {
     pub fn new(catalog: Option<Catalog>) -> Self {
         Self {
             inner: Mutex::new(Inner {
-                snapshot: Snapshot::default(),
-                have_snap: false,
-                prev_snap: Snapshot::default(),
-                have_prev: false,
+                snapshot: None,
+                prev_snap: None,
                 game: GameState::default(),
-                catalog,
+                catalog: catalog.map(Arc::new),
                 poller: PollerStatus::default(),
                 creds_at: None,
                 public_id_configured: false,
@@ -235,31 +205,29 @@ impl Store {
                 run_seed: None,
                 run_terminal: false,
                 on_run_change: None,
-                presence: PresenceState::default(),
-                have_presence: false,
+                presence: None,
                 presence_connected: false,
                 boss_map: None,
-                board: Vec::new(),
-                have_board: false,
+                board: None,
                 board_status: String::new(),
-                masteries: Vec::new(),
-                have_masteries: false,
+                masteries: None,
                 mastery_status: String::new(),
                 config_error: String::new(),
-                xp_samples: None,
+                xp_samples: Vec::new(),
                 xp_min_samples: 3,
                 missed_ticks: 0,
                 visibility: crate::model::Visibility {
                     visible: true,
                     ..crate::model::Visibility::default()
                 },
+                walk_cache: None,
             }),
         }
     }
 
     pub fn apply_tick(&self, tick: Tick) -> bool {
         let (applied, run_changed, on_change) = {
-            let mut s = self.inner.lock().unwrap();
+            let mut s = lock(&self.inner);
             if tick.err.is_some() {
                 if tick.scheduled {
                     s.missed_ticks += 1;
@@ -267,14 +235,12 @@ impl Store {
                 return false;
             }
             let cat = s.catalog.clone();
-            let snap = parse_snapshot(&tick.vars, tick.at, cat.as_ref());
-            if s.have_snap {
-                s.prev_snap = s.snapshot.clone();
-                s.have_prev = true;
+            let snap = parse_snapshot(&tick.vars, tick.at, cat.as_deref());
+            if let Some(cur) = s.snapshot.take() {
+                s.prev_snap = Some(cur);
             }
             let run_changed = update_run_locked(&mut s, &snap);
-            s.snapshot = snap;
-            s.have_snap = true;
+            s.snapshot = Some(snap);
             s.missed_ticks = 0;
             (true, run_changed, s.on_run_change.clone())
         };
@@ -284,13 +250,12 @@ impl Store {
 
     pub fn set_game(&self, g: GameState) {
         let (run_changed, on_change) = {
-            let mut s = self.inner.lock().unwrap();
+            let mut s = lock(&self.inner);
             let prev = s.game;
             s.game = g;
             let session_changed = (g.running || prev.running) && !g.same_session(prev);
             if session_changed {
-                s.presence = PresenceState::default();
-                s.have_presence = false;
+                s.presence = None;
                 s.presence_connected = false;
             }
             if g.running && !g.same_session(prev) {
@@ -300,17 +265,13 @@ impl Store {
             if !g.running {
                 run_changed = end_run_locked(&mut s, Utc::now(), "the game closed");
                 s.run_terminal = false;
-                s.prev_snap = Snapshot::default();
-                s.have_prev = false;
-                s.snapshot = Snapshot::default();
-                s.have_snap = false;
+                s.prev_snap = None;
+                s.snapshot = None;
                 clear_session_derived(&mut s);
             } else if prev.running && !g.same_session(prev) {
                 run_changed = end_run_locked(&mut s, Utc::now(), "the game relaunched");
-                s.prev_snap = Snapshot::default();
-                s.have_prev = false;
-                s.snapshot = Snapshot::default();
-                s.have_snap = false;
+                s.prev_snap = None;
+                s.snapshot = None;
                 clear_session_derived(&mut s);
             } else if let Some(seed) = s.run_seed.take()
                 && seed.matches(g)
@@ -318,7 +279,7 @@ impl Store {
                 s.run_start = Some(seed.started_at);
                 run_changed = true;
                 let ago = Utc::now().signed_duration_since(seed.started_at);
-                eprintln!(
+                info!(
                     "session: resuming the run started {} ago",
                     format::ago(ago.to_std().unwrap_or_default())
                 );
@@ -329,163 +290,152 @@ impl Store {
     }
 
     pub fn set_visibility(&self, v: crate::model::Visibility) {
-        self.inner.lock().unwrap().visibility = v;
+        lock(&self.inner).visibility = v;
     }
 
     pub fn visibility(&self) -> crate::model::Visibility {
-        self.inner.lock().unwrap().visibility.clone()
+        lock(&self.inner).visibility.clone()
     }
 
     pub fn set_presence(&self, p: PresenceState) {
         let (run_changed, on_change) = {
-            let mut s = self.inner.lock().unwrap();
+            let mut s = lock(&self.inner);
             if !s.game.running || s.game.started_at.is_some_and(|t| p.at < t) {
                 return;
             }
             s.presence_connected = true;
-            s.presence = p.clone();
-            s.have_presence = true;
-            (
-                update_run_from_presence_locked(&mut s, &p),
-                s.on_run_change.clone(),
-            )
+            let run_changed = update_run_from_presence_locked(&mut s, &p);
+            s.presence = Some(p);
+            (run_changed, s.on_run_change.clone())
         };
         fire_run_change(on_change, run_changed);
     }
 
     pub fn set_presence_connected(&self, connected: bool) {
-        let mut s = self.inner.lock().unwrap();
+        let mut s = lock(&self.inner);
         s.presence_connected = connected;
         if !connected {
-            s.have_presence = false;
+            s.presence = None;
         }
     }
 
     pub fn presence_connected(&self) -> bool {
-        self.inner.lock().unwrap().presence_connected
+        lock(&self.inner).presence_connected
     }
 
     pub fn set_credentials_at(&self, t: DateTime<Utc>) {
-        self.inner.lock().unwrap().creds_at = Some(t);
+        lock(&self.inner).creds_at = Some(t);
     }
 
     /// Whether `df.user_id` is configured. It only changes the banner: the
     /// poller decides on its own when to actually fall back to it.
     pub fn set_public_id_configured(&self, on: bool) {
-        self.inner.lock().unwrap().public_id_configured = on;
+        lock(&self.inner).public_id_configured = on;
     }
 
     pub fn set_catalog(&self, c: Catalog) {
-        self.inner.lock().unwrap().catalog = Some(c);
+        lock(&self.inner).catalog = Some(Arc::new(c));
     }
 
-    pub fn set_xp_window(
-        &self,
-        samples: impl Fn() -> Vec<XpSample> + Send + Sync + 'static,
-        min_samples: i32,
-    ) {
-        let mut s = self.inner.lock().unwrap();
-        s.xp_samples = Some(Arc::new(samples));
+    /// Seeds the rate window, normally from the persisted ring at startup.
+    pub fn set_xp_window(&self, samples: Vec<XpSample>, min_samples: i32) {
+        let mut s = lock(&self.inner);
+        s.xp_samples = samples;
         s.xp_min_samples = min_samples;
     }
 
     pub fn set_xp_min_samples(&self, min_samples: i32) {
-        self.inner.lock().unwrap().xp_min_samples = min_samples;
+        lock(&self.inner).xp_min_samples = min_samples;
+    }
+
+    pub fn append_xp_sample(&self, sample: XpSample, window: Duration) {
+        push_xp_sample(&mut lock(&self.inner).xp_samples, sample, window);
+    }
+
+    pub fn reset_xp_window(&self) {
+        lock(&self.inner).xp_samples.clear();
+    }
+
+    #[cfg(test)]
+    pub fn xp_samples(&self) -> Vec<XpSample> {
+        lock(&self.inner).xp_samples.clone()
     }
 
     pub fn set_challenges(&self, board: Vec<Challenge>) {
-        let mut s = self.inner.lock().unwrap();
-        s.board = board;
-        s.have_board = true;
+        lock(&self.inner).board = Some(board);
     }
 
     pub fn clear_challenges(&self) {
-        let mut s = self.inner.lock().unwrap();
-        s.board.clear();
-        s.have_board = false;
+        lock(&self.inner).board = None;
     }
 
     pub fn set_challenge_status(&self, reason: String) {
-        self.inner.lock().unwrap().board_status = reason;
+        lock(&self.inner).board_status = reason;
     }
 
     pub fn set_masteries(&self, masteries: Vec<Mastery>) {
-        let mut s = self.inner.lock().unwrap();
-        s.masteries = masteries;
-        s.have_masteries = true;
+        lock(&self.inner).masteries = Some(masteries);
     }
 
     pub fn clear_masteries(&self) {
-        let mut s = self.inner.lock().unwrap();
-        s.masteries.clear();
-        s.have_masteries = false;
+        lock(&self.inner).masteries = None;
     }
 
     pub fn set_mastery_status(&self, reason: String) {
-        self.inner.lock().unwrap().mastery_status = reason;
+        lock(&self.inner).mastery_status = reason;
     }
 
     /// Empty clears it. Kept whole for the tray; the HUD line clips.
     pub fn set_config_error(&self, err: String) {
-        self.inner.lock().unwrap().config_error = err;
+        lock(&self.inner).config_error = err;
     }
 
     pub fn config_error(&self) -> Option<String> {
-        let s = self.inner.lock().unwrap();
+        let s = lock(&self.inner);
         (!s.config_error.is_empty()).then(|| s.config_error.clone())
     }
 
     pub fn set_boss_map(&self, m: BossMap) {
-        self.inner.lock().unwrap().boss_map = Some(m);
+        lock(&self.inner).boss_map = Some(m);
     }
 
     pub fn clear_boss_map(&self) {
-        self.inner.lock().unwrap().boss_map = None;
+        lock(&self.inner).boss_map = None;
     }
 
     pub fn set_poller_status(&self, st: PollerStatus) {
-        self.inner.lock().unwrap().poller = st;
+        lock(&self.inner).poller = st;
     }
 
     pub fn snapshot(&self) -> Option<Snapshot> {
-        let s = self.inner.lock().unwrap();
-        if s.have_snap {
-            Some(s.snapshot.clone())
-        } else {
-            None
-        }
+        lock(&self.inner).snapshot.clone()
     }
 
     #[cfg(test)]
     pub fn missed_ticks(&self) -> i32 {
-        self.inner.lock().unwrap().missed_ticks
+        lock(&self.inner).missed_ticks
     }
 
     pub fn previous_snapshot(&self) -> Option<Snapshot> {
-        let s = self.inner.lock().unwrap();
-        if s.have_prev {
-            Some(s.prev_snap.clone())
-        } else {
-            None
-        }
+        lock(&self.inner).prev_snap.clone()
     }
 
     pub fn run(&self) -> (Option<DateTime<Utc>>, GameState) {
-        let s = self.inner.lock().unwrap();
+        let s = lock(&self.inner);
         (s.run_start, s.game)
     }
 
     pub fn set_run_seed(&self, run: Option<RunState>) {
-        self.inner.lock().unwrap().run_seed = run;
+        lock(&self.inner).run_seed = run;
     }
 
     pub fn set_on_run_change(&self, f: impl Fn() + Send + Sync + 'static) {
-        self.inner.lock().unwrap().on_run_change = Some(Arc::new(f));
+        lock(&self.inner).on_run_change = Some(Arc::new(f));
     }
 
     pub fn restart_run(&self, at: DateTime<Utc>) -> bool {
         let (ok, on_change) = {
-            let mut s = self.inner.lock().unwrap();
+            let mut s = lock(&self.inner);
             if !s.game.running || s.run_terminal {
                 return false;
             }
@@ -498,7 +448,7 @@ impl Store {
     }
 
     pub fn client_in_world(&self, now: DateTime<Utc>) -> bool {
-        let s = self.inner.lock().unwrap();
+        let s = lock(&self.inner);
         match presence_position_locked(&s, now) {
             Some(p) => !p.loading,
             None => true,
@@ -506,56 +456,55 @@ impl Store {
     }
 
     pub fn effective_position(&self, now: DateTime<Utc>) -> Option<(i32, i32)> {
-        let s = self.inner.lock().unwrap();
+        let s = lock(&self.inner);
         if let Some(p) = presence_position_locked(&s, now) {
-            if p.has_position {
-                return Some((p.x, p.y));
+            if p.position.is_some() {
+                return p.position;
             }
             if p.in_outpost || p.loading {
                 return None;
             }
         }
-        if s.have_snap && s.snapshot.has_position {
-            return Some((s.snapshot.position_x, s.snapshot.position_y));
-        }
-        None
+        s.snapshot
+            .as_ref()
+            .and_then(|snap| snap.position)
+            .map(|(x, y, _)| (x, y))
     }
 
     pub fn derive(&self, now: DateTime<Utc>) -> View {
-        let s = self.inner.lock().unwrap();
+        let mut guard = lock(&self.inner);
+        // A plain `&mut Inner` so the walk cache can be written while the
+        // boss map is borrowed; a guard would lock the whole struct.
+        let s = &mut *guard;
         let mut v = View {
             now,
             game_running: s.game.running,
-            client_loading: s.game.running && s.presence_connected && !s.have_presence,
+            client_loading: s.game.running && s.presence_connected && s.presence.is_none(),
             client_uptime: Ns::from_std(s.game.elapsed(now)),
             ..View::default()
         };
-        if s.game.running
-            && let Some(start) = s.run_start
-        {
+        if let Some(t) = session_time_locked(s, now) {
             v.has_session = true;
-            if now > start {
-                v.session_time = Ns::from_chrono(now - start);
-            }
+            v.session_time = t;
         }
-        if s.have_snap {
-            let snap = &s.snapshot;
+        if let Some(snap) = &s.snapshot {
             v.have_data = true;
-            v.has_position = snap.has_position;
-            v.position_x = snap.position_x;
-            v.position_y = snap.position_y;
-            v.position_z = snap.position_z;
+            let (x, y, z) = snap.position.unwrap_or_default();
+            v.has_position = snap.position.is_some();
+            v.position_x = x;
+            v.position_y = y;
+            v.position_z = z;
             v.zone_name = citymap::trade_zone_name(snap.trade_zone).to_string();
             v.in_outpost = snap.in_outpost;
-            v.outpost_name = citymap::outpost_name(snap.position_x, snap.position_y).to_string();
+            v.outpost_name = citymap::outpost_name(x, y).to_string();
             v.block_support = Ns::from_std(snap.block_support.remaining(now));
         }
-        if let Some(p) = presence_position_locked(&s, now) {
+        if let Some(p) = presence_position_locked(s, now) {
             v.client_loading = p.loading;
-            if p.has_position {
+            if let Some((x, y)) = p.position {
                 v.has_position = true;
-                v.position_x = p.x;
-                v.position_y = p.y;
+                v.position_x = x;
+                v.position_y = y;
                 v.in_outpost = false;
                 v.outpost_name.clear();
             } else if p.in_outpost {
@@ -595,12 +544,12 @@ impl Store {
                 }
             }
             let mut from = [0; 2];
-            let mut dist = Vec::new();
+            let mut dist: &[i32] = &[];
             if v.has_position && citymap::default().is_block(v.position_x, v.position_y) {
                 from = [v.position_x, v.position_y];
-                dist = citymap::default().walk_distances(v.position_x, v.position_y);
+                dist = walk_distances_cached(&mut s.walk_cache, v.position_x, v.position_y);
             }
-            let marks = boss.active_marks(now, from, &dist);
+            let marks = boss.active_marks(now, from, dist);
             if !marks.is_empty() {
                 v.city_marks = Some(marks.clone());
             }
@@ -619,48 +568,42 @@ impl Store {
                 v.nearest_detour = m.walk.detour;
             }
         }
-        if s.have_board {
-            v.challenges = Some(s.board.clone());
-        }
+        v.challenges = s.board.clone();
         v.challenge_status = s.board_status.clone();
-        if s.have_masteries {
-            v.masteries = Some(s.masteries.clone());
-        }
+        v.masteries = s.masteries.clone();
         v.mastery_status = s.mastery_status.clone();
-        if let Some(get) = &s.xp_samples {
-            let samples = get();
-            let rate = xp::compute_rate(&samples, s.xp_min_samples, stability_locked(&s));
-            apply_rate(&mut v, rate);
-        }
-        (v.status, v.status_is_prompt) = status_locked(&s);
+        let rate = xp::compute_rate(&s.xp_samples, s.xp_min_samples, stability_locked(s));
+        apply_rate(&mut v, rate);
+        (v.status, v.status_is_prompt) = status_locked(s);
         v
     }
 
     pub fn tray_hint(&self, now: DateTime<Utc>) -> TrayHint {
-        let s = self.inner.lock().unwrap();
-        let mut hint = TrayHint {
+        let s = lock(&self.inner);
+        let rate = xp::compute_rate(&s.xp_samples, s.xp_min_samples, stability_locked(&s));
+        TrayHint {
             game_running: s.game.running,
+            session_time: session_time_locked(&s, now),
             client_uptime: Ns::from_std(s.game.elapsed(now)),
-            have_data: s.have_snap,
-            ..TrayHint::default()
-        };
-        if s.game.running
-            && let Some(start) = s.run_start
-        {
-            hint.has_session = true;
-            if now > start {
-                hint.session_time = Ns::from_chrono(now - start);
-            }
+            have_data: s.snapshot.is_some(),
+            xp_per_hour: rate.per_hour,
+            // The tray shows one line; only the config banner ever wraps.
+            status: status_locked(&s).0.replace('\n', " "),
         }
-        if let Some(get) = &s.xp_samples {
-            let rate = xp::compute_rate(&get(), s.xp_min_samples, stability_locked(&s));
-            hint.xp_available = rate.available;
-            hint.xp_per_hour = rate.per_hour;
-        }
-        // The tray shows one line; only the config banner ever wraps.
-        hint.status = status_locked(&s).0.replace('\n', " ");
-        hint
     }
+}
+
+/// Time in the current run, `Some(0)` until the clock passes its start.
+fn session_time_locked(s: &Inner, now: DateTime<Utc>) -> Option<Ns> {
+    if !s.game.running {
+        return None;
+    }
+    let start = s.run_start?;
+    Some(if now > start {
+        Ns::from_chrono(now - start)
+    } else {
+        Ns(0)
+    })
 }
 
 fn status_locked(s: &Inner) -> (String, bool) {
@@ -683,7 +626,7 @@ fn status_locked(s: &Inner) -> (String, bool) {
         (s.poller.pause_reason.clone(), false)
     } else if s.poller.failures > 0 {
         ("server not responding (retrying)".into(), false)
-    } else if !s.have_snap {
+    } else if s.snapshot.is_none() {
         ("waiting for the first poll".into(), false)
     } else {
         (String::new(), false)
@@ -742,9 +685,9 @@ fn wrap(text: &str, width: usize, max_lines: usize) -> String {
 }
 
 fn apply_rate(v: &mut View, rate: XpRate) {
-    v.xp_available = rate.available;
+    v.xp_available = rate.per_hour.is_some();
     v.xp_provisional = rate.provisional;
-    v.xp_per_hour = rate.per_hour;
+    v.xp_per_hour = rate.per_hour.unwrap_or(0.0);
     v.xp_stability = rate.stability;
     // Window total is the per-hour numerator. Go's View has no Gained field;
     // the HUD shows the rate, tests assert the total.
@@ -762,6 +705,30 @@ fn stability_locked(s: &Inner) -> XpStability {
     }
 }
 
+/// The city BFS from `(x, y)`, recomputed only when the position moves.
+fn walk_distances_cached(cache: &mut Option<((i32, i32), Vec<i32>)>, x: i32, y: i32) -> &[i32] {
+    if cache.as_ref().is_none_or(|(at, _)| *at != (x, y)) {
+        *cache = Some(((x, y), citymap::default().walk_distances(x, y)));
+    }
+    cache.as_ref().map_or(&[], |(_, dist)| dist.as_slice())
+}
+
+/// Appends to a rate window and drops what fell out of `window` behind the
+/// newest sample. A source change empties the ring first: two cumulative
+/// counters are not comparable. Shared with the persisted ring so both hold
+/// the same samples.
+pub(crate) fn push_xp_sample(ring: &mut Vec<XpSample>, sample: XpSample, window: Duration) {
+    if ring.last().is_some_and(|prev| prev.source != sample.source) {
+        ring.clear();
+    }
+    let cutoff =
+        sample.at - chrono::Duration::from_std(window).unwrap_or(chrono::Duration::hours(1));
+    ring.push(sample);
+    if let Some(keep) = ring.iter().position(|s| s.at >= cutoff) {
+        ring.drain(..keep);
+    }
+}
+
 fn fire_run_change(on_change: Option<Arc<dyn Fn() + Send + Sync>>, changed: bool) {
     if changed && let Some(f) = on_change {
         f();
@@ -772,11 +739,9 @@ fn clear_session_derived(s: &mut Inner) {
     // The city event map is not session state. Keep the last fetch so the
     // grid still has markers while the next poll is in flight (game start
     // pokes bossmap_loop instead of waiting out the 60s interval).
-    s.board.clear();
-    s.have_board = false;
+    s.board = None;
     s.board_status.clear();
-    s.masteries.clear();
-    s.have_masteries = false;
+    s.masteries = None;
     s.mastery_status.clear();
 }
 
@@ -785,7 +750,7 @@ fn end_run_locked(s: &mut Inner, at: DateTime<Utc>, why: &str) -> bool {
         return false;
     };
     if at > start {
-        eprintln!(
+        info!(
             "session: run ended after {} ({why})",
             format::ago((at - start).to_std().unwrap_or_default())
         );
@@ -794,45 +759,45 @@ fn end_run_locked(s: &mut Inner, at: DateTime<Utc>, why: &str) -> bool {
 }
 
 fn presence_position_locked(s: &Inner, now: DateTime<Utc>) -> Option<PresenceState> {
-    if !s.presence_connected || !s.have_presence || !s.game.running {
+    if !s.presence_connected || !s.game.running {
         return None;
     }
+    let p = s.presence.as_ref()?;
     if now
-        .signed_duration_since(s.presence.at)
+        .signed_duration_since(p.at)
         .to_std()
         .unwrap_or(Duration::MAX)
         > PRESENCE_MAX_AGE
     {
         return None;
     }
-    Some(s.presence.clone())
+    Some(p.clone())
 }
 
 fn update_run_from_presence_locked(s: &mut Inner, p: &PresenceState) -> bool {
     if s.run_seed.is_some() || s.run_terminal {
         return false;
     }
-    if (p.has_position || p.in_outpost) && s.run_start.is_none() {
+    if (p.position.is_some() || p.in_outpost) && s.run_start.is_none() {
         s.run_start = Some(p.at);
-        let kind = if p.has_position {
+        let kind = if p.position.is_some() {
             "a city position"
         } else {
             "an outpost"
         };
-        eprintln!("session: run started (the client reported {kind})");
+        info!("session: run started (the client reported {kind})");
         return true;
     }
     false
 }
 
 fn update_run_locked(s: &mut Inner, snap: &Snapshot) -> bool {
-    let moved = s.have_prev
-        && s.prev_snap.has_position
-        && snap.has_position
-        && (s.prev_snap.position_x != snap.position_x
-            || s.prev_snap.position_y != snap.position_y
-            || s.prev_snap.position_z != snap.position_z);
-    let left_outpost = s.have_prev && s.prev_snap.in_outpost && !snap.in_outpost;
+    let prev = s.prev_snap.as_ref();
+    let moved = matches!(
+        (prev.and_then(|p| p.position), snap.position),
+        (Some(from), Some(to)) if from != to
+    );
+    let left_outpost = prev.is_some_and(|p| p.in_outpost) && !snap.in_outpost;
     if snap.dead {
         let changed = end_run_locked(s, snap.at, "you died");
         s.run_terminal = true;
@@ -849,9 +814,10 @@ fn update_run_locked(s: &mut Inner, snap: &Snapshot) -> bool {
         let why = if left_outpost {
             "left the outpost".to_string()
         } else {
-            format!("moved to {}, {}", snap.position_x, snap.position_y)
+            let (x, y, _) = snap.position.unwrap_or_default();
+            format!("moved to {x}, {y}")
         };
-        eprintln!("session: run started ({why})");
+        info!("session: run started ({why})");
         return true;
     }
     false
@@ -968,26 +934,23 @@ mod tests {
     #[test]
     fn parse_snapshot_positions_and_place() {
         let snap = parse_snapshot(&sample_player_record(), Utc::now(), None);
-        assert!(snap.has_position);
-        assert_eq!((snap.position_x, snap.position_y), (1058, 1019));
+        let (x, y, _) = snap.position.unwrap();
+        assert_eq!((x, y), (1058, 1019));
         assert!(snap.in_outpost);
-        assert_eq!(
-            citymap::outpost_name(snap.position_x, snap.position_y),
-            "Ground Zero"
-        );
+        assert_eq!(citymap::outpost_name(x, y), "Ground Zero");
     }
 
     #[test]
     fn parse_snapshot_distinguishes_absent_from_zero() {
         let mut vars = sample_player_record();
         let snap = parse_snapshot(&vars, Utc::now(), None);
-        assert!(snap.has_danger && snap.danger_level == 0);
+        assert_eq!(snap.danger_level, Some(0));
         vars.remove("df_dangerlevel");
         let snap = parse_snapshot(&vars, Utc::now(), None);
-        assert!(!snap.has_danger);
+        assert_eq!(snap.danger_level, None);
         vars.remove("df_positionx");
         let snap = parse_snapshot(&vars, Utc::now(), None);
-        assert!(!snap.has_position);
+        assert_eq!(snap.position, None);
     }
 
     #[test]
@@ -1003,9 +966,9 @@ mod tests {
         let snap = parse_snapshot(&vars, Utc::now(), None);
         assert_eq!(snap.level, 0);
         assert_eq!(snap.exp_in_level, 0);
-        assert!(!snap.has_position);
-        assert_eq!(snap.cash, 1000);
-        assert_eq!(snap.danger_level, 3);
+        assert_eq!(snap.position, None);
+        assert_eq!(snap.cash, Some(1000));
+        assert_eq!(snap.danger_level, Some(3));
     }
 
     #[test]
@@ -1017,8 +980,7 @@ mod tests {
             now,
             None,
         );
-        assert_eq!(snap.boost_exp.at, Some(target));
-        assert!(!snap.boost_exp.forever);
+        assert_eq!(snap.boost_exp, Deadline::At(target));
         assert_eq!(snap.boost_exp.remaining(now), Duration::from_secs(90));
 
         let snap = parse_snapshot(
@@ -1045,7 +1007,7 @@ mod tests {
                 now,
                 None,
             );
-            assert!(snap.boost_exp.forever, "{raw}");
+            assert_eq!(snap.boost_exp, Deadline::Forever, "{raw}");
             assert_eq!(snap.boost_exp.remaining(now), Duration::ZERO);
             assert!(snap.boost_exp.set());
         }
@@ -1246,12 +1208,12 @@ mod tests {
         let view = s.derive(now);
         let hint = s.tray_hint(now);
         assert_eq!(hint.game_running, view.game_running);
-        assert_eq!(hint.has_session, view.has_session);
-        assert_eq!(hint.session_time, view.session_time);
+        assert_eq!(hint.session_time.is_some(), view.has_session);
+        assert_eq!(hint.session_time.unwrap_or_default(), view.session_time);
         assert_eq!(hint.client_uptime, view.client_uptime);
         assert_eq!(hint.have_data, view.have_data);
-        assert_eq!(hint.xp_available, view.xp_available);
-        assert_eq!(hint.xp_per_hour, view.xp_per_hour);
+        assert_eq!(hint.xp_per_hour.is_some(), view.xp_available);
+        assert_eq!(hint.xp_per_hour.unwrap_or(0.0), view.xp_per_hour);
         assert_eq!(hint.status, view.status);
     }
 
@@ -1280,7 +1242,7 @@ mod tests {
             1_000_000,
             1000,
         );
-        s.set_xp_window(move || samples.clone(), 3);
+        s.set_xp_window(samples, 3);
         assert_tray_hint_matches_view(&s, now);
 
         s.set_poller_status(PollerStatus {
@@ -1538,16 +1500,12 @@ mod tests {
         });
         s.set_presence(PresenceState {
             at: now,
-            has_position: true,
-            x: 1054,
-            y: 986,
+            position: Some((1054, 986)),
             ..PresenceState::default()
         });
         s.set_presence(PresenceState {
             at: now + chrono::Duration::seconds(1),
-            has_position: true,
-            x: 1054,
-            y: 986,
+            position: Some((1054, 986)),
             ..PresenceState::default()
         });
         assert_eq!(changes.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -1583,7 +1541,7 @@ mod tests {
         let s = Store::new(None);
         let start = Utc.timestamp_opt(1_786_484_051, 0).unwrap();
         let samples = xp_samples(start, 4, chrono::Duration::seconds(10), 1_000_000, 1000);
-        s.set_xp_window(move || samples.clone(), 3);
+        s.set_xp_window(samples, 3);
         s.set_credentials_at(start);
         s.apply_tick(Tick {
             at: start,
@@ -1612,6 +1570,70 @@ mod tests {
         assert_eq!(s.inner.lock().unwrap().xp_min_samples, 3);
         s.set_xp_min_samples(7);
         assert_eq!(s.inner.lock().unwrap().xp_min_samples, 7);
+    }
+
+    #[test]
+    fn appended_samples_feed_the_rate_and_reset_clears_it() {
+        let s = Store::new(None);
+        let start = Utc.timestamp_opt(1_786_484_051, 0).unwrap();
+        let window = Duration::from_secs(60);
+        for sample in xp_samples(start, 4, chrono::Duration::seconds(10), 1_000_000, 1000) {
+            s.append_xp_sample(sample, window);
+        }
+        assert_eq!(s.xp_samples().len(), 4);
+        let view = s.derive(start + chrono::Duration::seconds(31));
+        assert!(view.xp_available);
+        assert_eq!(view.xp_per_hour, 360_000.0);
+
+        // The window trims behind the newest sample, so a late sample drops
+        // the oldest ones.
+        s.append_xp_sample(
+            XpSample {
+                at: start + chrono::Duration::seconds(80),
+                cumulative: 1_010_000,
+                source: "df_exptotal".into(),
+            },
+            window,
+        );
+        assert_eq!(s.xp_samples().len(), 3);
+
+        s.reset_xp_window();
+        assert!(s.xp_samples().is_empty());
+        assert!(!s.derive(start).xp_available);
+    }
+
+    #[test]
+    fn push_xp_sample_resets_on_a_source_change() {
+        let mut ring = Vec::new();
+        let start = Utc.timestamp_opt(1_786_484_051, 0).unwrap();
+        for sample in xp_samples(start, 3, chrono::Duration::seconds(10), 1_000_000, 100) {
+            push_xp_sample(&mut ring, sample, Duration::from_secs(3600));
+        }
+        assert_eq!(ring.len(), 3);
+        push_xp_sample(
+            &mut ring,
+            XpSample {
+                at: start + chrono::Duration::seconds(30),
+                cumulative: 999_000,
+                source: "exp table reconstruction".into(),
+            },
+            Duration::from_secs(3600),
+        );
+        assert_eq!(ring.len(), 1);
+        assert_eq!(ring[0].source, "exp table reconstruction");
+    }
+
+    #[test]
+    fn walk_distances_are_reused_until_the_position_moves() {
+        let mut cache = None;
+        let first = walk_distances_cached(&mut cache, 1054, 986).to_vec();
+        assert_eq!(cache.as_ref().unwrap().0, (1054, 986));
+        let again = walk_distances_cached(&mut cache, 1054, 986).as_ptr();
+        assert_eq!(again, cache.as_ref().unwrap().1.as_ptr());
+        let moved = walk_distances_cached(&mut cache, 1055, 986).to_vec();
+        assert_eq!(cache.as_ref().unwrap().0, (1055, 986));
+        assert_ne!(first, moved);
+        assert_eq!(first, citymap::default().walk_distances(1054, 986));
     }
 
     #[test]
@@ -1678,8 +1700,7 @@ mod tests {
             remembered: true,
             objectives: vec![crate::model::Objective {
                 target: 800,
-                score: 500,
-                has_score: true,
+                score: Some(500),
                 ..crate::model::Objective::default()
             }],
             ..Challenge::default()

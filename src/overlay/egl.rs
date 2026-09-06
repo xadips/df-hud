@@ -83,6 +83,9 @@ pub struct Egl {
 }
 
 fn load<T: Copy>(lib: &Library, name: &[u8]) -> Result<T, Box<dyn Error>> {
+    // SAFETY: each call site pairs `name` with the `unsafe extern "C" fn` type
+    // matching that EGL 1.5 entry point's C signature, and the copied pointer
+    // is only called while `Egl::_lib` keeps libEGL mapped.
     let symbol: Symbol<T> = unsafe { lib.get(name) }
         .map_err(|err| format!("{}: {err}", String::from_utf8_lossy(name)))?;
     Ok(*symbol)
@@ -90,9 +93,14 @@ fn load<T: Copy>(lib: &Library, name: &[u8]) -> Result<T, Box<dyn Error>> {
 
 impl Egl {
     pub fn load() -> Result<Self, Box<dyn Error>> {
-        let lib = unsafe { Library::new("libEGL.so.1") }
-            .map_err(|err| format!("load libEGL.so.1: {err}"))?;
-        let gles = unsafe { Library::new("libGLESv2.so.2") }.ok();
+        // SAFETY: dlopen runs the libraries' initialisers; libEGL and libGLESv2
+        // are system libraries whose load-time code has no preconditions on us.
+        let (lib, gles) = unsafe {
+            (
+                Library::new("libEGL.so.1").map_err(|err| format!("load libEGL.so.1: {err}"))?,
+                Library::new("libGLESv2.so.2").ok(),
+            )
+        };
         Ok(Self {
             gles,
             p_get_proc_address: load(&lib, b"eglGetProcAddress\0")?,
@@ -120,13 +128,19 @@ impl Egl {
         let Ok(owned) = std::ffi::CString::new(name) else {
             return ptr::null();
         };
+        // SAFETY: `owned` is NUL-terminated and outlives the call; eglGetProcAddress
+        // only reads it.
         let mut ptr = unsafe { (self.p_get_proc_address)(owned.as_ptr()).cast_const() };
         if ptr.is_null()
             && let Some(gles) = &self.gles
-            && let Ok(sym) =
-                unsafe { gles.get::<unsafe extern "C" fn()>(owned.as_bytes_with_nul()) }
         {
-            ptr = (*sym) as *const c_void;
+            // SAFETY: only the address is wanted, so any `extern "C" fn` type
+            // will do; glow casts it to the real signature. `gles` lives in
+            // `self`, which the returned pointer's users (`Glow`) do not outlive.
+            let sym = unsafe { gles.get::<unsafe extern "C" fn()>(owned.as_bytes_with_nul()) };
+            if let Ok(sym) = sym {
+                ptr = (*sym) as *const c_void;
+            }
         }
         ptr
     }
@@ -134,11 +148,14 @@ impl Egl {
     pub fn get_display(&self, native: NativeDisplay) -> Result<Display, Box<dyn Error>> {
         let attribs = [ATTRIB_NONE];
         let display = if let Some(get_platform) = self.p_get_platform_display {
+            // SAFETY: `attribs` is NONE-terminated and outlives the call;
+            // `native` is the caller's live `wl_display*`, which EGL only reads.
             unsafe { get_platform(PLATFORM_WAYLAND_KHR, native, attribs.as_ptr()) }
         } else {
             ptr::null_mut()
         };
         let display = if display.is_null() {
+            // SAFETY: legacy path with the same `native` pointer; no attrib list.
             unsafe { (self.p_get_display)(native) }
         } else {
             display
@@ -153,6 +170,7 @@ impl Egl {
     pub fn initialize(&self, display: Display) -> Result<(Int, Int), Box<dyn Error>> {
         let mut major = 0;
         let mut minor = 0;
+        // SAFETY: `display` came from `get_display`; the out-params are live stack ints.
         if unsafe { (self.p_initialize)(display, &raw mut major, &raw mut minor) } == 0 {
             Err("eglInitialize failed".into())
         } else {
@@ -161,6 +179,7 @@ impl Egl {
     }
 
     pub fn bind_es(&self) -> Result<(), Box<dyn Error>> {
+        // SAFETY: takes one enum; no pointers or handles.
         if unsafe { (self.p_bind_api)(OPENGL_ES_API) } == 0 {
             Err("eglBindAPI(OPENGL_ES) failed".into())
         } else {
@@ -196,6 +215,8 @@ impl Egl {
         ];
         let mut config = ptr::null_mut();
         let mut count = 0;
+        // SAFETY: `attribs` is NONE-terminated; `config` has room for the one
+        // config requested (`config_size` 1) and `count` is a live out-param.
         let ok = unsafe {
             (self.p_choose_config)(
                 display,
@@ -218,6 +239,8 @@ impl Egl {
         config: Config,
     ) -> Result<Context, Box<dyn Error>> {
         let attribs = [CONTEXT_MAJOR_VERSION, 3, CONTEXT_MINOR_VERSION, 0, NONE];
+        // SAFETY: `display`/`config` came from this `Egl`; `attribs` is
+        // NONE-terminated; null share context is EGL_NO_CONTEXT.
         let ctx =
             unsafe { (self.p_create_context)(display, config, ptr::null_mut(), attribs.as_ptr()) };
         if ctx.is_null() {
@@ -233,6 +256,9 @@ impl Egl {
         config: Config,
         window: NativeWindow,
     ) -> Result<Surface, Box<dyn Error>> {
+        // SAFETY: `window` is the caller's live `wl_egl_window*` (it owns the
+        // `WlEglSurface` for as long as the returned surface exists); a null
+        // attrib list means defaults.
         let surface =
             unsafe { (self.p_create_window_surface)(display, config, window, ptr::null()) };
         if surface.is_null() {
@@ -250,6 +276,8 @@ impl Egl {
             return Err("eglGetPlatformDisplay is unavailable".into());
         };
         let attribs = [ATTRIB_NONE];
+        // SAFETY: the surfaceless platform takes no native display (null is
+        // the documented value); `attribs` is NONE-terminated.
         let display =
             unsafe { get_platform(PLATFORM_SURFACELESS_MESA, ptr::null_mut(), attribs.as_ptr()) };
         if display.is_null() {
@@ -268,6 +296,7 @@ impl Egl {
         height: Int,
     ) -> Result<Surface, Box<dyn Error>> {
         let attribs = [WIDTH, width, HEIGHT, height, NONE];
+        // SAFETY: `display`/`config` came from this `Egl`; `attribs` is NONE-terminated.
         let surface = unsafe { (self.p_create_pbuffer_surface)(display, config, attribs.as_ptr()) };
         if surface.is_null() {
             Err("eglCreatePbufferSurface failed".into())
@@ -283,6 +312,8 @@ impl Egl {
         read: Surface,
         ctx: Context,
     ) -> Result<(), Box<dyn Error>> {
+        // SAFETY: all four handles were returned by this `Egl` and not yet
+        // destroyed (`GlWindow` owns them together and destroys them in `Drop`).
         if unsafe { (self.p_make_current)(display, draw, read, ctx) } == 0 {
             Err("eglMakeCurrent failed".into())
         } else {
@@ -291,12 +322,16 @@ impl Egl {
     }
 
     pub fn unbind(&self, display: Display) {
+        // SAFETY: EGL_NO_SURFACE/EGL_NO_CONTEXT (null) release whatever is
+        // current on this thread; `display` is a live display from `get_display`.
         unsafe {
             (self.p_make_current)(display, ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
         }
     }
 
     pub fn swap_interval(&self, display: Display, interval: Int) -> Result<(), Box<dyn Error>> {
+        // SAFETY: `display` is live and a context is current on this thread
+        // (`GlWindow::new` calls this right after `make_current`).
         if unsafe { (self.p_swap_interval)(display, interval) } == 0 {
             Err("eglSwapInterval failed".into())
         } else {
@@ -305,6 +340,8 @@ impl Egl {
     }
 
     pub fn swap_buffers(&self, display: Display, surface: Surface) -> Result<(), Box<dyn Error>> {
+        // SAFETY: `surface` is the live window surface `GlWindow` owns, current
+        // on this thread since `make_current`.
         if unsafe { (self.p_swap_buffers)(display, surface) } == 0 {
             Err("eglSwapBuffers failed".into())
         } else {
@@ -313,28 +350,36 @@ impl Egl {
     }
 
     pub fn destroy_surface(&self, display: Display, surface: Surface) {
+        // SAFETY: the two owners (`GlWindow::drop`, the render test) pass each
+        // surface once, after `unbind`, and never use it again.
         unsafe {
             (self.p_destroy_surface)(display, surface);
         }
     }
 
     pub fn destroy_context(&self, display: Display, ctx: Context) {
+        // SAFETY: as for `destroy_surface`: once, after `unbind`, never reused.
         unsafe {
             (self.p_destroy_context)(display, ctx);
         }
     }
 
     pub fn terminate(&self, display: Display) {
+        // SAFETY: last call on `display`; its surface and context are already
+        // destroyed and the owner drops the handle right after.
         unsafe {
             (self.p_terminate)(display);
         }
     }
 
     pub fn query_string(&self, display: Display, name: Int) -> String {
+        // SAFETY: `display` is live; EGL returns a static NUL-terminated string
+        // or null (checked), and it is copied out before this returns.
         let ptr = unsafe { (self.p_query_string)(display, name) };
         if ptr.is_null() {
             return String::new();
         }
+        // SAFETY: non-null and NUL-terminated, as established above.
         unsafe { CStr::from_ptr(ptr) }
             .to_string_lossy()
             .into_owned()

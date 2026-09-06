@@ -5,6 +5,7 @@
 //! is a separate one-shot so the Input tab stays reachable by unticking the
 //! tray box.
 
+use crate::wake::lock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -80,7 +81,7 @@ impl Keys {
             ready,
         } = input;
         if !game.running {
-            *self.inner.lock().unwrap() = Inner::default();
+            *lock(&self.inner) = Inner::default();
             return;
         }
 
@@ -93,7 +94,7 @@ impl Keys {
         }
 
         let due = {
-            let mut g = self.inner.lock().unwrap();
+            let mut g = lock(&self.inner);
             if g.pid != game.pid {
                 g.pid = game.pid;
                 g.seen_at = Some(now);
@@ -118,15 +119,15 @@ impl Keys {
             return;
         }
 
-        self.inner.lock().unwrap().sent = true;
+        lock(&self.inner).sent = true;
         if let Err(err) = send.send_key(&cfg.fps_key, &place.address) {
-            eprintln!(
+            warn!(
                 "game keys: could not send {:?} to the game window: {err}",
                 cfg.fps_key
             );
             return;
         }
-        eprintln!(
+        info!(
             "game keys: sent {:?} to turn the game's FPS display on",
             cfg.fps_key
         );
@@ -137,7 +138,7 @@ impl Keys {
         if !game.running {
             return false;
         }
-        let g = self.inner.lock().unwrap();
+        let g = lock(&self.inner);
         if place.launcher_only {
             return self.dismiss.load(Ordering::SeqCst) && !g.launcher_sent;
         }
@@ -157,7 +158,7 @@ impl Keys {
             return;
         }
         let due = {
-            let mut g = self.inner.lock().unwrap();
+            let mut g = lock(&self.inner);
             if g.pid != pid {
                 g.pid = pid;
                 g.seen_at = None;
@@ -181,12 +182,12 @@ impl Keys {
             return;
         }
 
-        self.inner.lock().unwrap().launcher_sent = true;
+        lock(&self.inner).launcher_sent = true;
         if let Err(err) = send.send_key(&cfg.launcher_key, address) {
-            eprintln!("game keys: could not dismiss the launcher: {err}");
+            warn!("game keys: could not dismiss the launcher: {err}");
             return;
         }
-        eprintln!(
+        info!(
             "game keys: pressed {:?} on the launcher dialog",
             cfg.launcher_key
         );
@@ -219,14 +220,14 @@ pub fn spawn(handle: Arc<crate::app::Handle>, stop: Arc<std::sync::atomic::Atomi
         .spawn(move || {
             let send = crate::game::desktop::new_client();
             while !stop.load(Ordering::SeqCst) && !handle.stopped() {
-                let cfg = handle.cfg.lock().unwrap().game_keys.clone();
+                let cfg = handle.config();
                 let game = handle.game.state();
                 let place = handle.vis.placement();
                 let ready = handle.store.client_in_world(chrono::Utc::now());
                 let active = handle.active_address();
                 handle.gamekeys.tick(TickInput {
                     now: SystemTime::now(),
-                    cfg: &cfg,
+                    cfg: &cfg.game_keys,
                     game,
                     place: &place,
                     send: &send,

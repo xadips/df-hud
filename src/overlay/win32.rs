@@ -15,6 +15,7 @@ use std::mem::size_of;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -61,8 +62,12 @@ use windows_sys::core::BOOL;
 
 use crate::app;
 use crate::cli::OverlayArgs;
-use crate::config;
-use crate::overlay::{self, gpu::Gpu, wgl::GlSurface};
+use crate::config::{self, Config};
+use crate::overlay::{
+    self,
+    gpu::{Frame, Gpu},
+    wgl::GlSurface,
+};
 
 pub const OVERLAY_CLASS: &str = "df-hud";
 pub const DUMMY_CLASS: &str = "df-hud-wgl-dummy";
@@ -103,6 +108,7 @@ const ID_CLOSE: i32 = 2;
 /// GUI subsystem: Explorer does not get a console. Attach the parent `cmd`
 /// when there is one; otherwise send stderr to `%LOCALAPPDATA%\df-hud\df-hud.log`.
 pub fn init_stdio() {
+    // SAFETY: takes a process id constant; no pointers.
     if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) } != 0 && bind_conout() {
         return;
     }
@@ -111,6 +117,8 @@ pub fn init_stdio() {
 
 fn bind_conout() -> bool {
     let name = wide("CONOUT$");
+    // SAFETY: `name` is NUL-terminated and outlives the call; null security
+    // attributes and template are the defaults.
     let h = unsafe {
         CreateFileW(
             name.as_ptr(),
@@ -125,6 +133,8 @@ fn bind_conout() -> bool {
     if h.is_null() || h == INVALID_HANDLE_VALUE {
         return false;
     }
+    // SAFETY: `h` is a valid handle we own and never close, so std's stdout/
+    // stderr wrappers can use it for the rest of the process.
     unsafe {
         SetStdHandle(STD_OUTPUT_HANDLE, h);
         SetStdHandle(STD_ERROR_HANDLE, h);
@@ -143,6 +153,8 @@ fn bind_log_file() {
         return;
     };
     let h = file.as_raw_handle();
+    // SAFETY: `h` stays open for the rest of the process because `file` is
+    // forgotten right after, so the std handles never point at a closed one.
     unsafe {
         SetStdHandle(STD_OUTPUT_HANDLE, h);
         SetStdHandle(STD_ERROR_HANDLE, h);
@@ -171,6 +183,8 @@ pub fn fatal_alert(err: &str, headline: &str) {
         "{err}\n\n{headline}. Fix the problem and launch df-hud again."
     ));
     let title = wide("df-hud");
+    // SAFETY: `text`/`title` are NUL-terminated u16 buffers that outlive the
+    // (blocking) call; a null owner HWND is allowed.
     unsafe {
         MessageBoxW(
             ptr::null_mut(),
@@ -230,6 +244,9 @@ fn show_fatal_task_dialog(err: &str, log: &Path, headline: &str) -> bool {
     };
     cfg.Anonymous1.pszMainIcon = TD_ERROR_ICON;
     let mut button = 0i32;
+    // SAFETY: every pointer in `cfg` (`title`, `instruction`, `content`,
+    // `buttons` and their labels) is a local that outlives this blocking
+    // call; `button` is a live out-param; radio/verification outs are optional.
     let hr = unsafe { TaskDialogIndirect(&cfg, &mut button, ptr::null_mut(), ptr::null_mut()) };
     if hr < 0 {
         return false;
@@ -237,31 +254,33 @@ fn show_fatal_task_dialog(err: &str, log: &Path, headline: &str) -> bool {
     if button == ID_OPEN_LOG
         && let Err(open_err) = crate::app::autostart::open_file(log)
     {
-        eprintln!("could not open log: {open_err}");
+        error!("could not open log: {open_err}");
     }
     true
 }
 
 fn shared_console() -> bool {
     let mut pids = [0u32; 8];
+    // SAFETY: `pids` has room for the count passed (only the total matters here).
     let n = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) };
     n > 1
 }
 
 pub fn last_err(op: &str) -> Box<dyn Error> {
+    // SAFETY: reads this thread's last-error slot; no arguments.
     let code = unsafe { GetLastError() };
     format!("{op}: Win32 error {code}").into()
 }
 
 fn enable_per_monitor_v2() {
+    // SAFETY: takes a context constant; no pointers.
     let ok = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     if ok == 0 {
-        eprintln!(
-            "warning: SetProcessDpiAwarenessContext(PerMonitorV2) failed ({})",
-            unsafe { GetLastError() }
-        );
+        // SAFETY: reads this thread's last-error slot; no arguments.
+        let code = unsafe { GetLastError() };
+        warn!("warning: SetProcessDpiAwarenessContext(PerMonitorV2) failed ({code})");
     } else {
-        eprintln!("DPI: PerMonitorV2");
+        debug!("DPI: PerMonitorV2");
     }
 }
 
@@ -307,6 +326,9 @@ pub(crate) fn primary_panel() -> Option<(i32, i32)> {
 
 fn list_monitors() -> Result<Vec<Monitor>, Box<dyn Error>> {
     let mut out: Vec<Monitor> = Vec::new();
+    // SAFETY: `enum_monitor` runs synchronously on this thread before this
+    // returns and is the only reader of `lparam`, which it treats as the
+    // `&mut Vec<Monitor>` it is.
     let ok = unsafe {
         EnumDisplayMonitors(
             ptr::null_mut(),
@@ -330,14 +352,21 @@ unsafe extern "system" fn enum_monitor(
     _rect: *mut RECT,
     lparam: LPARAM,
 ) -> BOOL {
+    // SAFETY: `lparam` is the `&mut Vec<Monitor>` `list_monitors` passed to
+    // EnumDisplayMonitors, which calls back synchronously on that thread, so
+    // the borrow is live and unaliased for the duration of this call.
     let out = unsafe { &mut *(lparam as *mut Vec<Monitor>) };
-    let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+    let mut info = MONITORINFOEXW::default();
     info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+    // SAFETY: `handle` is the monitor being enumerated; `cbSize` tells
+    // GetMonitorInfoW that `info` is the extended struct, so the MONITORINFO*
+    // cast is the documented way to receive `szDevice`.
     if unsafe { GetMonitorInfoW(handle, &mut info as *mut _ as *mut _) } == 0 {
         return 1;
     }
     let mut dpi_x = 0u32;
     let mut dpi_y = 0u32;
+    // SAFETY: live out-params for the two DPI values.
     unsafe { GetDpiForMonitor(handle, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
     if dpi_x == 0 {
         dpi_x = 96;
@@ -371,7 +400,7 @@ fn pick_monitor<'a>(
         }
         if warned.insert(want.to_string()) {
             let names: Vec<&str> = monitors.iter().map(|m| m.name.as_str()).collect();
-            eprintln!(
+            warn!(
                 "hud: no monitor named {want:?} (have {}); using primary",
                 names.join(", ")
             );
@@ -398,6 +427,8 @@ fn register_class(
     wndproc: Option<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT>,
 ) -> Result<(), Box<dyn Error>> {
     let class = wide(name);
+    // SAFETY: a null module with IDC_ARROW loads the shared system cursor.
+    let cursor = unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) };
     let wc = WNDCLASSEXW {
         cbSize: size_of::<WNDCLASSEXW>() as u32,
         style: CS_OWNDC | CS_HREDRAW | CS_VREDRAW,
@@ -406,13 +437,16 @@ fn register_class(
         cbWndExtra: 0,
         hInstance: instance,
         hIcon: ptr::null_mut(),
-        hCursor: unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) },
+        hCursor: cursor,
         hbrBackground: ptr::null_mut(),
         lpszMenuName: ptr::null(),
         lpszClassName: class.as_ptr(),
         hIconSm: ptr::null_mut(),
     };
+    // SAFETY: `wc` is fully initialised and `class` (its name) outlives the
+    // call, which copies it; `wndproc` has the WNDPROC signature.
     if unsafe { RegisterClassExW(&wc) } == 0 {
+        // SAFETY: reads this thread's last-error slot; no arguments.
         let err = unsafe { GetLastError() };
         // already registered in this process is fine
         if err != 1410 {
@@ -428,6 +462,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             CLOSED.store(true, Ordering::SeqCst);
             0
         }
+        // SAFETY: forwarding, unchanged, the message the system just
+        // delivered for `hwnd` on this thread.
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
@@ -455,6 +491,8 @@ impl OverlayWindow {
         let title = wide(WINDOW_TITLE);
         let w = monitor.width - 2 * inset;
         let h = monitor.height - 2 * inset;
+        // SAFETY: `class`/`title` are NUL-terminated u16 buffers that outlive
+        // the call; OVERLAY_CLASS was registered for `instance` by `register_classes`.
         let hwnd = unsafe {
             CreateWindowExW(
                 ex,
@@ -485,11 +523,12 @@ impl OverlayWindow {
         let y = monitor.top + inset;
         let w = monitor.width - 2 * inset;
         let h = monitor.height - 2 * inset;
+        // SAFETY: `self.hwnd` is this window's live handle (destroyed only in `Drop`).
         let ok = unsafe { SetWindowPos(self.hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE) };
         if ok == 0 {
             return Err(last_err("SetWindowPos"));
         }
-        eprintln!(
+        debug!(
             "window {w}x{h} at {x},{y}  inset {inset}  (1px gap at the monitor edge is expected)"
         );
         Ok(())
@@ -499,6 +538,7 @@ impl OverlayWindow {
         // WS_EX_LAYERED stays invisible until SetLayeredWindowAttributes,
         // UpdateLayeredWindow, or DWM starts compositing the GL swapchain.
         // Constant alpha 255 multiplies per-pixel alpha (does not flatten it).
+        // SAFETY: `self.hwnd` is this window's live handle; the rest are flags.
         let ok = unsafe { SetLayeredWindowAttributes(self.hwnd, 0, 255, LWA_ALPHA) };
         if ok == 0 {
             return Err(last_err("SetLayeredWindowAttributes"));
@@ -510,6 +550,7 @@ impl OverlayWindow {
             cyTopHeight: -1,
             cyBottomHeight: -1,
         };
+        // SAFETY: `margins` is a live local read during the call only.
         let hr = unsafe { DwmExtendFrameIntoClientArea(self.hwnd, &margins) };
         if hr < 0 {
             return Err(format!("DwmExtendFrameIntoClientArea HRESULT 0x{hr:x}").into());
@@ -517,6 +558,8 @@ impl OverlayWindow {
 
         // Empty blur region is the DWM switch that composites WGL alpha.
         // DwmExtendFrame alone left this HWND fully invisible on Intel.
+        // SAFETY: integer arguments only; the region is owned here and deleted
+        // below.
         let region = unsafe { CreateRectRgn(0, 0, -1, -1) };
         let bb = DWM_BLURBEHIND {
             dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
@@ -524,26 +567,33 @@ impl OverlayWindow {
             hRgnBlur: region,
             fTransitionOnMaximized: 0,
         };
-        let hr = unsafe { DwmEnableBlurBehindWindow(self.hwnd, &bb) };
-        if !region.is_null() {
-            unsafe { DeleteObject(region) };
-        }
+        // SAFETY: `bb` is a live local; DWM copies the region during the call,
+        // so deleting `region` afterwards (once, when non-null) is correct.
+        let hr = unsafe {
+            let hr = DwmEnableBlurBehindWindow(self.hwnd, &bb);
+            if !region.is_null() {
+                DeleteObject(region);
+            }
+            hr
+        };
         if hr < 0 {
             return Err(format!("DwmEnableBlurBehindWindow HRESULT 0x{hr:x}").into());
         }
-        eprintln!("DWM: layered alpha 255 + extend-frame + blur-behind empty region");
+        debug!("DWM: layered alpha 255 + extend-frame + blur-behind empty region");
         Ok(())
     }
 
     fn reassert_exstyle(&self) {
-        let mut ex = unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) };
-        ex |= (WS_EX_LAYERED
+        let want = (WS_EX_LAYERED
             | WS_EX_TRANSPARENT
             | WS_EX_TOPMOST
             | WS_EX_TOOLWINDOW
             | WS_EX_NOACTIVATE) as isize;
-        unsafe { SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex) };
+        // SAFETY: `self.hwnd` is this window's live handle and these run on
+        // the thread that created it; the rest are style bits and flags.
         unsafe {
+            let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) | want;
+            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex);
             SetWindowPos(
                 self.hwnd,
                 ptr::null_mut(),
@@ -552,19 +602,22 @@ impl OverlayWindow {
                 0,
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
-            )
-        };
+            );
+        }
     }
 
     fn hide(&self) {
+        // SAFETY: `self.hwnd` is this window's live handle.
         unsafe { ShowWindow(self.hwnd, SW_HIDE) };
-        eprintln!("unmapped (WGL context dropped)");
+        info!("unmapped (WGL context dropped)");
     }
 
     fn show(&self) -> Result<(), Box<dyn Error>> {
+        // SAFETY: `self.hwnd` is this window's live handle.
         unsafe { ShowWindow(self.hwnd, SW_SHOWNA) };
         self.reassert_exstyle();
         self.extend_dwm_frame()?;
+        // SAFETY: `self.hwnd` is this window's live handle; the rest are flags.
         let ok = unsafe {
             SetWindowPos(
                 self.hwnd,
@@ -579,7 +632,7 @@ impl OverlayWindow {
         if ok == 0 {
             return Err(last_err("SetWindowPos show"));
         }
-        eprintln!("shown (click-through must still hold)");
+        info!("shown (click-through must still hold)");
         Ok(())
     }
 
@@ -592,8 +645,10 @@ impl OverlayWindow {
             time: 0,
             pt: POINT { x: 0, y: 0 },
         };
-        while unsafe { PeekMessageW(&mut msg, ptr::null_mut(), 0, 0, PM_REMOVE) } != 0 {
-            unsafe {
+        // SAFETY: `msg` is a live local this thread owns; PeekMessageW fills it
+        // and the two calls read it, all on the window's own (this) thread.
+        unsafe {
+            while PeekMessageW(&mut msg, ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
@@ -601,6 +656,9 @@ impl OverlayWindow {
     }
 
     fn wait(timeout_ms: u32, extra: Option<HANDLE>) -> u32 {
+        // SAFETY: `&h` points at one live HANDLE for a count of 1 (the wake
+        // event, owned by `Handle` for longer than the loop); null with a count
+        // of 0 waits on messages alone.
         unsafe {
             match extra {
                 Some(h) => MsgWaitForMultipleObjects(1, &h, 0, timeout_ms, QS_ALLINPUT),
@@ -613,6 +671,8 @@ impl OverlayWindow {
 impl Drop for OverlayWindow {
     fn drop(&mut self) {
         if !self.hwnd.is_null() {
+            // SAFETY: destroying the window `create` made, once, on its thread;
+            // `Surface` drops the `Gpu` and `GlSurface` that used it first.
             unsafe { DestroyWindow(self.hwnd) };
         }
     }
@@ -627,41 +687,170 @@ fn create_gpu(
 ) -> Result<(GlSurface, Gpu), Box<dyn Error>> {
     let started = Instant::now();
     let surface = GlSurface::create(instance, hwnd)?;
+    // SAFETY: `create` left the new context current on this thread, so
+    // `load_proc` resolves each GL entry point for it (or null, which glow
+    // tolerates); the context outlives the `Gpu` (see `Surface` field order).
     let gl = unsafe { Glow::from_loader_function(|name| surface.load_proc(name)) };
     let gpu = Gpu::new(gl, buf_w, buf_h, font)?;
-    eprintln!(
+    debug!(
         "WGL context ready in {:.0}ms",
         started.elapsed().as_secs_f64() * 1000.0
     );
     Ok((surface, gpu))
 }
 
+fn monitor_want(name: &str) -> Option<&str> {
+    (!name.is_empty()).then_some(name)
+}
+
+/// The HWND, its WGL context, and which monitor it is parked on. The
+/// `overlay::Hooks` impl is what `overlay::step` drives once per tick.
+///
+/// Field order is drop order: `gpu` (GL handles) before `gl` (the context
+/// they live in) before `win` (the HWND the context was created on).
+struct Surface {
+    instance: windows_sys::Win32::Foundation::HINSTANCE,
+    handle: Arc<app::Handle>,
+    cli_monitor: Option<String>,
+    gpu: Option<Gpu>,
+    gl: Option<GlSurface>,
+    win: OverlayWindow,
+    monitors: Vec<Monitor>,
+    current: Monitor,
+    /// Monitor `follow` picked this tick; `show` places the window on it.
+    picked: Option<Monitor>,
+    monitor_request: String,
+    warned_monitors: HashSet<String>,
+    buf_w: i32,
+    buf_h: i32,
+    mapped: bool,
+    swaps: u32,
+}
+
+impl Surface {
+    fn hide_window(&mut self) {
+        if let Some(gl) = &self.gl {
+            let _ = gl.make_current();
+        }
+        self.gpu.take();
+        self.gl.take();
+        self.win.hide();
+        self.mapped = false;
+    }
+}
+
+impl overlay::Hooks for Surface {
+    fn config_changed(&mut self, cfg: &Config) {
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.set_font(&cfg.hud.font);
+        }
+    }
+
+    fn follow(&mut self, cfg: &Config) {
+        let vis_mon = self.handle.vis.state().monitor;
+        let next = config::overlay_monitor(self.cli_monitor.as_deref(), &cfg.hud.monitor, &vis_mon);
+        if let Ok(list) = list_monitors() {
+            self.monitors = list;
+        }
+        self.picked = pick_monitor(
+            &self.monitors,
+            monitor_want(&next),
+            &mut self.warned_monitors,
+        )
+        .ok()
+        .cloned();
+        let moved = self
+            .picked
+            .as_ref()
+            .is_some_and(|m| !self.current.same_surface(m));
+        if self.mapped && (next != self.monitor_request || moved) {
+            self.hide_window();
+        }
+        self.monitor_request = next;
+    }
+
+    fn show(&mut self, cfg: &Config) -> Result<(), Box<dyn Error>> {
+        if self.mapped {
+            return Ok(());
+        }
+        if let Some(m) = &self.picked
+            && !self.current.same_surface(m)
+        {
+            self.win.place(m)?;
+            self.buf_w = m.width - 2 * WINDOW_INSET;
+            self.buf_h = m.height - 2 * WINDOW_INSET;
+            self.current = m.clone();
+            info!("hud: pinned to {}", self.current.name);
+        }
+        match create_gpu(
+            self.instance,
+            self.win.hwnd,
+            self.buf_w,
+            self.buf_h,
+            &cfg.hud.font,
+        ) {
+            Ok((gl, gpu)) => {
+                self.gl = Some(gl);
+                self.gpu = Some(gpu);
+                self.win.show()?;
+                self.mapped = true;
+            }
+            Err(err) => error!("WGL: {err}"),
+        }
+        Ok(())
+    }
+
+    fn hide(&mut self) {
+        if self.mapped {
+            self.hide_window();
+        }
+    }
+
+    fn present(&mut self, cfg: &Config) -> Result<(), Box<dyn Error>> {
+        if !self.mapped {
+            return Ok(());
+        }
+        let (Some(gl), Some(gpu)) = (self.gl.as_ref(), self.gpu.as_mut()) else {
+            return Ok(());
+        };
+        self.win.reassert_exstyle();
+        gl.make_current()?;
+        let built = overlay::scene(&self.handle, cfg, self.buf_w as f32, self.buf_h as f32);
+        if gpu.draw(Frame::square(self.buf_w, self.buf_h), built, false)? {
+            gl.swap()?;
+            self.swaps += 1;
+        }
+        Ok(())
+    }
+}
+
 pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     CLOSED.store(false, Ordering::SeqCst);
     enable_per_monitor_v2();
 
+    // SAFETY: a null name returns the handle of this executable's own module.
     let instance = unsafe { GetModuleHandleW(ptr::null()) };
     if instance.is_null() {
         if args.requested {
             return Err("GetModuleHandleW failed".into());
         }
-        eprintln!("no desktop (GetModuleHandleW failed); overlay skipped");
+        error!("no desktop (GetModuleHandleW failed); overlay skipped");
         return Ok(());
     }
     register_classes(instance)?;
 
-    let mut monitors = match list_monitors() {
+    let monitors = match list_monitors() {
         Ok(monitors) => monitors,
         Err(err) => {
             if args.requested {
                 return Err(err);
             }
-            eprintln!("no desktop ({err}); overlay skipped");
+            error!("no desktop ({err}); overlay skipped");
             return Ok(());
         }
     };
     for monitor in &monitors {
-        eprintln!(
+        debug!(
             "monitor: {}  {}x{} at {},{}  dpi {}{}",
             monitor.name,
             monitor.width,
@@ -681,35 +870,23 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         .find(|m| m.primary)
         .or_else(|| monitors.first())
         .map(|m| (m.width, m.height));
-    let mut watch = config::Watch::open_with_reference(args.config.clone(), seed)?;
+    let watch = config::Watch::open_with_reference(args.config.clone(), seed)?;
     let mut warned_monitors = HashSet::new();
     let want_name = config::overlay_monitor(args.monitor.as_deref(), &watch.cfg.hud.monitor, "");
-    let monitor = pick_monitor(
-        &monitors,
-        if want_name.is_empty() {
-            None
-        } else {
-            Some(want_name.as_str())
-        },
-        &mut warned_monitors,
-    )?;
-    let mut current = monitor.clone();
-    let mut buf_w = monitor.width - 2 * WINDOW_INSET;
-    let mut buf_h = monitor.height - 2 * WINDOW_INSET;
+    let monitor = pick_monitor(&monitors, monitor_want(&want_name), &mut warned_monitors)?.clone();
+    let buf_w = monitor.width - 2 * WINDOW_INSET;
+    let buf_h = monitor.height - 2 * WINDOW_INSET;
 
-    let win = OverlayWindow::create(instance, monitor)?;
-    let (mut surface, mut gpu) = {
-        let (s, g) = create_gpu(instance, win.hwnd, buf_w, buf_h, &watch.cfg.hud.font)?;
-        (Some(s), Some(g))
-    };
+    let win = OverlayWindow::create(instance, &monitor)?;
+    let (gl, gpu) = create_gpu(instance, win.hwnd, buf_w, buf_h, &watch.cfg.hud.font)?;
     win.extend_dwm_frame()?;
     win.reassert_exstyle();
     win.show()?;
 
-    eprintln!(
+    debug!(
         "hwnd layered+topmost+tool+noactivate+transparent  swap-interval=0  inset={WINDOW_INSET}"
     );
-    eprintln!(
+    debug!(
         "done-when: live HUD (block / XP / challenges / map) at 1 Hz over the game; clicks still pass through"
     );
 
@@ -719,122 +896,53 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
             hud: args.print_hud,
         },
     )?;
-    let mut swaps = 0u32;
-    let mut mapped = true;
-    let mut needs_present = true;
-    let mut monitor_request = want_name;
+    let mut surface = Surface {
+        instance,
+        handle: handle.clone(),
+        cli_monitor: args.monitor.clone(),
+        gpu: Some(gpu),
+        gl: Some(gl),
+        win,
+        monitors,
+        current: monitor,
+        picked: None,
+        monitor_request: want_name,
+        warned_monitors,
+        buf_w,
+        buf_h,
+        mapped: true,
+        swaps: 0,
+    };
     let mut wait_failed = false;
-    let mut runtime_cfg = handle.cfg.lock().unwrap().clone();
-
-    let started = Instant::now();
-    let mut next_tick = overlay::start_tick(started);
+    let mut rt = overlay::Runtime::new(watch, handle.config(), args.duration);
 
     loop {
         OverlayWindow::pump();
         if CLOSED.load(Ordering::SeqCst) {
-            eprintln!("clean shutdown after {swaps} swaps (window closed)");
+            info!(
+                "clean shutdown after {} swaps (window closed)",
+                surface.swaps
+            );
             return Ok(());
         }
-        if handle.stopped() {
-            eprintln!("clean shutdown after {swaps} swaps");
-            return Ok(());
-        }
-        if overlay::expired(started, args.duration) {
-            eprintln!("clean shutdown after {swaps} swaps");
+        if handle.stopped() || rt.expired() {
+            info!("clean shutdown after {} swaps", surface.swaps);
             return Ok(());
         }
 
-        let now = Instant::now();
-        if overlay::due(now, &mut next_tick) {
-            needs_present = true;
-            if let Some(cfg) = overlay::take_reload(&mut watch) {
-                handle.note_config_watch(&watch, true);
-                runtime_cfg = match gpu.as_mut() {
-                    Some(gpu) => overlay::push_config(&handle, gpu, &cfg),
-                    None => handle.replace_config(cfg),
-                };
-            } else {
-                handle.note_config_watch(&watch, false);
-            }
-        }
-        let vis_mon = handle.vis.state().monitor;
-        let next_monitor_request =
-            config::overlay_monitor(args.monitor.as_deref(), &runtime_cfg.hud.monitor, &vis_mon);
-        if let Ok(list) = list_monitors() {
-            monitors = list;
-        }
-        let picked = pick_monitor(
-            &monitors,
-            if next_monitor_request.is_empty() {
-                None
-            } else {
-                Some(next_monitor_request.as_str())
-            },
-            &mut warned_monitors,
-        )
-        .ok();
-        let vis = handle.visible.load(Ordering::SeqCst);
-        let surface_moved = picked.as_ref().is_some_and(|m| !current.same_surface(m));
-        if mapped && (!vis || next_monitor_request != monitor_request || surface_moved) {
-            if let Some(surface) = &surface {
-                let _ = surface.make_current();
-            }
-            gpu.take();
-            surface.take();
-            win.hide();
-            mapped = false;
-            needs_present = false;
-        }
-        monitor_request = next_monitor_request;
-        if !mapped && vis {
-            if let Some(m) = picked
-                && !current.same_surface(m)
-            {
-                win.place(m)?;
-                buf_w = m.width - 2 * WINDOW_INSET;
-                buf_h = m.height - 2 * WINDOW_INSET;
-                current = m.clone();
-                eprintln!("hud: pinned to {}", current.name);
-            }
-            match create_gpu(instance, win.hwnd, buf_w, buf_h, &runtime_cfg.hud.font) {
-                Ok((s, g)) => {
-                    surface = Some(s);
-                    gpu = Some(g);
-                    win.show()?;
-                    mapped = true;
-                    needs_present = true;
-                }
-                Err(err) => eprintln!("WGL: {err}"),
-            }
-        }
-        if mapped
-            && needs_present
-            && let (Some(surface), Some(gpu)) = (surface.as_ref(), gpu.as_mut())
-        {
-            win.reassert_exstyle();
-            surface.make_current()?;
-            gpu.set_font(&runtime_cfg.hud.font);
-            let built = overlay::scene(&handle, buf_w as f32, buf_h as f32);
-            gpu.draw(buf_w, buf_h, buf_w, buf_h, &built)?;
-            surface.swap()?;
-            swaps += 1;
-            needs_present = false;
-        }
+        overlay::step(&mut rt, &handle, &mut surface)?;
 
-        let timeout_ms = overlay::wait_ms(now, started, args.duration, next_tick);
-        let result = OverlayWindow::wait(timeout_ms, Some(handle.wake.event_handle()));
+        let result = OverlayWindow::wait(rt.wait_ms(), Some(handle.wake.event_handle()));
         match overlay::classify_win32_wait(result, 1) {
             overlay::Win32Wait::Wake => {
                 handle.wake.take();
-                runtime_cfg = handle.cfg.lock().unwrap().clone();
-                needs_present = true;
                 wait_failed = false;
             }
             overlay::Win32Wait::Messages | overlay::Win32Wait::Timeout => {
                 wait_failed = false;
             }
             overlay::Win32Wait::Failed(code) if !wait_failed => {
-                eprintln!(
+                error!(
                     "overlay wait failed: result {code:#x}, {}",
                     last_err("wait")
                 );

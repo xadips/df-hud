@@ -18,6 +18,9 @@
 //!   1px inset. Dummy WGL window uses a distinct class so `WM_DESTROY` on it
 //!   does not end the process.
 
+#[macro_use]
+mod log;
+
 mod app;
 mod cli;
 mod config;

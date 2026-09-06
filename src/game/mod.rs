@@ -5,6 +5,7 @@ pub mod desktop;
 pub mod gamekeys;
 pub mod presence;
 
+use crate::wake::lock;
 use chrono::{DateTime, Utc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -55,21 +56,21 @@ impl Watcher {
     #[cfg(all(test, target_os = "linux"))]
     pub fn with_scanner(scanner: Box<dyn Scanner>, interval: Duration) -> Arc<Self> {
         let w = Self::new(DEFAULT_PROCESS, interval);
-        *w.scanner.lock().unwrap() = scanner;
+        *lock(&w.scanner) = scanner;
         w
     }
 
     pub fn state(&self) -> GameState {
-        *self.state.lock().unwrap()
+        *lock(&self.state)
     }
 
     pub fn set_on_change(&self, f: impl Fn(GameState) + Send + Sync + 'static) {
-        *self.on_change.lock().unwrap() = Some(Arc::new(f));
+        *lock(&self.on_change) = Some(Arc::new(f));
     }
 
     #[cfg(test)]
     pub fn set_state_for_testing(&self, state: GameState) {
-        *self.state.lock().unwrap() = state;
+        *lock(&self.state) = state;
     }
 
     pub fn poke(&self) {
@@ -77,22 +78,22 @@ impl Watcher {
     }
 
     pub fn reconfigure(&self, exe_name: &str, interval: Duration) {
-        *self.scanner.lock().unwrap() = platform_scanner(exe_name);
-        *self.interval.lock().unwrap() = normalize_interval(interval);
+        *lock(&self.scanner) = platform_scanner(exe_name);
+        *lock(&self.interval) = normalize_interval(interval);
         self.poke();
     }
 
     #[cfg(all(test, target_os = "linux"))]
     fn reconfigure_with_scanner(&self, scanner: Box<dyn Scanner>, interval: Duration) {
-        *self.scanner.lock().unwrap() = scanner;
-        *self.interval.lock().unwrap() = normalize_interval(interval);
+        *lock(&self.scanner) = scanner;
+        *lock(&self.interval) = normalize_interval(interval);
         self.poke();
     }
 
     pub fn run(&self, stop: Arc<AtomicBool>) {
         self.scan_once();
         while !stop.load(Ordering::SeqCst) {
-            let interval = *self.interval.lock().unwrap();
+            let interval = *lock(&self.interval);
             self.poke.wait_timeout(interval);
             if stop.load(Ordering::SeqCst) {
                 break;
@@ -103,11 +104,11 @@ impl Watcher {
 
     fn scan_once(&self) {
         let known = self.state();
-        let Ok(next) = self.scanner.lock().unwrap().scan_known(known) else {
+        let Ok(next) = lock(&self.scanner).scan_known(known) else {
             return;
         };
         let (changed, prev) = {
-            let mut g = self.state.lock().unwrap();
+            let mut g = lock(&self.state);
             let prev = *g;
             let changed =
                 next.running != prev.running || (next.running && !next.same_session(prev));
@@ -120,7 +121,7 @@ impl Watcher {
             return;
         }
         match (next.running, prev.running) {
-            (true, false) => eprintln!(
+            (true, false) => info!(
                 "game: {} running (pid {}, started {})",
                 DEFAULT_PROCESS,
                 next.pid,
@@ -129,12 +130,12 @@ impl Watcher {
                     .unwrap_or_default()
             ),
             (false, true) => {
-                eprintln!("game: closed after {:?}", prev.elapsed(Utc::now()));
+                info!("game: closed after {:?}", prev.elapsed(Utc::now()));
             }
-            (true, true) => eprintln!("game: relaunched (pid {})", next.pid),
+            (true, true) => info!("game: relaunched (pid {})", next.pid),
             _ => {}
         }
-        if let Some(f) = self.on_change.lock().unwrap().clone() {
+        if let Some(f) = lock(&self.on_change).clone() {
             f(next);
         }
     }
@@ -463,7 +464,8 @@ pub mod windows {
         TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::System::Threading::{
-        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
     };
 
     pub struct ToolhelpScanner {
@@ -497,6 +499,35 @@ pub mod windows {
                 None => Ok(GameState::default()),
             }
         }
+
+        fn scan_known(&self, known: GameState) -> Result<GameState, String> {
+            if verify_known(&self.exe_name, self.self_pid, known) {
+                Ok(known)
+            } else {
+                self.scan()
+            }
+        }
+    }
+
+    /// The Linux fast path's twin: one `OpenProcess` on the pid we reported
+    /// last tick, same image name and creation time means nothing changed
+    /// and the Toolhelp snapshot can be skipped.
+    fn verify_known(exe_name: &str, self_pid: u32, known: GameState) -> bool {
+        if !known.running || known.pid <= 0 || known.pid as u32 == self_pid {
+            return false;
+        }
+        let Some(started_at) = known.started_at else {
+            return false;
+        };
+        let Some(handle) = open_limited(known.pid as u32) else {
+            return false;
+        };
+        let same = process_image_name(handle)
+            .is_some_and(|exe| base_name(&exe).eq_ignore_ascii_case(exe_name))
+            && creation_time(handle) == Some(started_at);
+        // SAFETY: `handle` came from `open_limited` and is closed exactly once, here.
+        unsafe { CloseHandle(handle) };
+        same
     }
 
     fn filetime_to_datetime(ft: FILETIME) -> DateTime<Utc> {
@@ -507,26 +538,50 @@ pub mod windows {
         DateTime::from_timestamp(secs, nsec).unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
     }
 
-    fn process_start_time(pid: u32) -> Option<DateTime<Utc>> {
-        unsafe {
-            let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if handle.is_null() || handle == -1isize as HANDLE {
-                return None;
-            }
-            let mut creation = FILETIME {
-                dwLowDateTime: 0,
-                dwHighDateTime: 0,
-            };
-            let mut exit = creation;
-            let mut kernel = creation;
-            let mut user = creation;
-            let ok = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user);
-            CloseHandle(handle);
-            if ok == 0 {
-                return None;
-            }
-            Some(filetime_to_datetime(creation))
+    /// Caller closes the handle.
+    fn open_limited(pid: u32) -> Option<HANDLE> {
+        // SAFETY: takes an access mask, an inherit flag and a pid; no pointers.
+        let handle: HANDLE = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() || handle == -1isize as HANDLE {
+            return None;
         }
+        Some(handle)
+    }
+
+    fn creation_time(handle: HANDLE) -> Option<DateTime<Utc>> {
+        let mut creation = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let mut exit = creation;
+        let mut kernel = creation;
+        let mut user = creation;
+        // SAFETY: `handle` is an open process handle the caller still owns, and
+        // the four out-pointers are to live FILETIME locals on this frame.
+        let ok =
+            unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
+        (ok != 0).then(|| filetime_to_datetime(creation))
+    }
+
+    fn process_image_name(handle: HANDLE) -> Option<String> {
+        // Win32 paths can exceed MAX_PATH; the basename is all we compare.
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        // SAFETY: `handle` is an open process handle the caller still owns;
+        // `buf` holds `len` u16s and `len` is updated in place to the count
+        // written, so the slice below stays within the buffer.
+        let ok = unsafe {
+            QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len)
+        };
+        (ok != 0).then(|| String::from_utf16_lossy(&buf[..len as usize]))
+    }
+
+    fn process_start_time(pid: u32) -> Option<DateTime<Utc>> {
+        let handle = open_limited(pid)?;
+        let started = creation_time(handle);
+        // SAFETY: `handle` came from `open_limited` and is closed exactly once, here.
+        unsafe { CloseHandle(handle) };
+        started
     }
 
     fn utf16_to_string(buf: &[u16]) -> String {
@@ -535,6 +590,11 @@ pub mod windows {
     }
 
     fn enumerate(with_start: bool) -> Result<Vec<Proc>, String> {
+        // SAFETY: `snap` is checked before use and closed exactly once at the
+        // end. PROCESSENTRY32W is a plain C struct (all-zero is valid) and a
+        // live local; `dwSize` is set before every call that reads it, as the
+        // API requires. `szExeFile` is read as the NUL-terminated array the
+        // snapshot filled.
         unsafe {
             let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if snap.is_null() || snap == -1isize as HANDLE {

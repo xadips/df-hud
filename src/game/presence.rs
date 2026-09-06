@@ -1,6 +1,7 @@
 //! Parse the game client's Discord rich-presence `details` string, and serve
 //! the fake Discord IPC endpoint the client publishes to.
 
+use crate::wake::lock;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -8,10 +9,10 @@ use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
 use crate::data::citymap;
 use crate::model::PresenceState;
+use crate::wake::Wake;
 
 const INNER_CITY: &str = "Inner City";
 
@@ -21,6 +22,9 @@ const OP_CLOSE: u32 = 2;
 const OP_PING: u32 = 3;
 const OP_PONG: u32 = 4;
 const MAX_FRAME: u32 = 64 << 10;
+/// Connections served at once; one thread each. The game opens one IPC
+/// connection, so anything past this is a stuck or misbehaving peer.
+const MAX_CLIENTS: usize = 8;
 
 pub fn parse_details(details: &str, at: DateTime<Utc>) -> PresenceState {
     let mut s = PresenceState {
@@ -37,9 +41,7 @@ pub fn parse_details(details: &str, at: DateTime<Utc>) -> PresenceState {
         return s;
     }
     if let Some((place, x, y)) = parse_block_position(text) {
-        s.has_position = true;
-        s.x = x;
-        s.y = y;
+        s.position = Some((x, y));
         s.place = place.clone();
         s.indoors = !place.eq_ignore_ascii_case(INNER_CITY);
         return s;
@@ -81,32 +83,43 @@ pub fn default_socket() -> String {
 
 /// Manual retry after a failed Discord IPC bind. Same contract as Go:
 /// automatic looping would only spam the log while real Discord owns the socket.
+///
+/// `wake` is the server thread's only alarm clock: it is polled next to the
+/// Unix listener fd while accepting, and waited on while the bind is failed,
+/// so the thread never wakes on a timer. A ping means "look at `retry` and
+/// the stop flag".
 pub struct Control {
     bind_failed: AtomicBool,
-    retry: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    retry: AtomicBool,
+    wake: Wake,
 }
 
 impl Control {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new() -> io::Result<Arc<Self>> {
+        Ok(Arc::new(Self {
             bind_failed: AtomicBool::new(false),
-            retry: Mutex::new(None),
-        })
+            retry: AtomicBool::new(false),
+            wake: Wake::new()?,
+        }))
     }
 
     pub fn bind_failed(&self) -> bool {
         self.bind_failed.load(Ordering::SeqCst)
     }
 
+    /// Asks for another bind. `false` when there is nothing to retry.
     pub fn retry(&self) -> bool {
         if !self.bind_failed() {
             return false;
         }
-        self.retry
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|tx| tx.send(()).is_ok())
+        self.retry.store(true, Ordering::SeqCst);
+        self.wake.ping();
+        true
+    }
+
+    /// Wakes the server thread so it notices the stop flag.
+    pub fn poke(&self) {
+        self.wake.ping();
     }
 }
 
@@ -117,8 +130,6 @@ pub fn serve(
     control: Arc<Control>,
     stop: Arc<AtomicBool>,
 ) {
-    let (retry_tx, retry_rx) = std::sync::mpsc::channel();
-    *control.retry.lock().unwrap() = Some(retry_tx);
     let on_state: Arc<dyn Fn(PresenceState) + Send + Sync> = Arc::new(on_state);
     let on_connection: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(on_connection);
     loop {
@@ -134,19 +145,17 @@ pub fn serve(
         match listen(path) {
             Ok(listener) => {
                 control.bind_failed.store(false, Ordering::SeqCst);
-                eprintln!("presence: listening on {path}");
-                accept_loop(server, listener, stop.clone());
+                info!("presence: listening on {path}");
+                accept_loop(server, listener, &stop, &control);
                 if stop.load(Ordering::SeqCst) {
                     return;
                 }
                 control.bind_failed.store(true, Ordering::SeqCst);
-                eprintln!(
-                    "presence: listener ended; position will come from the poll until retried"
-                );
+                warn!("presence: listener ended; position will come from the poll until retried");
             }
             Err(err) => {
                 control.bind_failed.store(true, Ordering::SeqCst);
-                eprintln!(
+                error!(
                     "presence: not listening ({err}); position will come from the poll until retried"
                 );
             }
@@ -155,14 +164,12 @@ pub fn serve(
             if stop.load(Ordering::SeqCst) {
                 return;
             }
-            match retry_rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(()) => {
-                    eprintln!("presence: retrying IPC bind");
-                    break;
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+            if control.retry.swap(false, Ordering::SeqCst) {
+                info!("presence: retrying IPC bind");
+                break;
             }
+            control.wake.wait();
+            control.wake.take();
         }
     }
 }
@@ -174,19 +181,43 @@ struct Server {
     clients: AtomicUsize,
 }
 
-fn accept_loop(server: Arc<Server>, listener: Listener, stop: Arc<AtomicBool>) {
+/// One connection's place under [`MAX_CLIENTS`]. Released on drop, so a
+/// handler that panics still gives it back.
+struct Slot(Arc<AtomicUsize>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn accept_loop(server: Arc<Server>, listener: Listener, stop: &AtomicBool, control: &Control) {
     let path = listener.path.clone();
+    let in_flight = Arc::new(AtomicUsize::new(0));
     loop {
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        match listener.accept(&stop) {
+        match listener.accept(stop, &control.wake) {
             Ok(stream) => {
+                if in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_CLIENTS {
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    warn!("presence: dropping a connection ({MAX_CLIENTS} already open)");
+                    drop(stream);
+                    continue;
+                }
                 let server = server.clone();
-                thread::Builder::new()
+                let slot = Slot(in_flight.clone());
+                // A failed spawn drops the closure, and the slot with it.
+                if let Err(err) = thread::Builder::new()
                     .name("df-hud-presence-conn".into())
-                    .spawn(move || serve_conn(&server, stream))
-                    .ok();
+                    .spawn(move || {
+                        let _slot = slot;
+                        serve_conn(&server, stream);
+                    })
+                {
+                    warn!("presence: could not start a connection thread ({err})");
+                }
             }
             Err(err) if err.kind() == io::ErrorKind::Interrupted => break,
             Err(err)
@@ -199,7 +230,7 @@ fn accept_loop(server: Arc<Server>, listener: Listener, stop: Arc<AtomicBool>) {
                 if stop.load(Ordering::SeqCst) {
                     break;
                 }
-                eprintln!("presence: accept ({err})");
+                warn!("presence: accept ({err})");
                 break;
             }
         }
@@ -211,7 +242,7 @@ fn accept_loop(server: Arc<Server>, listener: Listener, stop: Arc<AtomicBool>) {
 fn serve_conn(server: &Server, mut stream: IpcStream) {
     let first = server.clients.fetch_add(1, Ordering::SeqCst) == 0;
     if first {
-        eprintln!("presence: client connected");
+        info!("presence: client connected");
         (server.on_connection)(true);
     }
     loop {
@@ -219,7 +250,7 @@ fn serve_conn(server: &Server, mut stream: IpcStream) {
             Ok((op, body)) => {
                 if let Err(err) = handle(server, &mut stream, op, &body) {
                     if err.kind() != io::ErrorKind::UnexpectedEof {
-                        eprintln!("presence: {err}");
+                        warn!("presence: {err}");
                     }
                     break;
                 }
@@ -228,7 +259,7 @@ fn serve_conn(server: &Server, mut stream: IpcStream) {
                 if err.kind() != io::ErrorKind::UnexpectedEof
                     && err.kind() != io::ErrorKind::ConnectionAborted
                 {
-                    eprintln!("presence: connection ended ({err})");
+                    warn!("presence: connection ended ({err})");
                 }
                 break;
             }
@@ -236,7 +267,7 @@ fn serve_conn(server: &Server, mut stream: IpcStream) {
     }
     let last = server.clients.fetch_sub(1, Ordering::SeqCst) == 1;
     if last {
-        eprintln!("presence: client disconnected");
+        info!("presence: client disconnected");
         (server.on_connection)(false);
     }
 }
@@ -244,7 +275,7 @@ fn serve_conn(server: &Server, mut stream: IpcStream) {
 fn handle(server: &Server, stream: &mut IpcStream, op: u32, body: &[u8]) -> io::Result<()> {
     match op {
         OP_HANDSHAKE => {
-            eprintln!("presence: handshake received");
+            debug!("presence: handshake received");
             write_frame(
                 stream,
                 OP_FRAME,
@@ -272,7 +303,7 @@ fn handle(server: &Server, stream: &mut IpcStream, op: u32, body: &[u8]) -> io::
             let frame: Frame = match serde_json::from_slice(body) {
                 Ok(f) => f,
                 Err(err) => {
-                    eprintln!("presence: unparsable frame ({err})");
+                    warn!("presence: unparsable frame ({err})");
                     return Ok(());
                 }
             };
@@ -315,9 +346,9 @@ fn apply_activity(server: &Server, args: Option<Value>) {
         .unwrap_or("");
     let state = parse_details(details, Utc::now());
 
-    let mut last = server.last.lock().unwrap();
+    let mut last = lock(&server.last);
     let unknown = !state.details.is_empty()
-        && !state.has_position
+        && state.position.is_none()
         && !state.in_outpost
         && !state.loading
         && last.as_ref().is_none_or(|p| p.details != state.details);
@@ -327,10 +358,10 @@ fn apply_activity(server: &Server, args: Option<Value>) {
     drop(last);
 
     if kind_changed {
-        eprintln!("presence: {kind}");
+        info!("presence: {kind}");
     }
     if unknown {
-        eprintln!(
+        warn!(
             "presence: unrecognised details {:?} - position still coming from the poll",
             state.details
         );
@@ -345,11 +376,12 @@ fn presence_kind(s: &PresenceState) -> String {
     if s.in_outpost {
         return format!("outpost {}", s.outpost_name);
     }
-    if s.has_position && s.indoors {
-        return format!("{} {},{}", s.place, s.x, s.y);
-    }
-    if s.has_position {
-        return format!("inner city {},{}", s.x, s.y);
+    if let Some((x, y)) = s.position {
+        return if s.indoors {
+            format!("{} {x},{y}", s.place)
+        } else {
+            format!("inner city {x},{y}")
+        };
     }
     if s.details.is_empty() {
         return "nothing".into();
@@ -481,7 +513,12 @@ fn cleanup(path: &str) {
 }
 
 impl Listener {
-    fn accept(&self, stop: &AtomicBool) -> io::Result<IpcStream> {
+    /// Blocks until a client connects or `wake` is pinged with `stop` set.
+    /// On Windows `wake` is unused: `ConnectNamedPipe` blocks on its own and
+    /// the process exit ends the thread.
+    fn accept(&self, stop: &AtomicBool, wake: &Wake) -> io::Result<IpcStream> {
+        #[cfg(windows)]
+        let _ = wake;
         match &self.inner {
             #[cfg(unix)]
             ListenerInner::Unix(l) => loop {
@@ -494,7 +531,8 @@ impl Listener {
                         return Ok(IpcStream::Unix(stream));
                     }
                     Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(50));
+                        wait_readable(l, wake);
+                        wake.take();
                     }
                     Err(err) => return Err(err),
                 }
@@ -503,6 +541,30 @@ impl Listener {
             ListenerInner::Windows(l) => l.accept(stop),
         }
     }
+}
+
+/// Sleeps until the listener has a pending connection or `wake` is pinged.
+/// A signal (EINTR) or a listener error also returns; the caller's `accept`
+/// then reports it.
+#[cfg(unix)]
+fn wait_readable(listener: &std::os::unix::net::UnixListener, wake: &Wake) {
+    use std::os::fd::AsRawFd;
+    let mut fds = [
+        libc::pollfd {
+            fd: listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: wake.read_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    // SAFETY: `fds` is a live array of two pollfds and nfds is 2; both fds
+    // stay open for the call because `listener` and `wake` are borrowed and
+    // own them.
+    unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
 }
 
 #[cfg(unix)]
@@ -543,6 +605,9 @@ struct WindowsPipe {
     handle: windows_sys::Win32::Foundation::HANDLE,
 }
 
+// SAFETY: `handle` is an opaque kernel object handle, not memory this struct
+// owns or dereferences; it is used by one connection thread and closed once
+// in `Drop`.
 #[cfg(windows)]
 unsafe impl Send for WindowsPipe {}
 
@@ -552,6 +617,9 @@ struct WindowsListener {
     pending: Mutex<windows_sys::Win32::Foundation::HANDLE>,
 }
 
+// SAFETY: the only non-Send field is the HANDLE inside `pending`, an opaque
+// kernel object handle guarded by the mutex; it is not a pointer into memory
+// this struct owns.
 #[cfg(windows)]
 unsafe impl Send for WindowsListener {}
 
@@ -595,6 +663,8 @@ fn create_pipe(path: &str, first: bool) -> io::Result<windows_sys::Win32::Founda
     let name = crate::overlay::win32::wide(path);
     let sddl = crate::overlay::win32::wide(SDDL);
     let mut sd = std::ptr::null_mut();
+    // SAFETY: `sddl` is a NUL-terminated u16 buffer that outlives the call;
+    // `sd` is a live out-pointer, and a null size pointer is allowed.
     let ok = unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
             sddl.as_ptr(),
@@ -615,8 +685,12 @@ fn create_pipe(path: &str, first: bool) -> io::Result<windows_sys::Win32::Founda
     if first {
         mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
     }
+    // SAFETY: `name` is a NUL-terminated u16 buffer and `sa` a live
+    // SECURITY_ATTRIBUTES whose descriptor `sd` was just allocated; both
+    // outlive the call. `sd` came from LocalAlloc inside the conversion above
+    // and is freed exactly once, after the pipe has copied the descriptor.
     let handle = unsafe {
-        CreateNamedPipeW(
+        let handle = CreateNamedPipeW(
             name.as_ptr(),
             mode,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
@@ -625,9 +699,10 @@ fn create_pipe(path: &str, first: bool) -> io::Result<windows_sys::Win32::Founda
             MAX_FRAME + 8,
             0,
             &sa,
-        )
+        );
+        LocalFree(sd as _);
+        handle
     };
-    unsafe { LocalFree(sd as _) };
     if handle.is_null() || handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
     }
@@ -643,6 +718,9 @@ impl Read for WindowsPipe {
             return Err(io::Error::new(io::ErrorKind::NotConnected, "closed"));
         }
         let mut n = 0u32;
+        // SAFETY: `self.handle` is an open pipe handle (checked above) that this
+        // stream owns; `buf` is writable for `buf.len()` bytes, `n` is a live
+        // out-pointer, and a null OVERLAPPED means a synchronous read.
         let ok = unsafe {
             ReadFile(
                 self.handle,
@@ -668,6 +746,9 @@ impl Write for WindowsPipe {
             return Err(io::Error::new(io::ErrorKind::NotConnected, "closed"));
         }
         let mut n = 0u32;
+        // SAFETY: `self.handle` is an open pipe handle (checked above) that this
+        // stream owns; `buf` is readable for `buf.len()` bytes, `n` is a live
+        // out-pointer, and a null OVERLAPPED means a synchronous write.
         let ok = unsafe {
             WriteFile(
                 self.handle,
@@ -693,6 +774,8 @@ impl Drop for WindowsPipe {
     fn drop(&mut self) {
         use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
         if !self.handle.is_null() && self.handle != INVALID_HANDLE_VALUE {
+            // SAFETY: the handle this stream owns is closed exactly once and
+            // nulled so nothing can use it afterwards.
             unsafe { CloseHandle(self.handle) };
             self.handle = std::ptr::null_mut();
         }
@@ -710,12 +793,17 @@ impl WindowsListener {
         if stop.load(Ordering::SeqCst) {
             return Err(io::Error::new(io::ErrorKind::Interrupted, "stopped"));
         }
-        let handle = *self.pending.lock().unwrap();
+        let handle = *lock(&self.pending);
         if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             return Err(io::Error::other("pipe closed"));
         }
+        // SAFETY: `handle` is the open, not yet connected pipe instance
+        // `pending` holds (checked above); a null OVERLAPPED blocks until a
+        // client connects or `Drop` connects to it to unblock this thread.
+        // GetLastError reads this thread's last error, no arguments.
         let ok = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) };
         if ok == 0 {
+            // SAFETY: as above.
             let err = unsafe { GetLastError() };
             if err != ERROR_PIPE_CONNECTED {
                 if stop.load(Ordering::SeqCst) {
@@ -727,11 +815,11 @@ impl WindowsListener {
         let next = match create_pipe(&self.path, false) {
             Ok(handle) => handle,
             Err(err) => {
-                eprintln!("presence: next pipe instance ({err})");
+                warn!("presence: next pipe instance ({err})");
                 std::ptr::null_mut()
             }
         };
-        *self.pending.lock().unwrap() = next;
+        *lock(&self.pending) = next;
         Ok(IpcStream::Windows(WindowsPipe { handle }))
     }
 }
@@ -746,15 +834,20 @@ impl Drop for WindowsListener {
         use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING};
 
         let handle = {
-            let mut pending = self.pending.lock().unwrap();
+            let mut pending = lock(&self.pending);
             std::mem::replace(&mut *pending, std::ptr::null_mut())
         };
         if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             return;
         }
         let name = crate::overlay::win32::wide(&self.path);
-        let wake = unsafe {
-            CreateFileW(
+        // SAFETY: `name` is a NUL-terminated u16 buffer that outlives the call;
+        // null security attributes and template are the defaults. Connecting
+        // as a client unblocks the accept thread's ConnectNamedPipe. `wake`
+        // and `handle` are each closed exactly once: `handle` was taken out
+        // of `pending` above, so no other path can close it.
+        unsafe {
+            let wake = CreateFileW(
                 name.as_ptr(),
                 GENERIC_READ | GENERIC_WRITE,
                 0,
@@ -762,18 +855,15 @@ impl Drop for WindowsListener {
                 OPEN_EXISTING,
                 0,
                 std::ptr::null_mut(),
-            )
-        };
-        if !wake.is_null() && wake != INVALID_HANDLE_VALUE {
-            unsafe { CloseHandle(wake) };
-        } else {
-            let err = unsafe { GetLastError() };
-            if err != ERROR_PIPE_BUSY {
-                unsafe { CloseHandle(handle) };
+            );
+            if !wake.is_null() && wake != INVALID_HANDLE_VALUE {
+                CloseHandle(wake);
+            } else if GetLastError() != ERROR_PIPE_BUSY {
+                CloseHandle(handle);
                 return;
             }
+            CloseHandle(handle);
         }
-        unsafe { CloseHandle(handle) };
     }
 }
 
@@ -782,6 +872,8 @@ mod tests {
     use super::*;
     use crate::data::citymap;
     use std::io::Cursor;
+    #[cfg(unix)]
+    use std::time::Duration;
 
     #[test]
     fn parse_presence_details() {
@@ -790,9 +882,7 @@ mod tests {
             (
                 "Inner City 1054 x 986",
                 PresenceState {
-                    has_position: true,
-                    x: 1054,
-                    y: 986,
+                    position: Some((1054, 986)),
                     place: "Inner City".into(),
                     ..PresenceState::default()
                 },
@@ -800,9 +890,7 @@ mod tests {
             (
                 "Inner City 1055 x 985",
                 PresenceState {
-                    has_position: true,
-                    x: 1055,
-                    y: 985,
+                    position: Some((1055, 985)),
                     place: "Inner City".into(),
                     ..PresenceState::default()
                 },
@@ -810,9 +898,7 @@ mod tests {
             (
                 "Hospital 1058 x 1016",
                 PresenceState {
-                    has_position: true,
-                    x: 1058,
-                    y: 1016,
+                    position: Some((1058, 1016)),
                     place: "Hospital".into(),
                     indoors: true,
                     ..PresenceState::default()
@@ -860,8 +946,8 @@ mod tests {
             "Inner City 1054 x 986",
             DateTime::from_timestamp(1000, 0).unwrap(),
         );
-        assert!(got.has_position);
-        assert!(citymap::default().is_block(got.x, got.y));
+        let (x, y) = got.position.unwrap();
+        assert!(citymap::default().is_block(x, y));
     }
 
     #[test]
@@ -943,11 +1029,9 @@ mod tests {
             })),
         );
         let got = got.lock().unwrap().clone();
-        assert!(got.has_position);
-        assert_eq!(got.x, 1054);
-        assert_eq!(got.y, 986);
+        assert_eq!(got.position, Some((1054, 986)));
         let last = server.last.lock().unwrap().clone().unwrap();
-        assert_eq!(last.x, 1054);
+        assert_eq!(last.position, Some((1054, 986)));
     }
 
     #[cfg(unix)]
@@ -982,5 +1066,59 @@ mod tests {
         t.join().unwrap();
         assert_eq!(*changes.lock().unwrap(), vec![true, false]);
         assert_eq!(server.clients.load(Ordering::SeqCst), 0);
+    }
+
+    /// The accept loop blocks in `poll` with no timeout, so a stop has to be
+    /// delivered through the wake fd; the thread must still leave promptly
+    /// and take its socket with it.
+    #[cfg(unix)]
+    #[test]
+    fn serve_blocks_without_a_timer_and_stops_on_poke() {
+        use std::os::unix::net::UnixStream;
+
+        let dir = std::env::temp_dir().join(format!("df-hud-presence-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ipc").display().to_string();
+        let control = Control::new().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let states = Arc::new(Mutex::new(Vec::new()));
+        let server = {
+            let (path, control, stop, states) =
+                (path.clone(), control.clone(), stop.clone(), states.clone());
+            thread::spawn(move || {
+                serve(
+                    &path,
+                    move |s| states.lock().unwrap().push(s.details),
+                    |_| {},
+                    control,
+                    stop,
+                )
+            })
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while UnixStream::connect(&path).is_err() {
+            assert!(std::time::Instant::now() < deadline, "never bound {path}");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!control.bind_failed());
+        assert!(!control.retry(), "nothing to retry while listening");
+
+        let mut client = UnixStream::connect(&path).unwrap();
+        write_frame_raw(&mut client, OP_HANDSHAKE, br#"{"v":1,"client_id":"x"}"#).unwrap();
+        let (op, _) = read_frame(&mut client).unwrap();
+        assert_eq!(op, OP_FRAME, "handshake answered over the accepted stream");
+        drop(client);
+
+        let asked = std::time::Instant::now();
+        stop.store(true, Ordering::SeqCst);
+        control.poke();
+        server.join().unwrap();
+        assert!(
+            asked.elapsed() < Duration::from_secs(1),
+            "stop took {:?}",
+            asked.elapsed()
+        );
+        assert!(!std::path::Path::new(&path).exists(), "socket cleaned up");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

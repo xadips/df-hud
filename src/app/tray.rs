@@ -4,6 +4,8 @@
 //! Grey: game not running. Yellow: game up and IPC is fine (or unused).
 //! Orange: game is in-world but no Discord IPC client connected. Red: bind failed.
 
+#[cfg(windows)]
+use crate::wake::lock;
 #[cfg(test)]
 use std::io::Cursor;
 use std::sync::Arc;
@@ -11,7 +13,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::app::{Handle, store::TrayHint};
+use crate::app::{Handle, groups::Group, store::TrayHint};
 use crate::format;
 use crate::model::{Ns, View, Visibility};
 
@@ -32,48 +34,56 @@ pub enum IconKind {
 
 pub trait TrayState {
     fn game_running(&self) -> bool;
-    fn has_session(&self) -> bool;
-    fn session_time(&self) -> Ns;
+    /// `Some` while a run is in progress.
+    fn session_time(&self) -> Option<Ns>;
     fn client_uptime(&self) -> Ns;
     fn have_data(&self) -> bool;
-    fn xp_available(&self) -> bool;
-    fn xp_per_hour(&self) -> f64;
+    /// `Some` once the rate window can yield a number.
+    fn xp_per_hour(&self) -> Option<f64>;
     fn status(&self) -> &str;
 }
 
-macro_rules! impl_tray_state {
-    ($type:ty) => {
-        impl TrayState for $type {
-            fn game_running(&self) -> bool {
-                self.game_running
-            }
-            fn has_session(&self) -> bool {
-                self.has_session
-            }
-            fn session_time(&self) -> Ns {
-                self.session_time
-            }
-            fn client_uptime(&self) -> Ns {
-                self.client_uptime
-            }
-            fn have_data(&self) -> bool {
-                self.have_data
-            }
-            fn xp_available(&self) -> bool {
-                self.xp_available
-            }
-            fn xp_per_hour(&self) -> f64 {
-                self.xp_per_hour
-            }
-            fn status(&self) -> &str {
-                &self.status
-            }
-        }
-    };
+impl TrayState for View {
+    fn game_running(&self) -> bool {
+        self.game_running
+    }
+    fn session_time(&self) -> Option<Ns> {
+        self.has_session.then_some(self.session_time)
+    }
+    fn client_uptime(&self) -> Ns {
+        self.client_uptime
+    }
+    fn have_data(&self) -> bool {
+        self.have_data
+    }
+    fn xp_per_hour(&self) -> Option<f64> {
+        self.xp_available.then_some(self.xp_per_hour)
+    }
+    fn status(&self) -> &str {
+        &self.status
+    }
 }
 
-impl_tray_state!(View);
-impl_tray_state!(TrayHint);
+impl TrayState for TrayHint {
+    fn game_running(&self) -> bool {
+        self.game_running
+    }
+    fn session_time(&self) -> Option<Ns> {
+        self.session_time
+    }
+    fn client_uptime(&self) -> Ns {
+        self.client_uptime
+    }
+    fn have_data(&self) -> bool {
+        self.have_data
+    }
+    fn xp_per_hour(&self) -> Option<f64> {
+        self.xp_per_hour
+    }
+    fn status(&self) -> &str {
+        &self.status
+    }
+}
 
 pub fn version_label() -> String {
     format!("df-hud {}", env!("CARGO_PKG_VERSION"))
@@ -104,18 +114,20 @@ pub fn tooltip_with_version(
     let primary = match view {
         None => "starting".to_string(),
         Some(v) if !v.game_running() => "the game is not running".to_string(),
-        Some(v) if v.has_session() => {
-            format!("in the city {}", format::clock(v.session_time().std()))
-        }
-        Some(v) => format!(
-            "client up {}, not in the city",
-            format::clock(v.client_uptime().std())
-        ),
+        Some(v) => match v.session_time() {
+            Some(t) => format!("in the city {}", format::clock(t.std())),
+            None => format!(
+                "client up {}, not in the city",
+                format::clock(v.client_uptime().std())
+            ),
+        },
     };
     let mut lines = vec![primary.clone()];
     if let Some(v) = view {
-        if v.have_data() && v.xp_available() {
-            let rate = format::rate(v.xp_per_hour());
+        if v.have_data()
+            && let Some(per_hour) = v.xp_per_hour()
+        {
+            let rate = format::rate(per_hour);
             if !rate.is_empty() {
                 lines.push(format!("xp {rate}/hr"));
             }
@@ -365,7 +377,7 @@ fn premul_bgra(rgba: &[u8]) -> Vec<u8> {
 }
 
 pub fn spawn(handle: Arc<Handle>, stop: Arc<AtomicBool>) {
-    if !handle.cfg.lock().unwrap().tray.enabled {
+    if !handle.config().tray.enabled {
         return;
     }
     std::thread::Builder::new()
@@ -388,7 +400,7 @@ fn run(handle: Arc<Handle>, stop: Arc<AtomicBool>) {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        ACTIVE, Arc, AtomicBool, ERROR, Handle, ICON_SIZE, IDLE, IconKind, Ordering, WARN,
+        ACTIVE, Arc, AtomicBool, ERROR, Group, Handle, ICON_SIZE, IDLE, IconKind, Ordering, WARN,
         icon_kind, ipc_unconnected, menu_alert_from, raster, tooltip_with_presence, update_label,
         version_label,
     };
@@ -465,9 +477,9 @@ mod linux {
                 .into(),
                 CheckmarkItem {
                     label: "Show challenges".into(),
-                    checked: self.handle.groups.shown("challenges"),
+                    checked: self.handle.groups.shown(Group::Challenges),
                     activate: Box::new(|this: &mut HudTray| {
-                        let _ = this.handle.toggle_group("challenges");
+                        this.handle.toggle_group(Group::Challenges);
                     }),
                     ..CheckmarkItem::default()
                 }
@@ -478,9 +490,9 @@ mod linux {
                 if self.handle.masteries_widget_enabled() {
                     CheckmarkItem {
                         label: "Show masteries".into(),
-                        checked: self.handle.groups.shown("masteries"),
+                        checked: self.handle.groups.shown(Group::Masteries),
                         activate: Box::new(|this: &mut HudTray| {
-                            let _ = this.handle.toggle_group("masteries");
+                            this.handle.toggle_group(Group::Masteries);
                         }),
                         ..CheckmarkItem::default()
                     }
@@ -497,9 +509,9 @@ mod linux {
                 },
                 CheckmarkItem {
                     label: "Show keybinds".into(),
-                    checked: self.handle.groups.shown("keybinds"),
+                    checked: self.handle.groups.shown(Group::Keybinds),
                     activate: Box::new(|this: &mut HudTray| {
-                        let _ = this.handle.toggle_group("keybinds");
+                        this.handle.toggle_group(Group::Keybinds);
                     }),
                     ..CheckmarkItem::default()
                 }
@@ -619,7 +631,7 @@ mod linux {
         }
 
         fn watcher_offline(&self, reason: ksni::OfflineReason) -> bool {
-            eprintln!(
+            warn!(
                 "tray: StatusNotifierWatcher offline ({reason:?}); HTTP remains the control hatch"
             );
             true
@@ -667,8 +679,8 @@ mod linux {
                 config_err.as_deref(),
             ),
             handle.overlay_on.load(Ordering::SeqCst),
-            handle.groups.shown("challenges"),
-            handle.groups.shown("masteries"),
+            handle.groups.shown(Group::Challenges),
+            handle.groups.shown(Group::Masteries),
             handle.masteries_widget_enabled(),
             handle.gamekeys.fps_display(),
             handle.gamekeys.dismiss_launcher(),
@@ -684,7 +696,7 @@ mod linux {
         };
         match tray.assume_sni_available(true).spawn() {
             Ok(svc) => {
-                eprintln!("tray: StatusNotifierItem via ksni");
+                info!("tray: StatusNotifierItem via ksni");
                 let mut last = snapshot(&handle);
                 while !stop.load(Ordering::SeqCst) && !handle.stopped() {
                     let next = snapshot(&handle);
@@ -698,7 +710,7 @@ mod linux {
                             })
                             .is_none()
                         {
-                            eprintln!(
+                            warn!(
                                 "tray: StatusNotifierItem stopped; HTTP remains the control hatch"
                             );
                             break;
@@ -709,9 +721,7 @@ mod linux {
                 svc.shutdown().wait();
             }
             Err(err) => {
-                eprintln!(
-                    "tray: StatusNotifierItem failed ({err}); HTTP remains the control hatch"
-                );
+                error!("tray: StatusNotifierItem failed ({err}); HTTP remains the control hatch");
                 while !stop.load(Ordering::SeqCst) && !handle.stopped() {
                     handle.ui.wait_timeout(Duration::from_secs(1));
                 }
@@ -766,16 +776,23 @@ mod windows {
         tip: String,
     }
 
+    // SAFETY: `hwnd` and `icon` are opaque Win32 handles (integers typed as
+    // pointers), not memory this struct owns or dereferences; every use goes
+    // through the `CTX` mutex, and the window itself is only touched from the
+    // tray thread that created it (which also runs `wndproc`).
     unsafe impl Send for Ctx {}
+    // SAFETY: as for `Send`; `&Ctx` exposes nothing mutable outside the mutex.
     unsafe impl Sync for Ctx {}
 
     static CTX: Mutex<Option<Box<Ctx>>> = Mutex::new(None);
 
     pub fn run(handle: Arc<Handle>, stop: Arc<AtomicBool>) {
-        unsafe { run_inner(handle, stop) }
-    }
-
-    unsafe fn run_inner(handle: Arc<Handle>, stop: Arc<AtomicBool>) {
+        // SAFETY: one thread owns the window for its whole life: it is
+        // registered, created, pumped and destroyed here, on this thread.
+        // `class` and `nid` are live locals for every call that reads them;
+        // WNDCLASSEXW, NOTIFYICONDATAW and MSG are plain C structs for which
+        // all-zero is a valid value, and the fields that matter are set below.
+        // `msg` is only read after PeekMessageW reported that it filled it.
         unsafe {
             let class = wide("df-hud-tray");
             let wc = WNDCLASSEXW {
@@ -803,7 +820,7 @@ mod windows {
                 ptr::null(),
             );
             if hwnd.is_null() {
-                eprintln!("tray: CreateWindowExW failed");
+                error!("tray: CreateWindowExW failed");
                 return;
             }
             let icon = hicon(IconKind::Idle);
@@ -816,7 +833,7 @@ mod windows {
             nid.hIcon = icon;
             write_tip(&mut nid, "df-hud: starting");
             Shell_NotifyIconW(NIM_ADD, &nid);
-            *CTX.lock().unwrap() = Some(Box::new(Ctx {
+            *lock(&CTX) = Some(Box::new(Ctx {
                 handle: handle.clone(),
                 hwnd,
                 icon,
@@ -841,13 +858,17 @@ mod windows {
                 DestroyIcon(icon);
             }
             DestroyWindow(hwnd);
-            *CTX.lock().unwrap() = None;
+            *lock(&CTX) = None;
         }
     }
 
-    unsafe fn refresh() {
+    fn refresh() {
+        // SAFETY: `ctx.icon` is a live HICON we created and own until it is
+        // destroyed here, once, before being replaced; `nid` is a live local
+        // NOTIFYICONDATAW (all-zero is valid, the used fields are set) that
+        // Shell_NotifyIconW only reads. Called from the tray thread only.
         unsafe {
-            let mut g = CTX.lock().unwrap();
+            let mut g = lock(&CTX);
             let Some(ctx) = g.as_mut() else {
                 return;
             };
@@ -890,30 +911,36 @@ mod windows {
     }
 
     unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-        unsafe {
-            match msg {
-                WM_TRAY => {
-                    if lp as u32 == WM_RBUTTONUP || lp as u32 == WM_LBUTTONUP {
-                        show_menu(hwnd);
-                    }
-                    0
+        match msg {
+            WM_TRAY => {
+                if lp as u32 == WM_RBUTTONUP || lp as u32 == WM_LBUTTONUP {
+                    show_menu(hwnd);
                 }
-                WM_COMMAND => {
-                    on_command(wp as u16);
-                    0
-                }
-                WM_DESTROY => {
-                    PostQuitMessage(0);
-                    0
-                }
-                _ => DefWindowProcW(hwnd, msg, wp, lp),
+                0
             }
+            WM_COMMAND => {
+                on_command(wp as u16);
+                0
+            }
+            WM_DESTROY => {
+                // SAFETY: posts WM_QUIT to this thread's queue; takes an exit code, no pointers.
+                unsafe { PostQuitMessage(0) };
+                0
+            }
+            // SAFETY: forwarding, unchanged, the message the system just
+            // delivered for `hwnd` on this thread.
+            _ => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
         }
     }
 
-    unsafe fn show_menu(hwnd: HWND) {
+    fn show_menu(hwnd: HWND) {
+        // SAFETY: `hwnd` is the tray window's live handle and this runs on its
+        // thread (from `wndproc`). Each `wide(..)` temporary outlives the
+        // InsertMenuW call that reads it, which copies the text. `menu` is
+        // the popup CreatePopupMenu just returned; `pt` is a live local POINT
+        // (all-zero is valid) that GetCursorPos fills before it is read.
         unsafe {
-            let g = CTX.lock().unwrap();
+            let g = lock(&CTX);
             let Some(ctx) = g.as_ref() else {
                 return;
             };
@@ -936,7 +963,7 @@ mod windows {
                 ID_OVERLAY as usize,
                 wide("Show overlay").as_ptr(),
             );
-            let board = ctx.handle.groups.shown("challenges");
+            let board = ctx.handle.groups.shown(Group::Challenges);
             InsertMenuW(
                 menu,
                 u32::MAX,
@@ -947,7 +974,7 @@ mod windows {
             // Config-disabled, the item enables the widget in the file; after
             // that it is a runtime toggle like the challenge board.
             if ctx.handle.masteries_widget_enabled() {
-                let masteries = ctx.handle.groups.shown("masteries");
+                let masteries = ctx.handle.groups.shown(Group::Masteries);
                 InsertMenuW(
                     menu,
                     u32::MAX,
@@ -964,7 +991,7 @@ mod windows {
                     wide("Enable masteries widget").as_ptr(),
                 );
             }
-            let keybinds = ctx.handle.groups.shown("keybinds");
+            let keybinds = ctx.handle.groups.shown(Group::Keybinds);
             InsertMenuW(
                 menu,
                 u32::MAX,
@@ -1074,7 +1101,7 @@ mod windows {
     }
 
     fn on_command(id: u16) {
-        let g = CTX.lock().unwrap();
+        let g = lock(&CTX);
         let Some(ctx) = g.as_ref() else {
             return;
         };
@@ -1085,17 +1112,17 @@ mod windows {
                 let _ = h.toggle_overlay();
             }
             ID_CHALLENGES => {
-                let _ = h.toggle_group("challenges");
+                h.toggle_group(Group::Challenges);
             }
             ID_MASTERIES => {
                 if h.masteries_widget_enabled() {
-                    let _ = h.toggle_group("masteries");
+                    h.toggle_group(Group::Masteries);
                 } else {
                     h.enable_masteries_widget();
                 }
             }
             ID_KEYBINDS => {
-                let _ = h.toggle_group("keybinds");
+                h.toggle_group(Group::Keybinds);
             }
             ID_FPS => h.set_fps_display(!h.gamekeys.fps_display()),
             ID_LAUNCHER => h.set_dismiss_launcher(!h.gamekeys.dismiss_launcher()),
@@ -1134,6 +1161,7 @@ mod windows {
             CreateIconIndirect, GetSystemMetrics, ICONINFO, SM_CXSMICON,
         };
 
+        // SAFETY: takes an index constant; no pointers.
         let size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
         let rgba = raster(
             match kind {
@@ -1153,11 +1181,16 @@ mod windows {
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: BI_RGB,
+                // SAFETY: the remaining header fields and the one RGBQUAD are
+                // plain integers, for which all-zero is a valid value.
                 ..unsafe { zeroed() }
             },
+            // SAFETY: as above.
             bmiColors: [unsafe { zeroed() }],
         };
         let mut bits = ptr::null_mut();
+        // SAFETY: `info` and `bits` are live locals; a null HDC and null
+        // section handle are the documented defaults for an in-memory DIB.
         let color = unsafe {
             CreateDIBSection(
                 ptr::null_mut(),
@@ -1169,22 +1202,31 @@ mod windows {
             )
         };
         if color.is_null() || bits.is_null() {
-            eprintln!("tray: CreateDIBSection failed");
+            error!("tray: CreateDIBSection failed");
             return ptr::null_mut();
         }
+        // SAFETY: `bits` is the section's pixel memory, `size * size * 4`
+        // bytes (32 bpp, `biHeight = -size` rows), which is exactly
+        // `bgra.len()`; the two buffers are distinct allocations.
         unsafe {
             ptr::copy_nonoverlapping(bgra.as_ptr(), bits.cast::<u8>(), bgra.len());
         }
-        let mask = unsafe { CreateBitmap(size, size, 1, 1, ptr::null()) };
-        let icon = unsafe {
-            CreateIconIndirect(&ICONINFO {
+        // SAFETY: a null bit pointer asks GDI for an uninitialised 1-bpp
+        // bitmap; the ICONINFO is a live temporary whose two GDI handles are
+        // valid until DeleteObject below (CreateIconIndirect copies them).
+        let (mask, icon) = unsafe {
+            let mask = CreateBitmap(size, size, 1, 1, ptr::null());
+            let icon = CreateIconIndirect(&ICONINFO {
                 fIcon: 1,
                 xHotspot: 0,
                 yHotspot: 0,
                 hbmMask: mask,
                 hbmColor: color,
-            })
+            });
+            (mask, icon)
         };
+        // SAFETY: both handles came from the GDI calls above, are non-null,
+        // and are deleted exactly once.
         unsafe {
             if !color.is_null() {
                 DeleteObject(color);
@@ -1194,7 +1236,7 @@ mod windows {
             }
         }
         if icon.is_null() {
-            eprintln!("tray: CreateIconIndirect failed");
+            error!("tray: CreateIconIndirect failed");
         }
         icon
     }

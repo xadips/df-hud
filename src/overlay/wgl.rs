@@ -8,7 +8,7 @@
 
 use std::error::Error;
 use std::ffi::{CString, c_void};
-use std::mem::{size_of, zeroed};
+use std::mem::size_of;
 use std::ptr;
 use std::sync::OnceLock;
 
@@ -51,6 +51,8 @@ type SwapIntervalExt = unsafe extern "system" fn(i32) -> i32;
 type GetPixelFormatAttribivArb =
     unsafe extern "system" fn(HDC, i32, i32, u32, *const i32, *mut i32) -> i32;
 
+/// A WGL context on the overlay HWND. The caller (`win32::Surface`) keeps that
+/// window alive for as long as this exists and drops the `Gpu` first.
 pub struct GlSurface {
     hwnd: HWND,
     hdc: HDC,
@@ -63,12 +65,16 @@ impl GlSurface {
         instance: windows_sys::Win32::Foundation::HINSTANCE,
         hwnd: HWND,
     ) -> Result<Self, Box<dyn Error>> {
+        // SAFETY: `hwnd` is the caller's live overlay window (CS_OWNDC, so the
+        // DC is the window's own and stays valid until ReleaseDC in `Drop`).
         let hdc = unsafe { GetDC(hwnd) };
         if hdc.is_null() {
             return Err(last_err("GetDC"));
         }
 
         let procs = wgl_procs(instance)?;
+        // SAFETY: opengl32.dll is a system library already mapped into this
+        // process by windows-sys's imports; loading it again runs no new code.
         let opengl32 = unsafe { Library::new("opengl32.dll") }
             .map_err(|err| format!("load opengl32.dll: {err}"))?;
         let (choose_fmt, create_ctx, get_attr, swap_interval_fn) = (
@@ -78,6 +84,7 @@ impl GlSurface {
             procs.swap_interval,
         );
 
+        // SAFETY: `hdc` is the live DC obtained above.
         let existing = unsafe { GetPixelFormat(hdc) };
         let format = if existing != 0 {
             existing
@@ -107,6 +114,10 @@ impl GlSurface {
             ];
             let mut format = 0i32;
             let mut count = 0u32;
+            // SAFETY: `choose_fmt` is the ICD's wglChoosePixelFormatARB with the
+            // signature the ARB spec gives it; `attribs` is 0-terminated, the
+            // float list is null (none), and `format`/`count` are live
+            // out-params sized for the one format requested.
             let ok = unsafe {
                 choose_fmt(
                     hdc,
@@ -118,39 +129,51 @@ impl GlSurface {
                 )
             };
             if ok == 0 || count == 0 || format == 0 {
+                // SAFETY: releasing the DC obtained above from the same `hwnd`, once.
                 unsafe { ReleaseDC(hwnd, hdc) };
                 return Err(
                     "wglChoosePixelFormatARB found no 32-bit RGBA + 8-bit alpha format".into(),
                 );
             }
 
-            let mut pfd: PIXELFORMATDESCRIPTOR = unsafe { zeroed() };
-            pfd.nSize = size_of::<PIXELFORMATDESCRIPTOR>() as u16;
-            pfd.nVersion = 1;
-            unsafe { DescribePixelFormat(hdc, format, pfd.nSize as u32, &mut pfd) };
-            if unsafe { SetPixelFormat(hdc, format, &pfd) } == 0 {
+            let mut pfd = PIXELFORMATDESCRIPTOR {
+                nSize: size_of::<PIXELFORMATDESCRIPTOR>() as u16,
+                nVersion: 1,
+                ..Default::default()
+            };
+            // SAFETY: `hdc` is live; `pfd` is a full descriptor and `nSize` says so.
+            let set = unsafe {
+                DescribePixelFormat(hdc, format, pfd.nSize as u32, &mut pfd);
+                SetPixelFormat(hdc, format, &pfd)
+            };
+            if set == 0 {
+                // SAFETY: releasing the DC obtained above from the same `hwnd`, once.
                 unsafe { ReleaseDC(hwnd, hdc) };
                 return Err(last_err("SetPixelFormat"));
             }
             format
         };
 
-        let mut pfd: PIXELFORMATDESCRIPTOR = unsafe { zeroed() };
-        pfd.nSize = size_of::<PIXELFORMATDESCRIPTOR>() as u16;
-        pfd.nVersion = 1;
-        unsafe { DescribePixelFormat(hdc, format, pfd.nSize as u32, &mut pfd) };
-
+        let mut pfd = PIXELFORMATDESCRIPTOR {
+            nSize: size_of::<PIXELFORMATDESCRIPTOR>() as u16,
+            nVersion: 1,
+            ..Default::default()
+        };
         let mut alpha = 0i32;
         let alpha_attr = WGL_ALPHA_BITS_ARB;
-        unsafe { get_attr(hdc, format, 0, 1, &alpha_attr, &mut alpha) };
-        eprintln!(
+        // SAFETY: `hdc` is live and `format` is set on it; `pfd` is a full
+        // descriptor; `get_attr` queries the one attribute in `alpha_attr`
+        // into the one int `alpha` (count 1).
+        unsafe {
+            DescribePixelFormat(hdc, format, pfd.nSize as u32, &mut pfd);
+            get_attr(hdc, format, 0, 1, &alpha_attr, &mut alpha);
+        }
+        debug!(
             "pixel format {format}  color {}  alpha {alpha}  flags=0x{:x}",
             pfd.cColorBits, pfd.dwFlags
         );
         if alpha < 8 {
-            eprintln!(
-                "WARNING: alpha bits {alpha} < 8 — DWM may composite this as opaque (the hole)"
-            );
+            warn!("WARNING: alpha bits {alpha} < 8 — DWM may composite this as opaque (the hole)");
         }
 
         let ctx_attribs = [
@@ -162,12 +185,18 @@ impl GlSurface {
             WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
             0,
         ];
+        // SAFETY: `create_ctx` is the ICD's wglCreateContextAttribsARB; `hdc`
+        // has its pixel format set, no share context (null), 0-terminated attribs.
         let rc = unsafe { create_ctx(hdc, ptr::null_mut(), ctx_attribs.as_ptr()) };
         if rc.is_null() {
+            // SAFETY: releasing the DC obtained above from the same `hwnd`, once.
             unsafe { ReleaseDC(hwnd, hdc) };
             return Err(last_err("wglCreateContextAttribsARB (GL 3.3 core)"));
         }
+        // SAFETY: `rc` was created on `hdc` just above; on failure both are
+        // released exactly once and never used again.
         if unsafe { wglMakeCurrent(hdc, rc) } == 0 {
+            // SAFETY: see above.
             unsafe {
                 wglDeleteContext(rc);
                 ReleaseDC(hwnd, hdc);
@@ -176,9 +205,11 @@ impl GlSurface {
         }
 
         if let Some(set_interval) = swap_interval_fn {
+            // SAFETY: wglSwapIntervalEXT acts on the context current on this
+            // thread, which `rc` now is.
             unsafe { set_interval(0) };
         } else {
-            eprintln!("warning: wglSwapIntervalEXT missing; hitch test is inconclusive");
+            warn!("warning: wglSwapIntervalEXT missing; hitch test is inconclusive");
         }
 
         Ok(Self {
@@ -190,6 +221,7 @@ impl GlSurface {
     }
 
     pub fn make_current(&self) -> Result<(), Box<dyn Error>> {
+        // SAFETY: `hdc`/`rc` are owned by `self` and live until `Drop`.
         if unsafe { wglMakeCurrent(self.hdc, self.rc) } == 0 {
             return Err(last_err("wglMakeCurrent"));
         }
@@ -197,6 +229,7 @@ impl GlSurface {
     }
 
     pub fn swap(&self) -> Result<(), Box<dyn Error>> {
+        // SAFETY: `hdc` is owned by `self` and live until `Drop`.
         if unsafe { SwapBuffers(self.hdc) } == 0 {
             return Err(last_err("SwapBuffers"));
         }
@@ -207,13 +240,17 @@ impl GlSurface {
         let Ok(c) = CString::new(name) else {
             return ptr::null();
         };
+        // SAFETY: `c` is NUL-terminated and alive for both lookups; `rc` is
+        // current on this thread (glow loads right after `create`), which is
+        // what makes wglGetProcAddress's answers valid for it; the opengl32
+        // fallback is kept mapped by `_opengl32`. Only the address is taken,
+        // so the placeholder `fn()` type is never called as such.
         unsafe {
             let p = wglGetProcAddress(c.as_ptr().cast());
-            if let Some(f) = p {
-                let addr = f as usize;
-                if addr > 3 {
-                    return f as *const c_void;
-                }
+            if let Some(f) = p
+                && real_proc(f as usize)
+            {
+                return f as *const c_void;
             }
             match self
                 ._opengl32
@@ -228,6 +265,9 @@ impl GlSurface {
 
 impl Drop for GlSurface {
     fn drop(&mut self) {
+        // SAFETY: `rc` and `hdc` are the handles `create` obtained for `hwnd`,
+        // released here exactly once; the owner dropped the `Gpu` before this
+        // and keeps `hwnd` alive until after.
         unsafe {
             wglMakeCurrent(ptr::null_mut(), ptr::null_mut());
             if !self.rc.is_null() {
@@ -263,6 +303,8 @@ fn load_wgl_extensions(
 ) -> Result<WglProcs, Box<dyn Error>> {
     let class = wide(DUMMY_CLASS);
     let title = wide("df-hud-wgl-dummy");
+    // SAFETY: `class`/`title` are NUL-terminated u16 buffers that outlive the
+    // call; DUMMY_CLASS was registered for `instance` by `register_classes`.
     let hwnd = unsafe {
         CreateWindowExW(
             0,
@@ -283,35 +325,53 @@ fn load_wgl_extensions(
         return Err(last_err("CreateWindowExW dummy"));
     }
 
+    // SAFETY: `hwnd` was just created and is destroyed only below.
     let hdc = unsafe { GetDC(hwnd) };
     if hdc.is_null() {
+        // SAFETY: destroying the window created above, once.
         unsafe { DestroyWindow(hwnd) };
         return Err(last_err("GetDC dummy"));
     }
 
-    let mut pfd: PIXELFORMATDESCRIPTOR = unsafe { zeroed() };
-    pfd.nSize = size_of::<PIXELFORMATDESCRIPTOR>() as u16;
-    pfd.nVersion = 1;
-    pfd.dwFlags =
-        PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER | PFD_SUPPORT_COMPOSITION;
-    pfd.iPixelType = PFD_TYPE_RGBA;
-    pfd.cColorBits = 32;
-    pfd.cAlphaBits = 8;
-    pfd.iLayerType = 0; // PFD_MAIN_PLANE
-    let format = unsafe { ChoosePixelFormat(hdc, &pfd) };
-    if format == 0 || unsafe { SetPixelFormat(hdc, format, &pfd) } == 0 {
+    let pfd = PIXELFORMATDESCRIPTOR {
+        nSize: size_of::<PIXELFORMATDESCRIPTOR>() as u16,
+        nVersion: 1,
+        dwFlags: PFD_DRAW_TO_WINDOW
+            | PFD_SUPPORT_OPENGL
+            | PFD_DOUBLEBUFFER
+            | PFD_SUPPORT_COMPOSITION,
+        iPixelType: PFD_TYPE_RGBA,
+        cColorBits: 32,
+        cAlphaBits: 8,
+        iLayerType: 0, // PFD_MAIN_PLANE
+        ..Default::default()
+    };
+    // SAFETY: `hdc` is the live dummy DC and `pfd` a full descriptor.
+    let format_set = unsafe {
+        let format = ChoosePixelFormat(hdc, &pfd);
+        format != 0 && SetPixelFormat(hdc, format, &pfd) != 0
+    };
+    if !format_set {
+        // SAFETY: the dummy DC and window are released once, in that order.
         unsafe {
             ReleaseDC(hwnd, hdc);
             DestroyWindow(hwnd);
         }
         return Err(last_err("dummy SetPixelFormat"));
     }
-    let rc = unsafe { wglCreateContext(hdc) };
-    if rc.is_null() || unsafe { wglMakeCurrent(hdc, rc) } == 0 {
+    // SAFETY: `hdc` has its pixel format set; `rc` is only made current when non-null.
+    let rc = unsafe {
+        let rc = wglCreateContext(hdc);
+        if !rc.is_null() && wglMakeCurrent(hdc, rc) == 0 {
+            wglDeleteContext(rc);
+            ptr::null_mut()
+        } else {
+            rc
+        }
+    };
+    if rc.is_null() {
+        // SAFETY: the dummy DC and window are released once, in that order.
         unsafe {
-            if !rc.is_null() {
-                wglDeleteContext(rc);
-            }
             ReleaseDC(hwnd, hdc);
             DestroyWindow(hwnd);
         }
@@ -326,6 +386,9 @@ fn load_wgl_extensions(
         .ok_or("wglGetPixelFormatAttribivARB missing")?;
     let swap = load_wgl_symbol::<SwapIntervalExt>("wglSwapIntervalEXT");
 
+    // SAFETY: the dummy context, DC and window are torn down once, in
+    // reverse creation order; the extension pointers loaded above are
+    // process-wide for this ICD, so they outlive the dummy context.
     unsafe {
         wglMakeCurrent(ptr::null_mut(), ptr::null_mut());
         wglDeleteContext(rc);
@@ -341,14 +404,26 @@ fn load_wgl_extensions(
     })
 }
 
+/// `T` must be the `unsafe extern "system" fn` type matching `name`'s WGL
+/// extension signature; it is only called through that type.
 fn load_wgl_symbol<T>(name: &str) -> Option<T> {
     let c = CString::new(name).ok()?;
+    // SAFETY: `c` is NUL-terminated and alive for the call; a dummy context
+    // is current on this thread (the caller's contract), so the address is the
+    // ICD's real entry point once the documented failure sentinels (null,
+    // 1..=3, -1) are excluded. Every `T` used is a fn pointer, the same size
+    // as PROC, so `transmute_copy` reinterprets exactly the pointer.
     unsafe {
         let p = wglGetProcAddress(c.as_ptr().cast())?;
-        let addr = p as usize;
-        if addr <= 3 {
+        if !real_proc(p as usize) {
             return None;
         }
         Some(std::mem::transmute_copy(&p))
     }
+}
+
+/// wglGetProcAddress signals failure with null (already an `Option::None`),
+/// 1, 2, 3 or -1, depending on the ICD.
+fn real_proc(addr: usize) -> bool {
+    addr > 3 && addr != usize::MAX
 }
