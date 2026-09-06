@@ -128,6 +128,19 @@ impl Runtime {
     }
 }
 
+/// Calls [`Handle::request_stop`] when dropped, so a loop that owns a
+/// `Handle` flushes the state file and stops the workers on every way out:
+/// `--duration`, the compositor closing the surface, a `?`, or a stop it
+/// saw. Declare it right after `start_with`; `request_stop` is idempotent,
+/// so a stop that already ran (tray Quit) costs nothing here.
+pub struct StopOnExit<'a>(pub &'a Handle);
+
+impl Drop for StopOnExit<'_> {
+    fn drop(&mut self) {
+        self.0.request_stop();
+    }
+}
+
 /// What a surface does at the five points of a tick where Wayland and Win32
 /// differ. Every hook is idempotent; `step` calls `follow` and one of
 /// `show` / `hide` every time, and `present` every time — the surface skips

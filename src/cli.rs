@@ -397,6 +397,7 @@ pub fn run_headless(config: Option<PathBuf>, print_hud: bool) -> Result<(), Box<
         cfg.describe_source(&path)
     );
     let handle = crate::app::start_with(cfg, crate::app::PrintOpts { hud: print_hud })?;
+    let _stop_on_exit = crate::overlay::StopOnExit(&handle);
     // No surface, so main is the thread that drains the wake pipe: that is
     // where SIGHUP is serviced and where a stop request lands. Nothing wakes
     // it periodically; `--duration` is an overlay flag and is rejected here.

@@ -13,6 +13,11 @@ first within each section.
 
 ### Fixed
 
+- The run clock, XP window and challenge memory are now written to
+  `state.json` on every exit, not only on Quit from the tray: `--duration`
+  running out, the compositor closing the overlay, an overlay error, and
+  `--headless` all flush. The `Handle` also no longer keeps itself alive
+  through its own callbacks, so its final flush can run.
 - The public-record probe no longer switches to authenticated requests for
   good. A transient failure (a Cloudflare page, a 5xx, a timeout) is tried
   again after about ten minutes; a definitive "no public record" after an
@@ -30,8 +35,10 @@ first within each section.
 ### Changed
 
 - The overlay skips the redraw and buffer swap when nothing on screen changed,
-  so on Linux an idle frame costs a comparison. Windows still re-asserts the
-  window style and monitor list each tick.
+  so an idle frame costs a comparison. On Windows the click-through window
+  style is only rewritten when a check finds a bit missing, and the monitor
+  list is re-read on a display or DPI change, a config change, or a remap
+  instead of every tick.
 - Fewer background wakeups: config reload (`SIGHUP`), the state saver,
   presence, and the headless loops block instead of polling, and the catalog
   and city-map fetches share one timer thread. Windows game detection

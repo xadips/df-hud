@@ -804,6 +804,7 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
             hud: args.print_hud,
         },
     )?;
+    let _stop_on_exit = overlay::StopOnExit(&handle);
     let cfg = handle.config();
     app.handle = Some(handle.clone());
 
