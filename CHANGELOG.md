@@ -13,7 +13,10 @@ first within each section.
   or for a few seconds after Launch Standalone (`source=launch`) before the
   process appears. The same account still refreshes. Launch while the client
   is already running does not switch; close it first, then load or Launch
-  Standalone from the other account.
+  Standalone from the other account. Update [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge)
+  to 1.11 as well: the Inner City lobby has no `userVars`, so the script
+  reads the Back to Outpost form and POSTs `source=launch` before following
+  Launch Standalone.
 
 ## [0.4.11] - 2026-08-28
 
