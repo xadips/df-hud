@@ -21,6 +21,10 @@ const FORBIDDEN: &[&str] = &["hunger", "itemspawn", "modify_values"];
 /// probe is tried again. Bounds the cost of a wrong `df.user_id` or a public
 /// endpoint that came back: one extra GET per hour, not one per poll.
 const PUBLIC_RETRY: Duration = Duration::from_secs(60 * 60);
+/// How long a probe that got no verdict (Cloudflare page, 5xx, timeout)
+/// stands down. Short enough that a hiccup recovers within minutes, long
+/// enough that a server asking us to back off is not asked twice per poll.
+const PUBLIC_RETRY_UNAVAILABLE: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone)]
 pub struct Credentials {
@@ -201,8 +205,17 @@ enum Probe {
     /// empty or `status=` reply, a 404). Asking again next poll will not
     /// change that, so the caller latches onto authenticated calls.
     NoRecord(Error),
-    /// Transport, Cloudflare, a 5xx: no verdict either way. Worth asking again.
+    /// Transport, Cloudflare, a 5xx: no verdict either way. Worth asking
+    /// again, but not every poll: that doubles the request volume exactly
+    /// when the server is refusing us, so the caller latches briefly.
     Unavailable(Error),
+}
+
+/// Why the public probe is latched off; picks how soon it is retried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+    NoRecord,
+    Unavailable,
 }
 
 /// Cheap to clone: the agent is a handle onto a shared pool and the
@@ -215,12 +228,14 @@ pub struct Client {
     pub user_agent: String,
     pub max_body: u64,
     pub cookie: String,
-    /// Set once the credential-free probe came back [`Probe::NoRecord`];
+    /// Set once the credential-free probe came back without a record;
     /// `get_values` then goes straight to the authenticated POST.
     public_failed: Arc<AtomicBool>,
-    /// When `public_failed` was set, so a stale verdict can be retried.
-    public_failed_at: Arc<Mutex<Option<Instant>>>,
+    /// When and why `public_failed` was set, so a stale verdict can be
+    /// retried on the schedule its kind deserves.
+    public_failed_at: Arc<Mutex<Option<(Instant, Verdict)>>>,
     public_retry: Duration,
+    public_retry_unavailable: Duration,
 }
 
 impl Client {
@@ -248,6 +263,7 @@ impl Client {
             public_failed: Arc::new(AtomicBool::new(false)),
             public_failed_at: Arc::new(Mutex::new(None)),
             public_retry: PUBLIC_RETRY,
+            public_retry_unavailable: PUBLIC_RETRY_UNAVAILABLE,
         }
     }
 
@@ -258,24 +274,35 @@ impl Client {
     }
 
     #[cfg(test)]
-    fn set_public_retry(&mut self, retry: Duration) {
-        self.public_retry = retry;
+    fn set_public_retry(&mut self, verdict: Verdict, retry: Duration) {
+        match verdict {
+            Verdict::NoRecord => self.public_retry = retry,
+            Verdict::Unavailable => self.public_retry_unavailable = retry,
+        }
     }
 
-    fn latch_public(&self) {
-        *lock(&self.public_failed_at) = Some(Instant::now());
+    fn public_retry_for(&self, verdict: Verdict) -> Duration {
+        match verdict {
+            Verdict::NoRecord => self.public_retry,
+            Verdict::Unavailable => self.public_retry_unavailable,
+        }
+    }
+
+    fn latch_public(&self, verdict: Verdict) {
+        *lock(&self.public_failed_at) = Some((Instant::now(), verdict));
         self.public_failed.store(true, Ordering::SeqCst);
     }
 
     /// Called after an authenticated poll succeeded: once the verdict is
-    /// `public_retry` old the next poll probes again, in case the public
-    /// record came back or `df.user_id` was fixed.
+    /// older than its kind's retry the next poll probes again, in case the
+    /// public record came back, `df.user_id` was fixed, or the server
+    /// stopped refusing us.
     fn expire_public_latch(&self) {
         if !self.public_failed.load(Ordering::SeqCst) {
             return;
         }
         let mut at = lock(&self.public_failed_at);
-        if at.is_some_and(|t| t.elapsed() >= self.public_retry) {
+        if at.is_some_and(|(t, verdict)| t.elapsed() >= self.public_retry_for(verdict)) {
             *at = None;
             self.public_failed.store(false, Ordering::SeqCst);
         }
@@ -358,8 +385,8 @@ impl Client {
         if !self.public_failed.load(Ordering::SeqCst) {
             match self.probe_public(&cr.user_id) {
                 Probe::Record(vars) => return Ok(vars),
-                Probe::NoRecord(_) => self.latch_public(),
-                Probe::Unavailable(_) => {}
+                Probe::NoRecord(_) => self.latch_public(Verdict::NoRecord),
+                Probe::Unavailable(_) => self.latch_public(Verdict::Unavailable),
             }
         }
         let vars = self.call(
@@ -900,7 +927,38 @@ mod tests {
     }
 
     #[test]
-    fn transport_trouble_does_not_latch_the_public_probe() {
+    fn a_refused_probe_is_not_repeated_every_poll() {
+        let gets = Arc::new(Mutex::new(0u32));
+        let posts = Arc::new(Mutex::new(0u32));
+        let g = gets.clone();
+        let p = posts.clone();
+        let (base, _) = spawn(move |hit| {
+            if hit.method == "GET" {
+                *g.lock().unwrap() += 1;
+                (
+                    403,
+                    "<!DOCTYPE html><title>Attention Required! | Cloudflare</title>".into(),
+                )
+            } else {
+                *p.lock().unwrap() += 1;
+                (200, "&id_member=1&df_level=415".into())
+            }
+        });
+        let c = Client::new(&base, "df-hud/test");
+        let cr = Credentials {
+            user_id: "1".into(),
+            password: "p".into(),
+            sc: "s".into(),
+        };
+        for _ in 0..12 {
+            c.get_values(&cr).unwrap();
+        }
+        assert_eq!(*gets.lock().unwrap(), 1, "a refusal latches like a 404");
+        assert_eq!(*posts.lock().unwrap(), 12);
+    }
+
+    #[test]
+    fn transport_trouble_latches_the_public_probe_briefly() {
         let gets = Arc::new(Mutex::new(0u32));
         let posts = Arc::new(Mutex::new(0u32));
         let g = gets.clone();
@@ -919,20 +977,45 @@ mod tests {
                 (200, "&id_member=1&df_level=415".into())
             }
         });
-        let c = Client::new(&base, "df-hud/test");
+        let mut c = Client::new(&base, "df-hud/test");
         let cr = Credentials {
             user_id: "1".into(),
             password: "p".into(),
             sc: "s".into(),
         };
-        for _ in 0..3 {
-            c.get_values(&cr).unwrap();
-        }
-        assert_eq!(*gets.lock().unwrap(), 3, "every poll probed again");
+        let counts = || (*gets.lock().unwrap(), *posts.lock().unwrap());
+        c.get_values(&cr).unwrap();
+        c.get_values(&cr).unwrap();
         assert_eq!(
-            *posts.lock().unwrap(),
-            2,
-            "only the failed probes fell back"
+            counts(),
+            (1, 2),
+            "a 5xx latches: the next poll goes straight to POST"
+        );
+        c.set_public_retry(Verdict::NoRecord, Duration::ZERO);
+        c.get_values(&cr).unwrap();
+        assert_eq!(
+            counts(),
+            (1, 3),
+            "the no-record expiry does not apply to a 5xx"
+        );
+        c.set_public_retry(Verdict::Unavailable, Duration::ZERO);
+        c.get_values(&cr).unwrap();
+        assert_eq!(
+            counts(),
+            (1, 4),
+            "the poll that finds the verdict old still POSTs"
+        );
+        c.get_values(&cr).unwrap();
+        assert_eq!(
+            counts(),
+            (2, 5),
+            "one probe is retried, and a Cloudflare page latches again"
+        );
+        c.get_values(&cr).unwrap();
+        assert_eq!(
+            counts(),
+            (3, 5),
+            "the probe that finally gets a record needs no POST"
         );
     }
 
@@ -966,14 +1049,21 @@ mod tests {
         c.get_values(&cr).unwrap();
         c.get_values(&cr).unwrap();
         assert_eq!(counts(), (1, 2), "no record: latched after one probe");
-        c.set_public_retry(Duration::ZERO);
+        c.set_public_retry(Verdict::Unavailable, Duration::ZERO);
         c.get_values(&cr).unwrap();
         assert_eq!(
             counts(),
             (1, 3),
+            "the short unavailable expiry does not apply to a no-record verdict"
+        );
+        c.set_public_retry(Verdict::NoRecord, Duration::ZERO);
+        c.get_values(&cr).unwrap();
+        assert_eq!(
+            counts(),
+            (1, 4),
             "the poll that finds the verdict old still POSTs"
         );
         c.get_values(&cr).unwrap();
-        assert_eq!(counts(), (2, 3), "then the probe is tried again");
+        assert_eq!(counts(), (2, 4), "then the probe is tried again");
     }
 }

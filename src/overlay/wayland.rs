@@ -10,9 +10,10 @@
 //! a buffer was attached`.
 //!
 //! Frames whose draw list did not change are not swapped at all. A pending
-//! configure serial forces the draw so the ack still rides on a real commit;
-//! a size or scale change alters the buffer size and so redraws on its own;
-//! a remap gets a fresh `Gpu` whose first frame always draws.
+//! configure serial forces the draw so the ack still rides on a real commit,
+//! and stays pending until a draw actually succeeds; a size or scale change
+//! alters the buffer size and so redraws on its own; a remap gets a fresh
+//! `Gpu` whose first frame always draws.
 //!
 //! This module owns the EGL window and `eglSwapBuffers`. [`crate::overlay::gpu::Gpu`] is
 //! shader + atlas + draw list and must not see `WlSurface`.
@@ -316,14 +317,16 @@ impl App {
             logical_h: self.logical_h,
         };
         // A pending serial must be acked in the same commit as a buffer, so
-        // it forces the draw even when the scene is unchanged.
-        let serial = self.pending_serial.take();
+        // it forces the draw even when the scene is unchanged. It is taken
+        // only once the draw succeeded: a failed `make_current` or draw
+        // leaves it pending for the next frame instead of dropping the ack.
+        let forced = self.pending_serial.is_some();
         self.gl_window.as_ref().expect("gl_window").make_current()?;
         let gpu = self.gpu.as_mut().expect("gpu");
-        if !gpu.draw(frame, built, serial.is_some())? {
+        if !gpu.draw(frame, built, forced)? {
             return Ok(());
         }
-        if let Some(serial) = serial
+        if let Some(serial) = self.pending_serial.take()
             && let Some(layer) = &self.layer_surface
         {
             layer.ack_configure(serial);
