@@ -128,8 +128,10 @@ impl Inner {
     fn dispatch(self: &Arc<Self>, mut stream: TcpStream) {
         if self.in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            drain_request(&mut stream);
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
             let _ = write_http(&mut stream, 503, "text/plain", b"too many connections");
+            let _ = stream.shutdown(std::net::Shutdown::Write);
             return;
         }
         let slot = Slot(self.clone());
@@ -479,6 +481,45 @@ fn loopback_host(hostport: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
+/// Most a refused request is read before the 503; a userscript sync is well
+/// under this.
+const DRAIN_LIMIT: usize = 8 << 10;
+
+/// Reads a small request before it is refused. Closing with unread bytes in
+/// the socket turns into a TCP reset, and a client mid-POST then sees the
+/// reset instead of the status. Bounded in bytes and time: this runs on the
+/// accept thread. Stops at the end of the body once `Content-Length` is
+/// known, at [`DRAIN_LIMIT`], or when the peer goes quiet.
+fn drain_request(stream: &mut TcpStream) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 1024];
+    let mut want: Option<usize> = None;
+    while buf.len() < DRAIN_LIMIT && want.is_none_or(|n| buf.len() < n) && Instant::now() < deadline
+    {
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+        if want.is_none()
+            && let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n")
+        {
+            want = Some(end + 4 + content_length(&buf[..end]));
+        }
+    }
+}
+
+/// `Content-Length` out of a raw header block; 0 when absent or malformed.
+fn content_length(headers: &[u8]) -> usize {
+    String::from_utf8_lossy(headers)
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(k, _)| k.trim().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, v)| v.trim().parse().ok())
+        .unwrap_or(0)
+}
+
 fn write_http(
     stream: &mut TcpStream,
     status: u16,
@@ -817,30 +858,54 @@ mod tests {
     }
 
     /// Idle connections each hold a handler thread. Past the cap the accept
-    /// thread answers 503 itself, and the slots come back once they close.
+    /// thread answers 503 itself, even to a POST with a body it never
+    /// served, and the slots come back once they close.
     #[test]
     fn saturated_bridge_answers_503_then_recovers() {
         let (srv, _, _dir) = test_srv(Hooks::default());
         let idle: Vec<TcpStream> = (0..MAX_CONNECTIONS)
             .map(|_| TcpStream::connect(srv.listen).unwrap())
             .collect();
-        let extra = TcpStream::connect(srv.listen).unwrap();
-        extra
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut reader = BufReader::new(extra);
-        let mut status_line = String::new();
-        reader.read_line(&mut status_line).unwrap();
-        assert!(status_line.starts_with("HTTP/1.1 503"), "{status_line}");
-        let mut headers = String::new();
-        loop {
-            let mut line = String::new();
-            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                break;
+        let read_503 = |stream: TcpStream| {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut status_line = String::new();
+            reader.read_line(&mut status_line).unwrap();
+            assert!(status_line.starts_with("HTTP/1.1 503"), "{status_line}");
+            let mut headers = String::new();
+            let mut body_len = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some(n) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    body_len = n.trim().parse().unwrap();
+                }
+                headers.push_str(&line.to_ascii_lowercase());
             }
-            headers.push_str(&line.to_ascii_lowercase());
-        }
-        assert!(headers.contains("connection: close"), "{headers}");
+            assert!(headers.contains("connection: close"), "{headers}");
+            let mut body = vec![0u8; body_len];
+            reader.read_exact(&mut body).unwrap();
+            assert_eq!(body, b"too many connections");
+        };
+        read_503(TcpStream::connect(srv.listen).unwrap());
+
+        // A real sync: the body must be read before the refusal, or the
+        // close turns into a reset and the client never sees the 503.
+        let payload = payload(valid_vars(), FAKE_SALT, "");
+        let mut posting = TcpStream::connect(srv.listen).unwrap();
+        write!(
+            posting,
+            "POST /api/userData HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            srv.listen,
+            payload.len()
+        )
+        .unwrap();
+        posting.write_all(&payload).unwrap();
+        read_503(posting);
 
         drop(idle);
         let health = format!("http://{}/healthz", srv.listen);

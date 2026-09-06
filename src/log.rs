@@ -43,23 +43,30 @@ pub fn enabled(level: Level) -> bool {
 }
 
 #[doc(hidden)]
-pub fn write(level: Level, args: std::fmt::Arguments<'_>) {
-    if enabled(level) {
-        eprintln!("{args}");
-    }
+pub fn write(args: std::fmt::Arguments<'_>) {
+    eprintln!("{args}");
 }
 
+/// The level check happens before the arguments are formatted, so a filtered
+/// line evaluates nothing: `debug!("{}", expensive())` costs one comparison.
+macro_rules! log_at {
+    ($level:expr, $($arg:tt)*) => {{
+        if $crate::log::enabled($level) {
+            $crate::log::write(format_args!($($arg)*));
+        }
+    }};
+}
 macro_rules! error {
-    ($($arg:tt)*) => { $crate::log::write($crate::log::Level::Error, format_args!($($arg)*)) };
+    ($($arg:tt)*) => { log_at!($crate::log::Level::Error, $($arg)*) };
 }
 macro_rules! warn {
-    ($($arg:tt)*) => { $crate::log::write($crate::log::Level::Warn, format_args!($($arg)*)) };
+    ($($arg:tt)*) => { log_at!($crate::log::Level::Warn, $($arg)*) };
 }
 macro_rules! info {
-    ($($arg:tt)*) => { $crate::log::write($crate::log::Level::Info, format_args!($($arg)*)) };
+    ($($arg:tt)*) => { log_at!($crate::log::Level::Info, $($arg)*) };
 }
 macro_rules! debug {
-    ($($arg:tt)*) => { $crate::log::write($crate::log::Level::Debug, format_args!($($arg)*)) };
+    ($($arg:tt)*) => { log_at!($crate::log::Level::Debug, $($arg)*) };
 }
 
 #[cfg(test)]
@@ -89,5 +96,25 @@ mod tests {
         assert!(Level::Warn <= Level::Info);
         assert!(Level::Info <= Level::Debug);
         assert!(Level::Debug > Level::Info, "debug is the chattiest");
+    }
+
+    #[test]
+    fn a_filtered_line_does_not_evaluate_its_arguments() {
+        use std::cell::Cell;
+        let evaluated = Cell::new(0u32);
+        let tick = || {
+            evaluated.set(evaluated.get() + 1);
+            "unused"
+        };
+        // `error` always passes the threshold; `debug` only under
+        // DF_HUD_LOG=debug, which the test environment may or may not set.
+        error!("log test: {}", tick());
+        assert_eq!(evaluated.get(), 1);
+        debug!("log test: {}", tick());
+        assert_eq!(
+            evaluated.get(),
+            if enabled(Level::Debug) { 2 } else { 1 },
+            "arguments are formatted only for lines that print"
+        );
     }
 }

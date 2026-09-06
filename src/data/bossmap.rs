@@ -28,7 +28,6 @@ pub enum MarkCategory {
 #[derive(Clone, Debug, Default)]
 pub struct BossMap {
     pub server_time: DateTime<Utc>,
-    pub hash: String,
     pub events: Vec<CityEvent>,
     pub outpost_attack: bool,
     by_block: HashMap<(i32, i32), Vec<usize>>,
@@ -168,16 +167,17 @@ pub fn nearest_mark(marks: &[CityMark]) -> Option<CityMark> {
         .cloned()
 }
 
-/// One poll of the feed over a shared agent. `Ok(None)` when the feed's own
-/// `bosshash` still equals `prev_hash`: an unchanged board costs a download
-/// and a key scan, not a parse and a block index.
+/// One poll of the feed over a shared agent. `Ok(None)` when the body's
+/// [`body_fingerprint`] equals `prev`, the fingerprint returned with the map
+/// last parsed: an unchanged board costs a download and a byte compare, not
+/// a parse and a block index.
 pub fn fetch_if_changed_with(
     agent: &ureq::Agent,
     url: &str,
     user_agent: &str,
     timeout: Duration,
-    prev_hash: Option<&str>,
-) -> Result<Option<BossMap>, String> {
+    prev: Option<&[u8]>,
+) -> Result<Option<(BossMap, Vec<u8>)>, String> {
     let body = crate::net::http::get_bytes_with(
         agent,
         url,
@@ -190,61 +190,56 @@ pub fn fetch_if_changed_with(
         ],
     )
     .map_err(|e| format!("bossmap: {e}"))?;
-    parse_if_changed(&body, prev_hash)
+    parse_if_changed(&body, prev)
 }
 
-/// The feed does not honour `If-None-Match`, so the hash is read straight
-/// off the bytes: one key scan against building the whole `Value` tree and
-/// the block index only to drop them. A body with no scannable hash is
-/// parsed and compared the slow way; a feed without any hash always counts
-/// as changed, since there is nothing to compare.
-pub fn parse_if_changed(data: &[u8], prev_hash: Option<&str>) -> Result<Option<BossMap>, String> {
-    let Some(prev) = prev_hash.filter(|h| !h.is_empty()) else {
-        return parse(data).map(Some);
-    };
-    if let Some(hash) = scan_bosshash(data) {
-        return if hash == prev {
-            Ok(None)
-        } else {
-            parse(data).map(Some)
-        };
+/// The feed does not honour `If-None-Match`, and its `bosshash` covers the
+/// boss placements but not the `started`/`ended` flags the OUTPOST ATTACK
+/// banner hangs off, so the only safe short-circuit is the body itself:
+/// `Ok(None)` when its fingerprint equals `prev`, otherwise the parsed map
+/// with the fingerprint to hold for next time.
+pub fn parse_if_changed(
+    data: &[u8],
+    prev: Option<&[u8]>,
+) -> Result<Option<(BossMap, Vec<u8>)>, String> {
+    let print = body_fingerprint(data);
+    if prev == Some(print.as_slice()) {
+        return Ok(None);
     }
     let m = parse(data)?;
-    Ok((m.hash.is_empty() || m.hash != prev).then_some(m))
+    Ok(Some((m, print)))
 }
 
-/// `"bosshash":"<value>"` as the feed writes it. Escapes and empty values
-/// are left to the parser, which never guesses.
-fn scan_bosshash(data: &[u8]) -> Option<&str> {
-    const KEY: &[u8] = b"\"bosshash\"";
+/// The body with the one field that changes on every response, the server
+/// clock `"servertime":<digits>`, cut out. Nothing reads that clock, so two
+/// bodies that differ only there carry the same map. Any other byte counts.
+pub fn body_fingerprint(data: &[u8]) -> Vec<u8> {
+    const KEY: &[u8] = b"\"servertime\"";
+    let mut out = Vec::with_capacity(data.len());
     let mut from = 0;
     while let Some(at) = data[from..].windows(KEY.len()).position(|w| w == KEY) {
         let mut i = from + at + KEY.len();
-        from = i;
         let skip_ws = |i: &mut usize| {
             while data.get(*i).is_some_and(u8::is_ascii_whitespace) {
                 *i += 1;
             }
         };
         skip_ws(&mut i);
-        if data.get(i) != Some(&b':') {
-            continue;
+        if data.get(i) == Some(&b':') {
+            i += 1;
+            skip_ws(&mut i);
+            let digits = data[i..].iter().take_while(|b| b.is_ascii_digit()).count();
+            if digits > 0 {
+                out.extend_from_slice(&data[from..i]);
+                from = i + digits;
+                continue;
+            }
         }
-        i += 1;
-        skip_ws(&mut i);
-        if data.get(i) != Some(&b'"') {
-            continue;
-        }
-        let start = i + 1;
-        let len = data[start..]
-            .iter()
-            .position(|&b| b == b'"' || b == b'\\')?;
-        if data[start + len] == b'\\' || len == 0 {
-            return None;
-        }
-        return std::str::from_utf8(&data[start..start + len]).ok();
+        out.extend_from_slice(&data[from..i]);
+        from = i;
     }
-    None
+    out.extend_from_slice(&data[from..]);
+    out
 }
 
 pub fn parse(data: &[u8]) -> Result<BossMap, String> {
@@ -253,9 +248,6 @@ pub fn parse(data: &[u8]) -> Result<BossMap, String> {
         .as_object()
         .ok_or_else(|| "bossmap: expected object".to_string())?;
     let mut out = BossMap::default();
-    if let Some(h) = obj.get("bosshash").and_then(|v| v.as_str()) {
-        out.hash = h.to_string();
-    }
     if let Some(t) = obj.get("servertime").and_then(serde_json::Value::as_i64) {
         out.server_time = DateTime::from_timestamp(t, 0).unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
     }
@@ -601,39 +593,99 @@ mod tests {
         (parse(&raw).unwrap(), now)
     }
 
-    #[test]
-    fn unchanged_hash_skips_the_parse() {
-        let raw =
-            std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/bossmap.json"))
-                .unwrap();
-        let hash = parse(&raw).unwrap().hash;
-        assert_eq!(scan_bosshash(&raw), Some(hash.as_str()));
-        assert!(parse_if_changed(&raw, Some(&hash)).unwrap().is_none());
-        assert!(parse_if_changed(&raw, Some("stale")).unwrap().is_some());
-        assert!(parse_if_changed(&raw, None).unwrap().is_some());
-        assert!(parse_if_changed(&raw, Some("")).unwrap().is_some());
+    fn fixture_bytes() -> Vec<u8> {
+        std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/bossmap.json")).unwrap()
+    }
+
+    /// Byte range of the digits after `"servertime":` in `raw`.
+    fn servertime_span(raw: &[u8]) -> std::ops::Range<usize> {
+        let key = b"\"servertime\":";
+        let at = raw.windows(key.len()).position(|w| w == key).unwrap() + key.len();
+        let len = raw[at..].iter().take_while(|b| b.is_ascii_digit()).count();
+        assert!(len > 0);
+        at..at + len
     }
 
     #[test]
-    fn bosshash_scan_is_conservative() {
-        assert_eq!(
-            scan_bosshash(br#"{"0":{"title":"bosshash"},"bosshash" : "abc","servertime":1}"#),
-            Some("abc"),
-            "a value spelled like the key is skipped"
-        );
-        assert_eq!(scan_bosshash(br#"{"bosshash":""}"#), None);
-        assert_eq!(scan_bosshash(br#"{"bosshash":"a\"b"}"#), None);
-        assert_eq!(scan_bosshash(br#"{"bosshash":12}"#), None);
-        assert_eq!(scan_bosshash(br#"{"servertime":1}"#), None);
+    fn unchanged_body_skips_the_parse() {
+        let raw = fixture_bytes();
+        let (m, print) = parse_if_changed(&raw, None).unwrap().unwrap();
+        assert!(!m.events.is_empty());
+        assert_eq!(print, body_fingerprint(&raw));
+        assert!(parse_if_changed(&raw, Some(&print)).unwrap().is_none());
+        assert!(parse_if_changed(&raw, Some(b"stale")).unwrap().is_some());
+        assert!(parse_if_changed(b"not json", Some(b"abc")).is_err());
 
-        // No scannable hash: parsed and compared the slow way.
-        let escaped = br#"{"bosshash":"a\"b","servertime":1000,"version":"1"}"#;
-        assert!(parse_if_changed(escaped, Some("a\"b")).unwrap().is_none());
-        assert!(parse_if_changed(escaped, Some("other")).unwrap().is_some());
-        // No hash at all: always changed, there is nothing to compare.
-        let none = br#"{"servertime":1000,"version":"1"}"#;
-        assert!(parse_if_changed(none, Some("abc")).unwrap().is_some());
-        assert!(parse_if_changed(b"not json", Some("abc")).is_err());
+        // Only the server clock moved: same map, no parse.
+        let span = servertime_span(&raw);
+        let mut ticked = raw.clone();
+        ticked.splice(span.clone(), b"1786527999".iter().copied());
+        assert_ne!(ticked, raw);
+        assert!(parse_if_changed(&ticked, Some(&print)).unwrap().is_none());
+        let mut shorter = raw.clone();
+        shorter.splice(span, b"7".iter().copied());
+        assert!(parse_if_changed(&shorter, Some(&print)).unwrap().is_none());
+
+        // An `ended` flag flipped somewhere in the body: parsed again.
+        let flag = b"\"ended\":\"0\"";
+        let at = raw.windows(flag.len()).position(|w| w == flag).unwrap();
+        let mut flipped = raw.clone();
+        flipped[at + flag.len() - 2] = b'1';
+        let (again, print2) = parse_if_changed(&flipped, Some(&print)).unwrap().unwrap();
+        assert_ne!(print2, print);
+        assert_ne!(again.events[0].ended, m.events[0].ended);
+    }
+
+    #[test]
+    fn fingerprint_masks_the_server_clock_and_nothing_else() {
+        let raw = fixture_bytes();
+        let print = body_fingerprint(&raw);
+        let span = servertime_span(&raw);
+        assert_eq!(print.len(), raw.len() - span.len());
+        for i in 0..raw.len() {
+            let mut bent = raw.clone();
+            bent[i] = match raw[i] {
+                d @ b'0'..=b'9' => b'0' + (d - b'0' + 1) % 10,
+                b'~' => b'!',
+                _ => b'~',
+            };
+            let same = body_fingerprint(&bent) == print;
+            assert_eq!(same, span.contains(&i), "byte {i} ({:?})", raw[i] as char);
+        }
+
+        // Spacing variants, a string that merely spells the key, and a clock
+        // that is not a number.
+        assert_eq!(
+            body_fingerprint(br#"{"0":{"title":"servertime"},"servertime" : 42 ,"version":"1"}"#),
+            br#"{"0":{"title":"servertime"},"servertime" :  ,"version":"1"}"#
+        );
+        for untouched in [
+            br#"{"servertime":"1000","version":"1"}"#.as_slice(),
+            br#"{"servertime":-1}"#.as_slice(),
+            br#"{"version":"1"}"#.as_slice(),
+            br#"{"servertime""#.as_slice(),
+            b"",
+        ] {
+            assert_eq!(body_fingerprint(untouched), untouched);
+        }
+    }
+
+    #[test]
+    fn outpost_attack_clears_when_only_the_ended_flag_changes() {
+        let live = br#"{
+	  "0":{"event_id":"1","isoa":"1","locations":[],"started":"1","ended":"0",
+	       "title":"Outpost Attack","boss_num":"0","event_type":""},
+	  "bosshash":"same","servertime":1000,"version":"1"}"#;
+        let over = br#"{
+	  "0":{"event_id":"1","isoa":"1","locations":[],"started":"1","ended":"1",
+	       "title":"Outpost Attack","boss_num":"0","event_type":""},
+	  "bosshash":"same","servertime":1060,"version":"1"}"#;
+        let (m, print) = parse_if_changed(live, None).unwrap().unwrap();
+        assert!(m.outpost_attack);
+        let (m, _) = parse_if_changed(over, Some(&print))
+            .unwrap()
+            .expect("same bosshash must not hide an ended flag");
+        assert!(!m.outpost_attack);
     }
 
     #[test]

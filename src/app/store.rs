@@ -403,6 +403,10 @@ impl Store {
         lock(&self.inner).boss_map = None;
     }
 
+    pub fn has_boss_map(&self) -> bool {
+        lock(&self.inner).boss_map.is_some()
+    }
+
     pub fn set_poller_status(&self, st: PollerStatus) {
         lock(&self.inner).poller = st;
     }
@@ -1685,10 +1689,13 @@ mod tests {
         let view = s.derive(now);
         assert!(view.challenges.is_none());
         assert_eq!(view.challenge_status, "retrying");
+        assert!(!s.has_boss_map());
         s.set_boss_map(
             bossmap::parse(br#"{"bosshash":"x","servertime":1000,"version":"1"}"#).unwrap(),
         );
+        assert!(s.has_boss_map());
         s.clear_boss_map();
+        assert!(!s.has_boss_map());
         assert!(!s.derive(now).outpost_attack);
     }
 

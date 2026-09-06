@@ -42,7 +42,9 @@ use store::Store;
 
 #[cfg(target_os = "linux")]
 static HUP: AtomicBool = AtomicBool::new(false);
-/// Write end of the wake pipe, for the SIGHUP handler.
+/// The SIGHUP handler's own duplicate of the wake pipe's write end, made by
+/// `catch_sighup` and never closed, so the handler does not depend on any
+/// `Handle` or `Wake` staying alive.
 #[cfg(target_os = "linux")]
 static HUP_FD: AtomicI32 = AtomicI32::new(-1);
 
@@ -462,6 +464,10 @@ impl Handle {
     }
 }
 
+// Never runs today: `start_with` stores `Arc<Handle>` clones in the
+// `set_on_tick` / `set_on_change` closures owned by pollers the `Handle`
+// itself holds, so the count never reaches zero. Nothing relies on that leak
+// (`catch_sighup` dups the wake fd rather than borrowing it).
 impl Drop for Handle {
     fn drop(&mut self) {
         self.persist_run();
@@ -747,7 +753,7 @@ pub fn start_with(
     });
 
     {
-        if cfg.presence.enabled {
+        if let Some(control) = presence {
             let store = store.clone();
             let wake = wake.clone();
             let stop = stop.clone();
@@ -761,7 +767,6 @@ pub fn start_with(
                 let wake_state = wake.clone();
                 let store_conn = store.clone();
                 let wake_conn = wake.clone();
-                let control = presence.expect("presence enabled");
                 presence::serve(
                     &path,
                     move |state| {
@@ -850,11 +855,12 @@ extern "C" fn on_sighup(_: libc::c_int) {
     if fd >= 0 {
         let byte = 1u8;
         // SAFETY: write(2) is async-signal-safe; the pointer is to one live
-        // byte on this frame and the length is 1. `fd` is the wake pipe's
-        // write end, which `Wake::write_fd` promises stays open for the rest
-        // of the process (the `Handle` owning it is never dropped once the
-        // handler is installed). The end is non-blocking, and a dropped write
-        // into a full pipe is fine: a wake is already pending.
+        // byte on this frame and the length is 1. `fd` is `catch_sighup`'s
+        // private dup of the wake pipe's write end: nothing else knows the
+        // number and nothing ever closes it, so it stays valid for the rest
+        // of the process no matter what happens to the `Wake` or `Handle`.
+        // The description is non-blocking, and a dropped write into a full
+        // pipe is fine: a wake is already pending.
         unsafe {
             libc::write(fd, std::ptr::from_ref(&byte).cast(), 1);
         }
@@ -870,11 +876,25 @@ fn catch_sighup(handle: &Arc<Handle>) {
             h.reload_config();
         }
     }));
-    HUP_FD.store(handle.wake.inner.write_fd(), Ordering::SeqCst);
+    // The handler gets its own fd rather than the `Wake`'s: a static that
+    // outlives every owner must not point at an fd someone else may close.
+    // F_DUPFD_CLOEXEC keeps the pipe out of `xdg-open` like the original;
+    // O_NONBLOCK lives on the shared description, so it carries over.
+    // SAFETY: F_DUPFD_CLOEXEC takes an int, not a pointer, and `handle.wake`
+    // keeps the source fd open across this call.
+    let dup = unsafe { libc::fcntl(handle.wake.inner.write_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+    if dup < 0 {
+        warn!(
+            "config: could not dup the wake pipe ({}); SIGHUP reloads wait for the next wake",
+            std::io::Error::last_os_error()
+        );
+    }
+    HUP_FD.store(dup, Ordering::SeqCst);
     // SAFETY: `on_sighup` is an `extern "C" fn(c_int)`, the shape `signal`
     // expects behind `sighandler_t`, and it does only async-signal-safe work
     // (two atomics and one write(2)). SIGHUP is a valid, catchable signal,
-    // and `HUP_FD` was stored above so the handler never sees a stale fd.
+    // and `HUP_FD` was stored above (a dup that is never closed, or -1) so
+    // the handler never sees a stale fd.
     unsafe {
         libc::signal(libc::SIGHUP, on_sighup as *const () as libc::sighandler_t);
     }
@@ -980,8 +1000,9 @@ struct Feeds<'a> {
 fn feeds_loop(f: &Feeds<'_>) {
     let mut catalog_due = Instant::now();
     let mut bossmap_due = Some(Instant::now());
-    // `bosshash` of the map in the store; an unchanged feed is not re-parsed.
-    let mut boss_hash: Option<String> = None;
+    // Fingerprint of the body the store's map came from; an unchanged feed
+    // is not re-parsed.
+    let mut boss_body: Option<Vec<u8>> = None;
     loop {
         if f.stop.load(Ordering::SeqCst) {
             return;
@@ -1003,11 +1024,11 @@ fn feeds_loop(f: &Feeds<'_>) {
                 if f.gate.wait(f.stop, f.shutdown).is_err() {
                     return;
                 }
-                refresh_bossmap(&agent, f.store, f.wake, &c, &mut boss_hash);
+                refresh_bossmap(&agent, f.store, f.wake, &c, &mut boss_body);
                 Some(Instant::now() + bossmap_interval(f.store, &c))
             } else {
                 f.store.clear_boss_map();
-                boss_hash = None;
+                boss_body = None;
                 f.wake.ping();
                 None
             };
@@ -1041,23 +1062,35 @@ fn refresh_bossmap(
     store: &Store,
     wake: &Wake,
     c: &Config,
-    hash: &mut Option<String>,
+    prev: &mut Option<Vec<u8>>,
 ) {
     match bossmap::fetch_if_changed_with(
         agent,
         &c.bossmap.url,
         &c.df.user_agent,
         c.df.timeout.0,
-        hash.as_deref(),
+        previous_body(prev, store.has_boss_map()),
     ) {
-        Ok(Some(m)) => {
-            *hash = Some(m.hash.clone());
+        Ok(Some((m, print))) => {
+            *prev = Some(print);
             store.set_boss_map(m);
             wake.ping();
         }
         Ok(None) => {}
         Err(err) => warn!("bossmap: {err}"),
     }
+}
+
+/// The fingerprint to hand `fetch_if_changed_with`, or nothing when the store
+/// no longer holds the map it describes. `replace_config` clears the store
+/// directly on a disable; if a re-enable lands before this thread gets to
+/// its own clear, an "unchanged" verdict against the old body would leave
+/// the store empty until the feed next changes.
+fn previous_body(cached: &mut Option<Vec<u8>>, store_has_map: bool) -> Option<&[u8]> {
+    if !store_has_map {
+        *cached = None;
+    }
+    cached.as_deref()
 }
 
 /// Faster inside Onslaught, where the block roster changes by the minute.
@@ -1091,6 +1124,18 @@ mod tests {
             err,
             scheduled: true,
         }
+    }
+
+    #[test]
+    fn previous_body_is_forgotten_once_the_store_lost_its_map() {
+        let mut cached = Some(b"body".to_vec());
+        assert_eq!(previous_body(&mut cached, true), Some(b"body".as_slice()));
+        assert_eq!(previous_body(&mut cached, false), None);
+        assert!(
+            cached.is_none(),
+            "the stale fingerprint is dropped for good"
+        );
+        assert_eq!(previous_body(&mut cached, true), None);
     }
 
     #[test]

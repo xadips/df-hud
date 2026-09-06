@@ -14,8 +14,9 @@ first within each section.
 ### Fixed
 
 - The public-record probe no longer switches to authenticated requests for
-  good after one transient error (a Cloudflare hiccup, say); it tries the
-  public record again after an hour.
+  good. A transient failure (a Cloudflare page, a 5xx, a timeout) is tried
+  again after about ten minutes; a definitive "no public record" after an
+  hour.
 - Windows: GL objects were deleted after the WGL context was already gone on
   shutdown, and a `wglGetProcAddress` failure value of `-1` was treated as a
   valid pointer. Both fixed.
@@ -29,15 +30,17 @@ first within each section.
 ### Changed
 
 - The overlay skips the redraw and buffer swap when nothing on screen changed,
-  so an idle frame costs a comparison.
+  so on Linux an idle frame costs a comparison. Windows still re-asserts the
+  window style and monitor list each tick.
 - Fewer background wakeups: config reload (`SIGHUP`), the state saver,
   presence, and the headless loops block instead of polling, and the catalog
   and city-map fetches share one timer thread. Windows game detection
   re-checks the known process instead of snapshotting every process each tick.
 - One HTTP connection pool for every request (was up to four). The city map
-  is only re-parsed when its `bosshash` changes.
+  is only re-parsed when the feed's content actually changed.
 - The bridge and presence servers cap concurrent connections at 8; the bridge
-  answers 503 past that.
+  answers 503 past that, reading a small request first so the refusal
+  arrives instead of a connection reset.
 - Credentials are redacted from debug output, and the wake pipe is
   close-on-exec.
 - Internal: `Config` is shared as an `Arc`, one generic board poller, a shared
