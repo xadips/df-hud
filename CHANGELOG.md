@@ -6,6 +6,13 @@ first within each section.
 
 ## [Unreleased]
 
+### Added
+
+- `[widget.xp] show_progress` (off by default) prefixes the XP/hr line with
+  in-level progress (`300%  Xp/Hr: …`). The percent is `df_exp` over the
+  current catalog threshold and can exceed 100% while a run banks levels.
+  It follows `poll.active_interval` and is omitted at the level cap.
+
 ### Fixed
 
 - A request that arrives past the bridge's connection cap always gets the 503

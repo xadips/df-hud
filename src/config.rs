@@ -238,6 +238,7 @@ pub struct XpWidget {
     pub prefix: String,
     pub window: Duration,
     pub min_samples: i32,
+    pub show_progress: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -547,6 +548,7 @@ impl Default for Widget {
                 prefix: "Xp/Hr: ".into(),
                 window: Duration(StdDuration::from_secs(60)),
                 min_samples: 3,
+                show_progress: false,
             },
             block: BlockWidget {
                 enabled: true,
@@ -2148,6 +2150,17 @@ window = 120
         assert_eq!(cfg.widget.xp.x, Config::default().widget.xp.x);
         assert_eq!(cfg.widget.xp.min_samples, 5);
         assert_eq!(cfg.widget.xp.window, Duration(StdDuration::from_secs(120)));
+        assert!(!cfg.widget.xp.show_progress);
+    }
+
+    #[test]
+    fn xp_show_progress_can_be_turned_on() {
+        let cfg = Config::parse("[widget.xp]\nshow_progress = true\n").unwrap();
+        assert!(cfg.widget.xp.show_progress);
+        assert_eq!(
+            cfg.widget.xp.min_samples,
+            Config::default().widget.xp.min_samples
+        );
     }
 
     #[test]

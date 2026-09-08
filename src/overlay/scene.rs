@@ -27,6 +27,7 @@ pub struct View {
     pub status_color: Option<[f32; 4]>,
     pub clock: String,
     pub xp: String,
+    pub xp_progress: String,
     pub xp_color: Option<[f32; 4]>,
     pub block: String,
     pub block_sub: String,
@@ -209,7 +210,7 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
     }
 
     if cfg.widget.xp.enabled && !view.xp.is_empty() {
-        let line = format!("{}{}", cfg.widget.xp.prefix, view.xp);
+        let line = format!("{}{}{}", view.xp_progress, cfg.widget.xp.prefix, view.xp);
         push_text_group(
             &mut scene,
             xf,
@@ -1538,6 +1539,21 @@ mod tests {
                 "{name} alpha {got} want hud.opacity once"
             );
         }
+    }
+
+    #[test]
+    fn xp_progress_is_drawn_left_of_the_prefix() {
+        let mut view = dummy_view();
+        view.xp_progress = "300%  ".into();
+        let scene = build(&view, &Config::default(), vp_1440());
+        assert!(
+            scene
+                .texts
+                .iter()
+                .any(|t| t.text == "300%  Xp/Hr: 12,345,678"),
+            "{:?}",
+            scene.texts.iter().map(|t| &t.text).collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -12,11 +12,18 @@ Amber means a recent poll missed. Red means several have. Those colours win
 over `color`. After a challenge reward dumps a lump into the average, **U**
 (`hotkeys.xp_reset`) or the tray item **Reset xp/hr** starts the window again.
 
+`show_progress = true` prefixes the line with how far you are through the
+current level (`300%  Xp/Hr: …`). The percent is `df_exp` over the catalog
+threshold and can go past 100% while a run banks levels. It updates on each
+player-record poll (`poll.active_interval`, default 10 seconds). At the
+level cap, or if the catalog has not loaded, the prefix is omitted.
+
 | Key | Default | |
 | --- | --- | --- |
 | `enabled` | `true` | On or off |
 | `x`, `y` | `220`, `80` | Position at 2560x1440 |
 | `prefix` | `"Xp/Hr: "` | Text before the number |
+| `show_progress` | `false` | In-level `%` to the left of the prefix |
 | `color` | `#ffffff` | Normal colour. Amber and red still win. |
 | `window` | `60` | Averaging window, seconds |
 | `min_samples` | `3` | Samples before a rate is shown |

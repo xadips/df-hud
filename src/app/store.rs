@@ -502,6 +502,8 @@ impl Store {
             v.in_outpost = snap.in_outpost;
             v.outpost_name = citymap::outpost_name(x, y).to_string();
             v.block_support = Ns::from_std(snap.block_support.remaining(now));
+            v.exp_in_level = snap.exp_in_level;
+            v.exp_needed = snap.exp_needed;
         }
         if let Some(p) = presence_position_locked(s, now) {
             v.client_loading = p.loading;
@@ -1566,6 +1568,25 @@ mod tests {
             scheduled: true,
         });
         assert!(!bare.derive(start).xp_available);
+    }
+
+    #[test]
+    fn derive_copies_exp_progress() {
+        let c = load_fixture_catalog();
+        let needed = c.exp_needed(200).unwrap();
+        let s = Store::new(Some(c));
+        let mut vars = sample_player_record();
+        vars.insert("df_level".into(), "200".into());
+        vars.insert("df_exp".into(), (needed * 3).to_string());
+        s.apply_tick(Tick {
+            at: Utc::now(),
+            vars,
+            err: None,
+            scheduled: true,
+        });
+        let view = s.derive(Utc::now());
+        assert_eq!(view.exp_in_level, needed * 3);
+        assert_eq!(view.exp_needed, needed);
     }
 
     #[test]
