@@ -515,6 +515,11 @@ pub struct View {
     pub xp_available: bool,
     pub xp_provisional: bool,
     pub xp_stability: XpStability,
+    /// Progress inside the current level (`df_exp`) and the catalog
+    /// threshold for the next one. `exp_needed` is 0 at the cap or
+    /// when the catalog is missing.
+    pub exp_in_level: i64,
+    pub exp_needed: i64,
     pub challenges: Option<Vec<Challenge>>,
     pub challenge_status: String,
     pub masteries: Option<Vec<Mastery>>,
@@ -561,6 +566,8 @@ impl Default for View {
             xp_available: false,
             xp_provisional: false,
             xp_stability: XpStability::Steady,
+            exp_in_level: 0,
+            exp_needed: 0,
             challenges: None,
             challenge_status: String::new(),
             masteries: None,

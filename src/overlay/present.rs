@@ -111,7 +111,14 @@ pub fn hud_lines(v: &ModelView, cfg: &Config, groups: &Groups) -> Vec<String> {
         let [x, y] = cfg
             .hud
             .place(cfg.widget.xp.anchor, cfg.widget.xp.x, cfg.widget.xp.y);
-        rows.push((y, x, vec![format!("{}{}", cfg.widget.xp.prefix, scene.xp)]));
+        rows.push((
+            y,
+            x,
+            vec![format!(
+                "{}{}{}",
+                scene.xp_progress, cfg.widget.xp.prefix, scene.xp
+            )],
+        ));
     }
     if !scene.challenges.is_empty() {
         let [x, y] = cfg.hud.place(
@@ -179,6 +186,7 @@ pub fn from_view(v: &ModelView, cfg: &Config, groups: &Groups) -> View {
     {
         out.xp = text;
         out.xp_color = color;
+        out.xp_progress = xp_progress_text(v, cfg);
     }
     if groups.shown(Group::Block)
         && let Some((head, sub)) = block_lines(v, cfg)
@@ -256,6 +264,14 @@ fn session_line(v: &ModelView, cfg: &Config) -> Option<String> {
         return None;
     }
     Some(format::clock(v.session_time.std()))
+}
+
+fn xp_progress_text(v: &ModelView, cfg: &Config) -> String {
+    if !cfg.widget.xp.show_progress || v.exp_needed <= 0 {
+        return String::new();
+    }
+    let pct = v.exp_in_level.saturating_mul(100) / v.exp_needed;
+    format!("{pct}%  ")
 }
 
 fn xp_line(v: &ModelView, cfg: &Config) -> Option<(String, Option<[f32; 4]>)> {
@@ -1639,6 +1655,58 @@ mod tests {
         let rows = boss_lines(&v, &Config::default());
         assert_eq!(rows[0].text, "OUTPOST ATTACK");
         assert_eq!(rows[0].color, Some(EXPIRING_RGB));
+    }
+
+    #[test]
+    fn xp_progress_is_off_by_default() {
+        let v = ModelView {
+            have_data: true,
+            exp_in_level: 21_000_000,
+            exp_needed: 7_000_000,
+            ..ModelView::default()
+        };
+        let cfg = Config::default();
+        let g = Groups::new();
+        assert!(from_view(&v, &cfg, &g).xp_progress.is_empty());
+        assert_eq!(hud_lines(&v, &cfg, &g)[0], "Xp/Hr: --");
+    }
+
+    #[test]
+    fn xp_progress_sits_left_of_the_rate() {
+        let mut v = ModelView {
+            have_data: true,
+            exp_in_level: 21_000_000,
+            exp_needed: 7_000_000,
+            ..ModelView::default()
+        };
+        let mut cfg = Config::default();
+        cfg.widget.xp.show_progress = true;
+        let g = Groups::new();
+        assert_eq!(from_view(&v, &cfg, &g).xp_progress, "300%  ");
+        assert_eq!(hud_lines(&v, &cfg, &g)[0], "300%  Xp/Hr: --");
+        v.xp_available = true;
+        v.xp_per_hour = 1_234_567.0;
+        assert_eq!(hud_lines(&v, &cfg, &g)[0], "300%  Xp/Hr: 1,234,567");
+        v.exp_in_level = 3_500_000;
+        assert_eq!(from_view(&v, &cfg, &g).xp_progress, "50%  ");
+        v.exp_needed = 0;
+        assert!(from_view(&v, &cfg, &g).xp_progress.is_empty());
+        assert_eq!(hud_lines(&v, &cfg, &g)[0], "Xp/Hr: 1,234,567");
+    }
+
+    #[test]
+    fn xp_progress_saturates_a_huge_bank() {
+        let v = ModelView {
+            have_data: true,
+            exp_in_level: i64::MAX,
+            exp_needed: 7_000_000,
+            ..ModelView::default()
+        };
+        let mut cfg = Config::default();
+        cfg.widget.xp.show_progress = true;
+        let text = from_view(&v, &cfg, &Groups::new()).xp_progress;
+        assert!(text.ends_with("%  "), "{text}");
+        assert!(text.starts_with(|c: char| c.is_ascii_digit()), "{text}");
     }
 
     #[test]

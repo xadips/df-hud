@@ -43,6 +43,7 @@ pub fn view(clock: &str) -> View {
         status_color: None,
         clock: clock.to_string(),
         xp: "12,345,678".into(),
+        xp_progress: String::new(),
         xp_color: None,
         block: "Nastya's Holdout".into(),
         block_sub: String::new(),
