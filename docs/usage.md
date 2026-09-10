@@ -47,7 +47,7 @@ lets go when you alt-tab. Defaults:
 | `hotkeys.challenges` | `Z` | Show or hide the [challenge board](widgets/challenges.md) |
 | `hotkeys.masteries` | `4` | Show or hide [masteries](widgets/masteries.md). Grabbed only while that widget is enabled. |
 | `hotkeys.run_start` | `K` | Restart the [run clock](widgets/session.md) from now |
-| `hotkeys.xp_reset` | `U` | Start the [XP/hr](widgets/xp.md) average again |
+| `hotkeys.xp_reset` | `U` | Start the [XP/hr](widgets/xp.md) count again |
 | `hotkeys.overlay` | `J` | Show or hide the whole overlay |
 
 Set a value to `""` to leave that one unbound. Chords work (`Ctrl+Shift+M`,

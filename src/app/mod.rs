@@ -664,17 +664,7 @@ fn assemble(
             let Some(handle) = weak.upgrade() else {
                 return;
             };
-            let xp_window = {
-                let cfg = handle.config();
-                cfg.widget.xp.effective_window(cfg.poll.active_interval.0)
-            };
-            if ingest_player_tick(
-                &handle.store,
-                &handle.persist,
-                xp_window,
-                &handle.last_run_start,
-                tick,
-            ) {
+            if ingest_player_tick(&handle.store, &handle.persist, &handle.last_run_start, tick) {
                 handle.challenges.wake();
             }
             handle.wake_ui();
@@ -966,13 +956,12 @@ fn catch_sighup(handle: &Arc<Handle>) {
 fn ingest_player_tick(
     store: &Store,
     persist: &state::Persist,
-    xp_window: Duration,
     last_run_start: &Mutex<Option<DateTime<Utc>>>,
     tick: Tick,
 ) -> bool {
     let applied = store.apply_tick(tick);
     if applied {
-        write_xp_sample(store, persist, xp_window, last_run_start);
+        write_xp_sample(store, persist, last_run_start);
     }
     applied
 }
@@ -980,7 +969,6 @@ fn ingest_player_tick(
 fn write_xp_sample(
     store: &Store,
     persist: &state::Persist,
-    xp_window: Duration,
     last_run_start: &Mutex<Option<DateTime<Utc>>>,
 ) {
     let Some(snap) = store.snapshot() else {
@@ -999,17 +987,26 @@ fn write_xp_sample(
         }
     }
     if let Some(prev) = store.previous_snapshot()
-        && let Some(reason) = xp::window_reset(&prev, &snap, xp_window)
+        && let Some(reason) = xp::window_reset(&prev, &snap)
     {
         reset_xp_window(store, persist, reason);
+    }
+    let source = snap.xp_source.as_str();
+    if let Some(last) = store.last_xp_sample() {
+        if last.cumulative == snap.cumulative_xp && last.source == source {
+            return;
+        }
+        if xp::change_gap_reset(last.at, snap.at) {
+            reset_xp_window(store, persist, "a long gap between samples");
+        }
     }
     let sample = XpSample {
         at: snap.at,
         cumulative: snap.cumulative_xp,
-        source: snap.xp_source.as_str().to_string(),
+        source: source.to_string(),
     };
-    store.append_xp_sample(sample.clone(), xp_window);
-    persist.append_xp_sample(sample, xp_window);
+    store.append_xp_sample(sample.clone());
+    persist.append_xp_sample(sample);
 }
 
 /// The HUD store and the state file hold the same ring; every write goes
@@ -1268,22 +1265,18 @@ mod tests {
     fn failed_ticks_do_not_append_xp_samples() {
         let store = Store::new(None);
         let persist = state::Persist::new("");
-        let cfg = Config::default();
-        let xp_window = cfg.widget.xp.effective_window(cfg.poll.active_interval.0);
         let last_run = Mutex::new(None);
         let start = Utc::now();
 
         assert!(ingest_player_tick(
             &store,
             &persist,
-            xp_window,
             &last_run,
             xp_tick(start, 1_000_000, None),
         ));
         assert!(ingest_player_tick(
             &store,
             &persist,
-            xp_window,
             &last_run,
             xp_tick(start + chrono::Duration::seconds(10), 1_001_000, None),
         ));
@@ -1300,7 +1293,6 @@ mod tests {
             assert!(!ingest_player_tick(
                 &store,
                 &persist,
-                xp_window,
                 &last_run,
                 xp_tick(
                     start + chrono::Duration::seconds(10 + i),
@@ -1321,5 +1313,76 @@ mod tests {
         assert_eq!(rate_after.per_hour, rate_before.per_hour);
         assert_eq!(rate_after.provisional, rate_before.provisional);
         assert_eq!(store.missed_ticks(), 3);
+    }
+
+    #[test]
+    fn unchanged_ticks_do_not_append_xp_samples() {
+        let store = Store::new(None);
+        let persist = state::Persist::new("");
+        let last_run = Mutex::new(None);
+        let start = Utc::now();
+
+        assert!(ingest_player_tick(
+            &store,
+            &persist,
+            &last_run,
+            xp_tick(start, 1_000_000, None),
+        ));
+        assert!(ingest_player_tick(
+            &store,
+            &persist,
+            &last_run,
+            xp_tick(start + chrono::Duration::seconds(10), 1_000_000, None),
+        ));
+        assert_eq!(persist.get().xp_samples.len(), 1);
+        assert_eq!(store.xp_samples().len(), 1);
+
+        assert!(ingest_player_tick(
+            &store,
+            &persist,
+            &last_run,
+            xp_tick(start + chrono::Duration::seconds(30), 1_090_000, None),
+        ));
+        let samples = persist.get().xp_samples;
+        assert_eq!(samples.len(), 2);
+        let rate = xp::compute_rate(&samples, 2, XpStability::Steady);
+        assert_eq!(rate.per_hour, Some(10_800_000.0));
+        assert_eq!(rate.span, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn a_301s_quiet_gap_resets_the_rate() {
+        let store = Store::new(None);
+        let persist = state::Persist::new("");
+        let last_run = Mutex::new(None);
+        let start = Utc::now();
+
+        assert!(ingest_player_tick(
+            &store,
+            &persist,
+            &last_run,
+            xp_tick(start, 1_000_000, None),
+        ));
+        assert!(ingest_player_tick(
+            &store,
+            &persist,
+            &last_run,
+            xp_tick(start + chrono::Duration::seconds(10), 1_001_000, None),
+        ));
+        assert_eq!(store.xp_samples().len(), 2);
+
+        assert!(ingest_player_tick(
+            &store,
+            &persist,
+            &last_run,
+            xp_tick(start + chrono::Duration::seconds(311), 1_100_000, None),
+        ));
+        assert_eq!(store.xp_samples().len(), 1);
+        assert_eq!(store.xp_samples()[0].cumulative, 1_100_000);
+        assert!(
+            !store
+                .derive(start + chrono::Duration::seconds(311))
+                .xp_available
+        );
     }
 }

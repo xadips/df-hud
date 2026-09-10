@@ -14,7 +14,7 @@ scraping, no OCR.
 - [Bosses](docs/widgets/bosses.md): what is on your block, or the nearest event. In Onslaught this is last / now / next
 - [Keybinds](docs/widgets/keybinds.md): the overlay hotkeys, one per line. Starts shown.
 - [Run clock](docs/widgets/session.md): elapsed since the run started. It keeps ticking if you pause
-- [XP/hr](docs/widgets/xp.md): a one-minute average
+- [XP/hr](docs/widgets/xp.md): last-change rate, scaled to an hour. Optional overflow percent (`show_progress`)
 - [Challenge board](docs/widgets/challenges.md): the whole board, filtered by category
 - [Masteries](docs/widgets/masteries.md): mastery levels and progress. Off by default
 - [City map](docs/widgets/map.md): the inner city. Press a key to show it

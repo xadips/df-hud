@@ -4,6 +4,16 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
+## [Unreleased]
+
+### Changed
+
+- XP/hr is the last change in `df_exptotal`, scaled to an hour, instead of a
+  one-minute sliding window. Unchanged polls are ignored. After 300 seconds
+  with no gain the next change starts the count again.
+- `[widget.xp] show_progress` only prefixes the line when progress is over
+  100%. At or under that the game sidebar already shows it.
+
 ## [0.4.14] - 2026-09-08
 
 ### Added

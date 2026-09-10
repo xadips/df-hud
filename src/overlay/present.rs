@@ -271,6 +271,9 @@ fn xp_progress_text(v: &ModelView, cfg: &Config) -> String {
         return String::new();
     }
     let pct = v.exp_in_level.saturating_mul(100) / v.exp_needed;
+    if pct <= 100 {
+        return String::new();
+    }
     format!("{pct}%  ")
 }
 
@@ -1688,7 +1691,12 @@ mod tests {
         v.xp_per_hour = 1_234_567.0;
         assert_eq!(hud_lines(&v, &cfg, &g)[0], "300%  Xp/Hr: 1,234,567");
         v.exp_in_level = 3_500_000;
-        assert_eq!(from_view(&v, &cfg, &g).xp_progress, "50%  ");
+        assert!(
+            from_view(&v, &cfg, &g).xp_progress.is_empty(),
+            "at or under 100% the game sidebar already shows it"
+        );
+        v.exp_in_level = 7_000_000;
+        assert!(from_view(&v, &cfg, &g).xp_progress.is_empty());
         v.exp_needed = 0;
         assert!(from_view(&v, &cfg, &g).xp_progress.is_empty());
         assert_eq!(hud_lines(&v, &cfg, &g)[0], "Xp/Hr: 1,234,567");
