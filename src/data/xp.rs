@@ -1,9 +1,13 @@
-//! XP/hr from the sample window. Oldest and newest endpoints, not a fit.
+//! XP/hr from the last change interval, not a sliding-window fit.
 
 use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 use crate::model::{Snapshot, XpRate, XpSample, XpStability};
+
+/// Quiet stretch after the last XP change that discards the rate, matching
+/// DFProfiler's estimates tracker.
+pub const IDLE_RESET: Duration = Duration::from_secs(300);
 
 pub fn compute_rate(samples: &[XpSample], mut min_samples: i32, stability: XpStability) -> XpRate {
     if min_samples < 2 {
@@ -17,16 +21,16 @@ pub fn compute_rate(samples: &[XpSample], mut min_samples: i32, stability: XpSta
         };
     }
     let provisional = (samples.len() as i32) < min_samples;
-    let oldest = &samples[0];
+    let prev = &samples[samples.len() - 2];
     let newest = &samples[samples.len() - 1];
-    if oldest.source != newest.source {
+    if prev.source != newest.source {
         return XpRate {
             samples: samples.len() as i32,
             why: "XP source changed".into(),
             ..XpRate::default()
         };
     }
-    let span = newest.at - oldest.at;
+    let span = newest.at - prev.at;
     if span <= chrono::Duration::zero() {
         return XpRate {
             samples: samples.len() as i32,
@@ -34,7 +38,7 @@ pub fn compute_rate(samples: &[XpSample], mut min_samples: i32, stability: XpSta
             ..XpRate::default()
         };
     }
-    let gained = newest.cumulative - oldest.cumulative;
+    let gained = newest.cumulative - prev.cumulative;
     if gained < 0 {
         return XpRate {
             samples: samples.len() as i32,
@@ -71,10 +75,11 @@ pub fn run_reset(prev: Option<DateTime<Utc>>, next: Option<DateTime<Utc>>) -> bo
 /// next, or `None` to keep it.
 ///
 /// Each of these makes the samples either side incomparable: a boost starting
-/// or ending, cumulative XP falling, the clock jumping backwards, or a gap
-/// much longer than the window. A change in `in_outpost` is not a reason; that
+/// or ending, cumulative XP falling, or the clock jumping backwards. A long
+/// quiet stretch is [`change_gap_reset`], checked against the last XP change
+/// rather than every poll. A change in `in_outpost` is not a reason; that
 /// field does not mean what its name suggests.
-pub fn window_reset(prev: &Snapshot, next: &Snapshot, window: Duration) -> Option<&'static str> {
+pub fn window_reset(prev: &Snapshot, next: &Snapshot) -> Option<&'static str> {
     if prev.at.timestamp() == 0 {
         return None;
     }
@@ -87,15 +92,14 @@ pub fn window_reset(prev: &Snapshot, next: &Snapshot, window: Duration) -> Optio
     if next.cumulative_xp < prev.cumulative_xp {
         return Some("cumulative XP fell (death or correction)");
     }
-    if !window.is_zero() {
-        let gap = next.at.signed_duration_since(prev.at);
-        if let Ok(limit) = chrono::Duration::from_std(window.saturating_mul(2))
-            && gap > limit
-        {
-            return Some("a long gap between samples");
-        }
-    }
     None
+}
+
+/// Whether the last XP change is old enough that the next one must start a
+/// fresh rate, matching DFProfiler's 300s idle wipe.
+pub fn change_gap_reset(last: DateTime<Utc>, next: DateTime<Utc>) -> bool {
+    next.signed_duration_since(last)
+        > chrono::Duration::from_std(IDLE_RESET).unwrap_or(chrono::Duration::seconds(300))
 }
 
 #[cfg(test)]
@@ -143,7 +147,7 @@ mod tests {
         ];
         let rate = compute_rate(&samples, 3, XpStability::Steady);
         assert_eq!(rate.per_hour, Some(360_000.0));
-        assert_eq!(rate.gained, 2_000);
+        assert_eq!(rate.gained, 1_000);
         assert!(!rate.provisional);
     }
 
@@ -156,9 +160,56 @@ mod tests {
             XpStability::Steady,
         );
         assert_eq!(rate.per_hour, Some(360_000.0));
-        assert_eq!(rate.gained, 3000);
-        assert_eq!(rate.span, std::time::Duration::from_secs(30));
+        assert_eq!(rate.gained, 1000);
+        assert_eq!(rate.span, std::time::Duration::from_secs(10));
         assert_eq!(rate.samples, 4);
+    }
+
+    #[test]
+    fn compute_rate_uses_the_last_interval() {
+        let start = Utc.timestamp_opt(1_786_484_051, 0).unwrap();
+        let samples = vec![
+            XpSample {
+                at: start,
+                cumulative: 1_000_000,
+                source: "df_exptotal".into(),
+            },
+            XpSample {
+                at: start + chrono::Duration::seconds(10),
+                cumulative: 1_001_000,
+                source: "df_exptotal".into(),
+            },
+            XpSample {
+                at: start + chrono::Duration::seconds(20),
+                cumulative: 1_006_000,
+                source: "df_exptotal".into(),
+            },
+        ];
+        let rate = compute_rate(&samples, 3, XpStability::Steady);
+        assert_eq!(rate.per_hour, Some(1_800_000.0));
+        assert_eq!(rate.gained, 5_000);
+        assert_eq!(rate.span, std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn compute_rate_scales_a_thirty_second_lump() {
+        let start = Utc.timestamp_opt(1_786_484_051, 0).unwrap();
+        let samples = vec![
+            XpSample {
+                at: start,
+                cumulative: 1_000_000,
+                source: "df_exptotal".into(),
+            },
+            XpSample {
+                at: start + chrono::Duration::seconds(30),
+                cumulative: 1_090_000,
+                source: "df_exptotal".into(),
+            },
+        ];
+        let rate = compute_rate(&samples, 2, XpStability::Steady);
+        assert_eq!(rate.per_hour, Some(10_800_000.0));
+        assert_eq!(rate.gained, 90_000);
+        assert_eq!(rate.span, std::time::Duration::from_secs(30));
     }
 
     #[test]
@@ -197,25 +248,17 @@ mod tests {
             cumulative_xp: 1_100,
             ..Snapshot::default()
         };
-        assert_eq!(
-            window_reset(&prev, &next, Duration::from_secs(60)),
-            None,
-            "ordinary step reset"
-        );
+        assert_eq!(window_reset(&prev, &next), None, "ordinary step reset");
         let boosted = Snapshot {
             boost_exp: Deadline::Forever,
             ..next
         };
-        assert_eq!(
-            window_reset(&prev, &boosted, Duration::from_secs(60)),
-            Some("the XP boost changed")
-        );
+        assert_eq!(window_reset(&prev, &boosted), Some("the XP boost changed"));
     }
 
     #[test]
     fn window_reset_all_conditions() {
         let base = Utc.timestamp_opt(1_786_484_051, 0).unwrap();
-        let window = Duration::from_secs(30);
         let prev = Snapshot {
             at: base,
             cumulative_xp: 1_000_000,
@@ -227,7 +270,7 @@ mod tests {
             ..Snapshot::default()
         };
         assert_eq!(
-            window_reset(&Snapshot::default(), &next, window),
+            window_reset(&Snapshot::default(), &next),
             None,
             "first snapshot reset"
         );
@@ -248,37 +291,36 @@ mod tests {
                     ..Snapshot::default()
                 },
             ),
-            (
-                "a long gap between samples",
-                Snapshot {
-                    at: base + chrono::Duration::minutes(5),
-                    cumulative_xp: 1_001_000,
-                    ..Snapshot::default()
-                },
-            ),
         ] {
-            assert_eq!(window_reset(&prev, &snap, window), Some(want));
+            assert_eq!(window_reset(&prev, &snap), Some(want));
         }
         let boosted = Snapshot {
             boost_exp: Deadline::Forever,
             ..next.clone()
         };
-        assert_eq!(
-            window_reset(&prev, &boosted, window),
-            Some("the XP boost changed")
-        );
+        assert_eq!(window_reset(&prev, &boosted), Some("the XP boost changed"));
         let prev_boosted = Snapshot {
             boost_exp: Deadline::Forever,
             ..prev.clone()
         };
         assert_eq!(
-            window_reset(&prev_boosted, &next, window),
+            window_reset(&prev_boosted, &next),
             Some("the XP boost changed")
         );
         assert_eq!(
-            window_reset(&prev_boosted, &boosted, window),
+            window_reset(&prev_boosted, &boosted),
             None,
             "unchanged boost reset"
+        );
+        let later = Snapshot {
+            at: base + chrono::Duration::minutes(5),
+            cumulative_xp: 1_001_000,
+            ..Snapshot::default()
+        };
+        assert_eq!(
+            window_reset(&prev, &later),
+            None,
+            "a long poll gap is not a snapshot reset"
         );
     }
 
@@ -297,10 +339,7 @@ mod tests {
             cumulative_xp: 1000,
             ..Snapshot::default()
         };
-        assert_eq!(
-            window_reset(&outpost, &city, Duration::from_secs(5 * 60)),
-            None
-        );
+        assert_eq!(window_reset(&outpost, &city), None);
     }
 
     #[test]
@@ -314,5 +353,18 @@ mod tests {
             first.map(|t| t + chrono::Duration::hours(1))
         ));
         assert!(!run_reset(first, none));
+    }
+
+    #[test]
+    fn change_gap_reset_is_300s() {
+        let start = Utc.timestamp_opt(1_786_484_051, 0).unwrap();
+        assert!(!change_gap_reset(
+            start,
+            start + chrono::Duration::seconds(300)
+        ));
+        assert!(change_gap_reset(
+            start,
+            start + chrono::Duration::seconds(301)
+        ));
     }
 }

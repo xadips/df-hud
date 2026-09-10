@@ -249,13 +249,16 @@ color = "#ffffff"
 font_size = 0
 prefix = "Xp/Hr: "
 
-# In-level XP as a percent of the current threshold (can go past 100%
-# while a run banks levels). Drawn left of the prefix. Off by default.
+# Banked overflow past the current threshold (300% while a run banks
+# levels). Hidden at or under 100%; the game sidebar already shows that.
+# Drawn left of the prefix. Off by default.
 show_progress = false
 
-# Averaging window, and the sample count below which the rate stays blank.
-# XP arrives in lumps, so shorter windows twitch. The window resets on a new
-# run, a death, a boost edge, a clock jump, or a long gap.
+# The rate is the last XP change, scaled to an hour. Flat polls are
+# ignored. min_samples is how many changes before a number is shown.
+# window is unused for the rate; kept so older configs still parse.
+# The count resets on a new run, a death, a boost edge, a clock jump,
+# or 300s with no change.
 window = 60
 min_samples = 3
 

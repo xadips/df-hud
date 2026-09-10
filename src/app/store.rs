@@ -165,7 +165,7 @@ struct Inner {
     masteries: Option<Vec<Mastery>>,
     mastery_status: String,
     config_error: String,
-    /// The rate window. Mirrors the persisted ring; both are written from
+    /// Last-change samples. Mirrors the persisted ring; both are written from
     /// `app::write_xp_sample`, so the HUD never reaches into the state file.
     xp_samples: Vec<XpSample>,
     xp_min_samples: i32,
@@ -348,8 +348,12 @@ impl Store {
         lock(&self.inner).xp_min_samples = min_samples;
     }
 
-    pub fn append_xp_sample(&self, sample: XpSample, window: Duration) {
-        push_xp_sample(&mut lock(&self.inner).xp_samples, sample, window);
+    pub fn append_xp_sample(&self, sample: XpSample) {
+        push_xp_sample(&mut lock(&self.inner).xp_samples, sample);
+    }
+
+    pub fn last_xp_sample(&self) -> Option<XpSample> {
+        lock(&self.inner).xp_samples.last().cloned()
     }
 
     pub fn reset_xp_window(&self) {
@@ -695,8 +699,8 @@ fn apply_rate(v: &mut View, rate: XpRate) {
     v.xp_provisional = rate.provisional;
     v.xp_per_hour = rate.per_hour.unwrap_or(0.0);
     v.xp_stability = rate.stability;
-    // Window total is the per-hour numerator. Go's View has no Gained field;
-    // the HUD shows the rate, tests assert the total.
+    // Last-interval total is the per-hour numerator. Go's View has no Gained
+    // field; the HUD shows the rate, tests assert the total.
     let _ = rate.gained;
     let _ = rate.why;
     let _ = rate.span;
@@ -719,20 +723,15 @@ fn walk_distances_cached(cache: &mut Option<((i32, i32), Vec<i32>)>, x: i32, y: 
     cache.as_ref().map_or(&[], |(_, dist)| dist.as_slice())
 }
 
-/// Appends to a rate window and drops what fell out of `window` behind the
-/// newest sample. A source change empties the ring first: two cumulative
-/// counters are not comparable. Shared with the persisted ring so both hold
-/// the same samples.
-pub(crate) fn push_xp_sample(ring: &mut Vec<XpSample>, sample: XpSample, window: Duration) {
+/// Appends a change sample. A source change empties the ring first: two
+/// cumulative counters are not comparable. Shared with the persisted ring
+/// so both hold the same samples. The ring is not time-trimmed; the rate
+/// uses only the last interval, and a reset clears it.
+pub(crate) fn push_xp_sample(ring: &mut Vec<XpSample>, sample: XpSample) {
     if ring.last().is_some_and(|prev| prev.source != sample.source) {
         ring.clear();
     }
-    let cutoff =
-        sample.at - chrono::Duration::from_std(window).unwrap_or(chrono::Duration::hours(1));
     ring.push(sample);
-    if let Some(keep) = ring.iter().position(|s| s.at >= cutoff) {
-        ring.drain(..keep);
-    }
 }
 
 fn fire_run_change(on_change: Option<Arc<dyn Fn() + Send + Sync>>, changed: bool) {
@@ -1601,26 +1600,22 @@ mod tests {
     fn appended_samples_feed_the_rate_and_reset_clears_it() {
         let s = Store::new(None);
         let start = Utc.timestamp_opt(1_786_484_051, 0).unwrap();
-        let window = Duration::from_secs(60);
         for sample in xp_samples(start, 4, chrono::Duration::seconds(10), 1_000_000, 1000) {
-            s.append_xp_sample(sample, window);
+            s.append_xp_sample(sample);
         }
         assert_eq!(s.xp_samples().len(), 4);
         let view = s.derive(start + chrono::Duration::seconds(31));
         assert!(view.xp_available);
         assert_eq!(view.xp_per_hour, 360_000.0);
 
-        // The window trims behind the newest sample, so a late sample drops
-        // the oldest ones.
-        s.append_xp_sample(
-            XpSample {
-                at: start + chrono::Duration::seconds(80),
-                cumulative: 1_010_000,
-                source: "df_exptotal".into(),
-            },
-            window,
-        );
-        assert_eq!(s.xp_samples().len(), 3);
+        s.append_xp_sample(XpSample {
+            at: start + chrono::Duration::seconds(80),
+            cumulative: 1_010_000,
+            source: "df_exptotal".into(),
+        });
+        assert_eq!(s.xp_samples().len(), 5);
+        let view = s.derive(start + chrono::Duration::seconds(80));
+        assert_eq!(view.xp_per_hour, 504_000.0);
 
         s.reset_xp_window();
         assert!(s.xp_samples().is_empty());
@@ -1632,7 +1627,7 @@ mod tests {
         let mut ring = Vec::new();
         let start = Utc.timestamp_opt(1_786_484_051, 0).unwrap();
         for sample in xp_samples(start, 3, chrono::Duration::seconds(10), 1_000_000, 100) {
-            push_xp_sample(&mut ring, sample, Duration::from_secs(3600));
+            push_xp_sample(&mut ring, sample);
         }
         assert_eq!(ring.len(), 3);
         push_xp_sample(
@@ -1642,7 +1637,6 @@ mod tests {
                 cumulative: 999_000,
                 source: "exp table reconstruction".into(),
             },
-            Duration::from_secs(3600),
         );
         assert_eq!(ring.len(), 1);
         assert_eq!(ring[0].source, "exp table reconstruction");

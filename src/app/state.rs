@@ -213,7 +213,7 @@ impl Persist {
         g.last_save = Some((g.now)());
     }
 
-    pub fn append_xp_sample(&self, sample: XpSample, window: Duration) {
+    pub fn append_xp_sample(&self, sample: XpSample) {
         self.update(|st| {
             if let Some(prev) = st.xp_samples.last()
                 && prev.source != sample.source
@@ -223,7 +223,7 @@ impl Persist {
                     prev.source, sample.source
                 );
             }
-            push_xp_sample(&mut st.xp_samples, sample, window);
+            push_xp_sample(&mut st.xp_samples, sample);
         });
     }
 
@@ -331,14 +331,11 @@ mod tests {
                 game_started_at: Some(base - chrono::Duration::hours(1)),
             });
         });
-        s.append_xp_sample(
-            XpSample {
-                at: base,
-                cumulative: 1000,
-                source: "df_exptotal".into(),
-            },
-            Duration::from_secs(60),
-        );
+        s.append_xp_sample(XpSample {
+            at: base,
+            cumulative: 1000,
+            source: "df_exptotal".into(),
+        });
         s.save().unwrap();
 
         let loaded = Persist::new(&path);
@@ -422,24 +419,19 @@ mod tests {
     }
 
     #[test]
-    fn xp_window_trims() {
+    fn xp_samples_accumulate_until_reset() {
         let s = Persist::new("");
         let base = Utc::now();
         for i in 0..10 {
-            s.append_xp_sample(
-                XpSample {
-                    at: base + chrono::Duration::seconds(i),
-                    cumulative: 1000 + i * 10,
-                    source: "df_exptotal".into(),
-                },
-                Duration::from_secs(5),
-            );
+            s.append_xp_sample(XpSample {
+                at: base + chrono::Duration::seconds(i),
+                cumulative: 1000 + i * 10,
+                source: "df_exptotal".into(),
+            });
         }
         let got = s.get().xp_samples;
         assert_eq!(got.last().unwrap().cumulative, 1090);
-        let cutoff = got.last().unwrap().at - chrono::Duration::seconds(5);
-        assert!(got.iter().all(|s| s.at >= cutoff));
-        assert_eq!(got.len(), 6);
+        assert_eq!(got.len(), 10);
     }
 
     #[test]
@@ -447,24 +439,18 @@ mod tests {
         let s = Persist::new("");
         let base = Utc::now();
         for i in 0..3 {
-            s.append_xp_sample(
-                XpSample {
-                    at: base + chrono::Duration::seconds(i),
-                    cumulative: 1_000_000 + i * 100,
-                    source: "df_exptotal".into(),
-                },
-                Duration::from_secs(3600),
-            );
+            s.append_xp_sample(XpSample {
+                at: base + chrono::Duration::seconds(i),
+                cumulative: 1_000_000 + i * 100,
+                source: "df_exptotal".into(),
+            });
         }
         assert_eq!(s.get().xp_samples.len(), 3);
-        s.append_xp_sample(
-            XpSample {
-                at: base + chrono::Duration::seconds(3),
-                cumulative: 999_000,
-                source: "exp table reconstruction".into(),
-            },
-            Duration::from_secs(3600),
-        );
+        s.append_xp_sample(XpSample {
+            at: base + chrono::Duration::seconds(3),
+            cumulative: 999_000,
+            source: "exp table reconstruction".into(),
+        });
         let got = s.get().xp_samples;
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].source, "exp table reconstruction");
@@ -473,14 +459,11 @@ mod tests {
     #[test]
     fn reset_xp_window_clears() {
         let s = Persist::new("");
-        s.append_xp_sample(
-            XpSample {
-                at: Utc::now(),
-                cumulative: 5,
-                source: "df_exptotal".into(),
-            },
-            Duration::from_secs(3600),
-        );
+        s.append_xp_sample(XpSample {
+            at: Utc::now(),
+            cumulative: 5,
+            source: "df_exptotal".into(),
+        });
         s.reset_xp_window("death");
         assert!(s.get().xp_samples.is_empty());
         s.reset_xp_window("death");

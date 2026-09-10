@@ -645,20 +645,6 @@ impl Poll {
     }
 }
 
-impl XpWidget {
-    pub fn effective_window(&self, active_interval: StdDuration) -> StdDuration {
-        if self.min_samples < 2 || active_interval.is_zero() {
-            return self.window.0;
-        }
-        let need = active_interval * self.min_samples as u32;
-        if self.window.0 < need {
-            need
-        } else {
-            self.window.0
-        }
-    }
-}
-
 impl Hud {
     #[cfg(test)]
     pub fn hides_under_fullscreen(&self) -> bool {
@@ -2513,29 +2499,6 @@ window = 120
         assert_eq!(cfg.signing_salt(|| reported.clone()), "from-config");
         reported = "from-bridge".into();
         assert_eq!(cfg.signing_salt(|| reported.clone()), "from-bridge");
-    }
-
-    #[test]
-    fn xp_effective_window_widens() {
-        let cfg = Config::parse(
-            "[poll]\nactive_interval = 30\nidle_interval = 120\n[widget.xp]\nwindow = 30\n",
-        )
-        .unwrap();
-        assert_eq!(
-            cfg.widget.xp.effective_window(cfg.poll.active_interval.0),
-            StdDuration::from_secs(90)
-        );
-        let mut xp = cfg.widget.xp.clone();
-        xp.window = Duration(StdDuration::from_secs(600));
-        assert_eq!(
-            xp.effective_window(StdDuration::from_secs(30)),
-            StdDuration::from_secs(600)
-        );
-        let def = Config::default();
-        assert_eq!(
-            def.widget.xp.effective_window(def.poll.active_interval.0),
-            StdDuration::from_secs(60)
-        );
     }
 
     #[test]

@@ -131,9 +131,10 @@ thousand XP is a single boss at that level), not a formula difference. So
 implementation also computes.
 
 Their `files/trackers/estimates.php?pid=<id>` page is a 30s poll of that JSON
-with a delta between changes and a reset after 300s of no change — the same
-shape as df-hud's XP widget, but sourced from their scrape rather than live game
-data.
+with a delta between changes and a reset after 300s of no change. Each table
+row is that interval scaled to an hour; the header is the session mean of
+those intervals. df-hud's XP widget uses the same last-change hourly figure,
+from the live player record (10s polls) rather than their scrape.
 
 ## Neighbourhood names: `zones_<x>_<y>_name`
 
