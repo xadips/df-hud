@@ -12,6 +12,11 @@ first within each section.
   overlay still draws; workspace follow and grabbed keys stay off until a
   Hyprland socket appears.
 
+### Fixed
+
+- rustls 0.23.45 (RUSTSEC-2026-0285). TLS 1.3 handshake messages at the wrong
+  encryption level were accepted.
+
 ## [0.4.15] - 2026-09-10
 
 ### Changed
