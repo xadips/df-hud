@@ -3,7 +3,7 @@
 Clicks go through the overlay to the game. The HUD hides while Dead Frontier is
 not running (`hud.only_when_game_running`). That is pixels only.
 `poll.only_when_game_running` is the matching network switch: with it on,
-closing the game means zero requests. On Linux the overlay also follows the
+closing the game means zero requests. On Hyprland the overlay also follows the
 game's workspace (`hud.follow_game_workspace`), so it does not sit on every
 other desktop on that monitor.
 
@@ -11,7 +11,9 @@ other desktop on that monitor.
 toggle cannot override that.
 
 If Hyprland or the game window cannot be found, the HUD stays up rather than
-disappearing.
+disappearing. Workspace follow is Hyprland-only; on KDE the overlay stays on
+that desktop. Grabbed keys are Hyprland and Windows; elsewhere see
+[Manual wiring](manual-wiring.md).
 
 ## Widgets
 

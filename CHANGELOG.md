@@ -4,6 +4,14 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
+## [Unreleased]
+
+### Changed
+
+- Linux: missing Hyprland IPC is one info line, not a repeating warning. The
+  overlay still draws; workspace follow and grabbed keys stay off until a
+  Hyprland socket appears.
+
 ## [0.4.15] - 2026-09-10
 
 ### Changed

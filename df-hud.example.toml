@@ -92,6 +92,7 @@ launcher_delay = 1
 [hotkeys]
 # Grabbed only while the game window is focused. Windows: RegisterHotKey.
 # Linux: installed on Hyprland; do not duplicate them in compositor binds.
+# Other compositors (KDE, Sway, …): bind the HTTP API yourself, docs/manual-wiring.md.
 enabled = true
 
 # A bare key is consumed before the game sees it, and a modifier does not
@@ -118,8 +119,8 @@ enabled = true
 # is the separate network switch.
 only_when_game_running = true
 
-# Show the HUD only while the game's workspace is on screen. Fails open: if
-# the compositor or the game window cannot be found, the HUD stays visible.
+# Show the HUD only while the game's workspace is on screen. Hyprland only.
+# Fails open: missing IPC or unknown window keeps the HUD visible (KDE, Sway).
 follow_game_workspace = true
 
 # Connector name ("DP-1"), or "auto" = the monitor the game's window is on.
