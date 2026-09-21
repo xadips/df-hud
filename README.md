@@ -46,10 +46,10 @@ Windows, or a Wayland compositor with layer-shell: Hyprland, KDE, Sway, niri,
 COSMIC, and most others. GNOME, Cinnamon, and Weston do not have it. The
 [install](docs/install.md) page lists the rest.
 
-The built-in hotkeys need Hyprland; on any other compositor, bind your own keys
-to the [loopback API](docs/manual-wiring.md) instead, which reaches every action
-the keys do. The tray can turn the FPS overlay on at launch, and skip the
-launcher dialog.
+The overlay still draws without Hyprland. Built-in hotkeys and workspace follow
+need it; elsewhere bind keys to the [loopback API](docs/manual-wiring.md). A
+one-line “no Hyprland IPC” log is expected on KDE and a Steam Deck. The tray
+can turn the FPS overlay on at launch, and skip the launcher dialog.
 
 It is recommended to install
 [DF HUD Bridge](https://greasyfork.org/en/scripts/592954-df-hud-bridge). That

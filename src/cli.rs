@@ -529,10 +529,19 @@ fn window_report(cfg: &Config, state: GameState) -> String {
     let client = desktop::new_client();
     let want = cfg.launcher_window_match();
     match client.game_window(state.pid, &want) {
-        Err(err) => format!(
-            "\nThe desktop could not be asked where the window is ({err}).\n\
+        Err(err) => {
+            let mut out = format!(
+                "\nThe desktop could not be asked where the window is ({err}).\n\
 The HUD will still work; window-following visibility is disabled.\n"
-        ),
+            );
+            #[cfg(target_os = "linux")]
+            if desktop::hyprland_absent(&err) {
+                out.push_str(
+                    "That is expected outside Hyprland (KDE, Sway, a Steam Deck). Bind keys with the HTTP API: docs/manual-wiring.md\n",
+                );
+            }
+            out
+        }
         Ok(place) if place.known => {
             let shown = if place.on_active_workspace {
                 "yes"

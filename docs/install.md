@@ -29,7 +29,8 @@ it, so df-hud cannot draw over the game there.
 
 df-hud only grabs keys itself on Hyprland. Everything else on that list runs the
 overlay fine, and [Manual wiring](manual-wiring.md) covers binding your own keys
-to the loopback API.
+to the loopback API, including a KDE / Steam Deck example. A one-line log about
+no Hyprland IPC is normal on those desktops.
 
 From a clone:
 

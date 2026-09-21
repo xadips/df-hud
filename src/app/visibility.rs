@@ -199,7 +199,18 @@ impl Watcher {
                     query_failed_now = true;
                     let now = Instant::now();
                     let mut last = lock(&self.last_query_error);
-                    if last
+                    #[cfg(target_os = "linux")]
+                    let absent = crate::game::desktop::hyprland_absent(&err);
+                    #[cfg(not(target_os = "linux"))]
+                    let absent = false;
+                    if absent {
+                        if last.is_none() {
+                            info!(
+                                "hud: no Hyprland IPC; overlay stays up, workspace follow is off ({err})"
+                            );
+                        }
+                        *last = Some(now);
+                    } else if last
                         .map(|at| now.saturating_duration_since(at) >= QUERY_ERROR_LOG_INTERVAL)
                         .unwrap_or(true)
                     {
@@ -609,6 +620,27 @@ mod tests {
         assert!(w.state().visible);
         assert_eq!(w.state().monitor, "DP-2");
         assert!(w.last_query_error.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn watcher_stays_up_when_hyprland_ipc_is_missing() {
+        let q = FakeQuerier::new(Placement::default());
+        q.set(
+            Placement::default(),
+            Some(
+                "HYPRLAND_INSTANCE_SIGNATURE is unset and no single running Hyprland instance was found"
+                    .into(),
+            ),
+        );
+        let (w, game) = test_visibility(q.clone());
+        game.set_state_for_testing(GameState {
+            running: true,
+            pid: 42,
+            started_at: Some(Utc::now()),
+        });
+        w.refresh();
+        assert!(w.state().visible);
+        assert!(w.last_query_error.lock().unwrap().is_some());
     }
 
     #[test]

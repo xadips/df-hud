@@ -263,7 +263,7 @@ mod linux {
         let mut leftover = String::new();
         let hypr = hyprland_socket_present();
         if !hypr {
-            warn!("hotkeys: no Hyprland socket; HTTP remains the control hatch");
+            info!("hotkeys: no Hyprland socket; bind keys through the HTTP API");
         }
         while !stop.load(Ordering::SeqCst) && !handle.stopped() {
             let running = handle.config();

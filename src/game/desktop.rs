@@ -323,6 +323,14 @@ pub fn hypr_socket_path(name: &str) -> Result<PathBuf, String> {
     ))
 }
 
+/// Whether `err` is "Hyprland is not this compositor", not a dropped socket.
+#[cfg(any(test, target_os = "linux"))]
+pub fn hyprland_absent(err: &str) -> bool {
+    err.contains("HYPRLAND_INSTANCE_SIGNATURE is unset")
+        || err.contains("no single running Hyprland instance was found")
+        || err.contains("no Hyprland socket")
+}
+
 #[cfg(any(test, target_os = "linux"))]
 fn lone_hypr_socket(dirs: &[PathBuf], name: &str) -> Result<Option<PathBuf>, String> {
     for dir in dirs {
@@ -374,6 +382,17 @@ fn hypr_command_at(path: &Path, cmd: &str) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(unix)]
+fn wait_interruptible(stop: &std::sync::atomic::AtomicBool, total: std::time::Duration) {
+    let step = std::time::Duration::from_secs(1);
+    let mut left = total;
+    while left > std::time::Duration::ZERO && !stop.load(std::sync::atomic::Ordering::SeqCst) {
+        let chunk = left.min(step);
+        std::thread::sleep(chunk);
+        left = left.saturating_sub(chunk);
+    }
+}
+
+#[cfg(unix)]
 pub fn watch_events(
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     on_game: impl Fn(),
@@ -381,15 +400,26 @@ pub fn watch_events(
     on_focus: impl Fn(),
 ) {
     let mut backoff = std::time::Duration::from_secs(1);
+    let mut logged_absent = false;
     while !stop.load(std::sync::atomic::Ordering::SeqCst) {
         let path = match hypr_socket_path(".socket2.sock") {
-            Ok(path) => path,
+            Ok(path) => {
+                logged_absent = false;
+                path
+            }
             Err(e) => {
-                warn!("game: no Hyprland event stream ({e}); retrying in {backoff:?}");
-                std::thread::sleep(backoff);
-                if backoff < std::time::Duration::from_secs(30) {
-                    backoff *= 2;
+                if hyprland_absent(&e) {
+                    if !logged_absent {
+                        info!(
+                            "game: no Hyprland IPC ({e}); overlay stays up, workspace follow waits"
+                        );
+                        logged_absent = true;
+                    }
+                    wait_interruptible(&stop, std::time::Duration::from_secs(30));
+                    continue;
                 }
+                warn!("game: Hyprland socket not reachable ({e}); retrying in 30s");
+                wait_interruptible(&stop, std::time::Duration::from_secs(30));
                 continue;
             }
         };
@@ -406,7 +436,7 @@ pub fn watch_events(
         if stop.load(std::sync::atomic::Ordering::SeqCst) {
             return;
         }
-        std::thread::sleep(backoff);
+        wait_interruptible(&stop, backoff);
         if backoff < std::time::Duration::from_secs(30) {
             backoff *= 2;
         }
@@ -906,6 +936,19 @@ mod tests {
             serde_json::from_str(HYPR_CLIENTS).unwrap(),
             serde_json::from_str(HYPR_MONITORS).unwrap(),
         )
+    }
+
+    #[test]
+    fn hyprland_absent_is_missing_ipc_not_a_dropped_stream() {
+        assert!(hyprland_absent(
+            "HYPRLAND_INSTANCE_SIGNATURE is unset and no single running Hyprland instance was found"
+        ));
+        assert!(hyprland_absent(
+            "no Hyprland socket .socket2.sock (looked in /run/user/1000/hypr)"
+        ));
+        assert!(!hyprland_absent(
+            "hyprland: could not read the window list: eof"
+        ));
     }
 
     #[test]
