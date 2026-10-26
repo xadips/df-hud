@@ -6,6 +6,12 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# zbus 6 absorbed these; ksni (tray) still requires zbus 5. Drop once it moves.
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained, merged into zbus 6; no ksni release on zbus 6" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained, merged into zbus 6; no ksni release on zbus 6" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained, merged into zbus 6; no ksni release on zbus 6" },
+]
 
 [licenses]
 version = 2
