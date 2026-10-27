@@ -621,6 +621,12 @@ impl Default for Widget {
 }
 
 impl Poll {
+    /// Every network worker checks this: the docs promise zero requests
+    /// while the game is closed.
+    pub fn paused_while_closed(&self, game_running: bool) -> bool {
+        self.only_when_game_running && !game_running
+    }
+
     pub fn effective_challenge_interval(&self, game_running: bool) -> StdDuration {
         self.stretched_when_idle(self.challenge_interval.0, game_running)
     }
@@ -2027,6 +2033,17 @@ mod tests {
         let mut no_boss = Config::default();
         no_boss.bossmap.enabled = false;
         assert!(cfg.requests_per_hour(1.0) - no_boss.requests_per_hour(1.0) >= 55.0);
+    }
+
+    #[test]
+    fn polling_pauses_only_with_the_switch_on_and_the_game_closed() {
+        let mut poll = Config::default().poll;
+        poll.only_when_game_running = true;
+        assert!(poll.paused_while_closed(false));
+        assert!(!poll.paused_while_closed(true));
+        poll.only_when_game_running = false;
+        assert!(!poll.paused_while_closed(false));
+        assert!(!poll.paused_while_closed(true));
     }
 
     #[test]

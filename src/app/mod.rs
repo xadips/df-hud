@@ -686,6 +686,10 @@ fn assemble(
                 handle.refresh_feeds();
             } else {
                 handle.ping();
+                // A poke with polling still allowed would fetch the map now.
+                if handle.config().poll.paused_while_closed(false) {
+                    handle.bossmap_wake.ping();
+                }
             }
         });
     }
@@ -790,6 +794,7 @@ pub fn start_with(
         let poke = bossmap_wake.clone();
         let wake = wake.clone();
         let gate = gate.clone();
+        let game_running = handle.game_running.clone();
         move || {
             let feeds = Feeds {
                 store: &store,
@@ -800,6 +805,7 @@ pub fn start_with(
                 poke: &poke,
                 wake: &wake,
                 gate: &gate,
+                game_running: &game_running,
             };
             feeds_loop(&feeds);
         }
@@ -1050,13 +1056,15 @@ struct Feeds<'a> {
     poke: &'a Notify,
     wake: &'a Wake,
     gate: &'a Gate,
+    game_running: &'a AtomicBool,
 }
 
 /// The two background feeds on one timer thread: the allstats catalog and the
 /// city event map. Each keeps a deadline; the loop sleeps until the nearer
 /// one. A `poke` (game start, config change, stop) pulls the city map
 /// forward; with `bossmap.enabled = false` it has no deadline and the thread
-/// sleeps until the next poke.
+/// sleeps until the next poke. While `poll.paused_while_closed`, neither feed
+/// has a deadline and the city map is dropped, since it has no age on screen.
 fn feeds_loop(f: &Feeds<'_>) {
     let mut catalog_due = Instant::now();
     let mut bossmap_due = Some(Instant::now());
@@ -1068,6 +1076,14 @@ fn feeds_loop(f: &Feeds<'_>) {
             return;
         }
         let c = f.cfg.get();
+        if c.poll
+            .paused_while_closed(f.game_running.load(Ordering::SeqCst))
+        {
+            drop_boss_map(f, &mut boss_body);
+            f.poke.wait();
+            bossmap_due = Some(Instant::now());
+            continue;
+        }
         // Re-read per pass so a `[df]` reload's new pool is picked up here
         // too. Timeout and status handling are set per request by the
         // `_with` helpers.
@@ -1087,9 +1103,7 @@ fn feeds_loop(f: &Feeds<'_>) {
                 refresh_bossmap(&agent, f.store, f.wake, &c, &mut boss_body);
                 Some(Instant::now() + bossmap_interval(f.store, &c))
             } else {
-                f.store.clear_boss_map();
-                boss_body = None;
-                f.wake.ping();
+                drop_boss_map(f, &mut boss_body);
                 None
             };
         }
@@ -1151,6 +1165,16 @@ fn previous_body(cached: &mut Option<Vec<u8>>, store_has_map: bool) -> Option<&[
         *cached = None;
     }
     cached.as_deref()
+}
+
+/// `replace_config` may already have emptied the store on a disable; the
+/// fingerprint goes either way, the UI wake only when a map was on screen.
+fn drop_boss_map(f: &Feeds<'_>, body: &mut Option<Vec<u8>>) {
+    *body = None;
+    if f.store.has_boss_map() {
+        f.store.clear_boss_map();
+        f.wake.ping();
+    }
 }
 
 /// Faster inside Onslaught, where the block roster changes by the minute.

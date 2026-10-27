@@ -31,6 +31,7 @@ const SCRIPT_TOO_OLD: &str = "bridge script sends no salt - update it";
 const NEED_COOKIE: &str = "load any Dead Frontier page to send the session";
 const BOARD_RETRY: &str = "could not load the board (retrying)";
 const MASTERIES_RETRY: &str = "could not load masteries (retrying)";
+const GAME_CLOSED: &str = "the game is not running (poll.only_when_game_running)";
 
 #[derive(Clone)]
 pub struct PollerRuntime {
@@ -235,8 +236,13 @@ impl PlayerPoller {
                 );
             }
         }
-        if self.cfg.get().poll.only_when_game_running && !self.game_running.load(Ordering::SeqCst) {
-            return Some("the game is not running (poll.only_when_game_running)".into());
+        if self
+            .cfg
+            .get()
+            .poll
+            .paused_while_closed(self.game_running.load(Ordering::SeqCst))
+        {
+            return Some(GAME_CLOSED.into());
         }
         None
     }
@@ -660,8 +666,11 @@ impl<B: Board> BoardPoller<B> {
         if cr.cookie.is_empty() {
             return Some(NEED_COOKIE.into());
         }
-        if cfg.poll.only_when_game_running && !self.game_running.load(Ordering::SeqCst) {
-            return Some("the game is not running (poll.only_when_game_running)".into());
+        if cfg
+            .poll
+            .paused_while_closed(self.game_running.load(Ordering::SeqCst))
+        {
+            return Some(GAME_CLOSED.into());
         }
         self.board.wait_for(&self.store)
     }
