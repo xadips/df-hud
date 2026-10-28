@@ -72,6 +72,63 @@ impl Deadline {
             _ => Duration::ZERO,
         }
     }
+
+    /// An expired boost keeps its old timestamp in the record, so a past
+    /// deadline is not active.
+    pub fn active(self, now: DateTime<Utc>) -> bool {
+        match self {
+            Self::None => false,
+            Self::At(at) => at > now,
+            Self::Forever => true,
+        }
+    }
+}
+
+/// One tier of boosts (`df_boost*until`, or the `_ex` set stacked on top).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Boosts {
+    pub exp: Deadline,
+    pub damage: Deadline,
+    pub speed: Deadline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BoostTier {
+    Normal,
+    Ex,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BoostStat {
+    Exp,
+    Damage,
+    Speed,
+}
+
+impl BoostStat {
+    pub const ALL: [BoostStat; 3] = [BoostStat::Exp, BoostStat::Damage, BoostStat::Speed];
+}
+
+/// Active stats of one tier that share an expiry, i.e. one boost as bought.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct BoostGroup {
+    pub tier: BoostTier,
+    pub stats: Vec<BoostStat>,
+    /// `None` is permanent, which only the ultra boost is.
+    pub left: Option<Ns>,
+}
+
+impl BoostGroup {
+    pub fn all_stats(&self) -> bool {
+        self.stats.len() == BoostStat::ALL.len()
+    }
+
+    pub fn ultra(&self) -> bool {
+        self.tier == BoostTier::Normal && self.all_stats() && self.left.is_none()
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -96,8 +153,8 @@ pub struct Snapshot {
     pub cash: Option<i64>,
     pub bank_cash: i64,
     pub nourishment: Option<i32>,
-    /// Remaining XP boost. Copied onto View only when the overlay draws it.
-    pub boost_exp: Deadline,
+    pub boost: Boosts,
+    pub boost_ex: Boosts,
     pub session_3d: String,
     pub gold_member: bool,
     pub dead: bool,
@@ -520,6 +577,7 @@ pub struct View {
     /// when the catalog is missing.
     pub exp_in_level: i64,
     pub exp_needed: i64,
+    pub boosts: Vec<BoostGroup>,
     pub challenges: Option<Vec<Challenge>>,
     pub challenge_status: String,
     pub masteries: Option<Vec<Mastery>>,
@@ -568,6 +626,7 @@ impl Default for View {
             xp_stability: XpStability::Steady,
             exp_in_level: 0,
             exp_needed: 0,
+            boosts: Vec::new(),
             challenges: None,
             challenge_status: String::new(),
             masteries: None,
@@ -865,6 +924,42 @@ mod json_tests {
   "Ended": true,
   "Onslaught": true
 }"#
+        );
+    }
+
+    #[test]
+    fn boost_group_json() {
+        let timed = BoostGroup {
+            tier: BoostTier::Ex,
+            stats: vec![BoostStat::Exp, BoostStat::Speed],
+            left: Some(Ns(90_000_000_000)),
+        };
+        let ultra = BoostGroup {
+            tier: BoostTier::Normal,
+            stats: BoostStat::ALL.to_vec(),
+            left: None,
+        };
+        assert_eq!(
+            pretty(&vec![timed, ultra]),
+            r#"[
+  {
+    "Tier": "ex",
+    "Stats": [
+      "exp",
+      "speed"
+    ],
+    "Left": 90
+  },
+  {
+    "Tier": "normal",
+    "Stats": [
+      "exp",
+      "damage",
+      "speed"
+    ],
+    "Left": null
+  }
+]"#
         );
     }
 

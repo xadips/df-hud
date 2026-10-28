@@ -15,7 +15,8 @@ The letters follow whatever is in the config. An empty binding is left off.
 
 ![Keybinds](../images/keybinds.png)
 
-It sits on the right, under [block info](block.md) / [bosses](bosses.md), away
+It sits on the right, under [block info](block.md), [bosses](bosses.md) and
+[boosts](boosts.md), away
 from the native XP and IC Time UI and away from the
 [challenge board](challenges.md).
 
@@ -28,5 +29,5 @@ Restart puts it back to shown. `enabled = false` turns it off for good.
 | --- | --- | --- |
 | `enabled` | `true` | On or off. Starts shown; hide is session-only. |
 | `anchor` | `right` | `x` is an inset from `hud.reference_width` |
-| `x`, `y` | `220`, `530` | 220px in from the right, below a full bosses nest |
+| `x`, `y` | `220`, `584` | 220px in from the right, below six boost rows |
 | `color` | `#a0a0a0` | Mid grey, so it does not compete with the rest of the HUD |

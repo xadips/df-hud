@@ -200,6 +200,7 @@ pub struct Widget {
     pub xp: XpWidget,
     pub block: BlockWidget,
     pub bosses: BossesWidget,
+    pub boosts: BoostsWidget,
     pub keybinds: KeybindsWidget,
     pub map: MapWidget,
     pub challenges: ChallengesWidget,
@@ -259,6 +260,17 @@ pub struct BossesWidget {
     pub font_size: f32,
     pub color: String,
     pub show_nearest: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BoostsWidget {
+    pub enabled: bool,
+    pub anchor: Anchor,
+    pub x: i32,
+    pub y: i32,
+    pub font_size: f32,
+    pub color: String,
+    pub show_ultra: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -566,11 +578,20 @@ impl Default for Widget {
                 color: String::new(),
                 show_nearest: true,
             },
+            boosts: BoostsWidget {
+                enabled: true,
+                anchor: Anchor::Right,
+                x: 320,
+                y: 454,
+                font_size: 0.0,
+                color: "#c9a8ff".into(),
+                show_ultra: true,
+            },
             keybinds: KeybindsWidget {
                 enabled: true,
                 anchor: Anchor::Right,
                 x: 220,
-                y: 530,
+                y: 584,
                 font_size: 0.0,
                 color: "#a0a0a0".into(),
             },
@@ -1113,6 +1134,13 @@ impl Config {
                 self.widget.bosses.color.as_str(),
             ),
             (
+                "boosts",
+                self.widget.boosts.x,
+                self.widget.boosts.y,
+                self.widget.boosts.font_size,
+                self.widget.boosts.color.as_str(),
+            ),
+            (
                 "keybinds",
                 self.widget.keybinds.x,
                 self.widget.keybinds.y,
@@ -1162,6 +1190,7 @@ impl Config {
             ("xp", self.widget.xp.anchor),
             ("block", self.widget.block.anchor),
             ("bosses", self.widget.bosses.anchor),
+            ("boosts", self.widget.boosts.anchor),
             ("keybinds", self.widget.keybinds.anchor),
             ("challenges", self.widget.challenges.anchor),
             ("masteries", self.widget.masteries.anchor),
@@ -1855,7 +1884,7 @@ mod tests {
                 cfg.widget.keybinds.x,
                 cfg.widget.keybinds.y
             ),
-            [1700, 530]
+            [1700, 584]
         );
         assert_eq!(
             cfg.hud.place(

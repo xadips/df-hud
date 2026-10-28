@@ -25,6 +25,7 @@ table.
 | --- | --- | --- | --- |
 | Block info | shown | — | [block](widgets/block.md) |
 | Bosses | shown | — | [bosses](widgets/bosses.md) |
+| Boosts | shown | — | [boosts](widgets/boosts.md) |
 | Keybinds | shown | tray only | [keybinds](widgets/keybinds.md) |
 | Run clock | shown | `K` restarts | [session](widgets/session.md) |
 | XP/hr | shown | `U` resets | [xp](widgets/xp.md) |

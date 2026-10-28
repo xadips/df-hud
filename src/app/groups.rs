@@ -18,10 +18,11 @@ pub enum Group {
     Masteries,
     Map,
     Keybinds,
+    Boosts,
 }
 
 impl Group {
-    pub const ALL: [Group; 8] = [
+    pub const ALL: [Group; 9] = [
         Group::Block,
         Group::Bosses,
         Group::Session,
@@ -30,6 +31,7 @@ impl Group {
         Group::Masteries,
         Group::Map,
         Group::Keybinds,
+        Group::Boosts,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -42,6 +44,7 @@ impl Group {
             Group::Masteries => "masteries",
             Group::Map => "map",
             Group::Keybinds => "keybinds",
+            Group::Boosts => "boosts",
         }
     }
 

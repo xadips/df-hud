@@ -6,6 +6,19 @@ first within each section.
 
 ## [Unreleased]
 
+### Added
+
+- `[widget.boosts]`: boost and EX boost timers, which the game client never
+  shows. A trinity boost is one row; stats only split when their expiries
+  differ. The ultra boost (permanent normal boost) is `UB: Yes`;
+  `show_ultra = false` drops that row. Sits under the bosses list on the
+  right.
+
+### Changed
+
+- `[widget.keybinds]` default `y` is 584 (was 530), making room for boosts.
+  Configs that set `y` keep their value.
+
 ### Fixed
 
 - Countdowns no longer skip a second now and then. The overlay redraws just

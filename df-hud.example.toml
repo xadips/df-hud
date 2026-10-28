@@ -218,13 +218,29 @@ color = ""
 # When your block is empty, point at the nearest event.
 show_nearest = true
 
+[widget.boosts]
+# Boost timers, which the game client never shows. Stats bought together
+# share one timer ("Trinity 2h 10m"); only different expiries split per stat
+# ("EXP+DMG EX 35m"). The permanent ultra boost is "UB: Yes".
+# Sits under five bosses rows (a full Onslaught panel); six boost rows fit
+# above keybinds.
+enabled = true
+anchor = "right"
+x = 320
+y = 454
+font_size = 0
+color = "#c9a8ff"
+
+# false drops the "UB: Yes" row; EX boosts still show.
+show_ultra = true
+
 [widget.keybinds]
 # Live [hotkeys] cheat sheet. Starts shown; tray "Show keybinds" hides it for
 # this run, enabled = false for good.
 enabled = true
 anchor = "right"
 x = 220
-y = 530
+y = 584
 font_size = 0
 color = "#a0a0a0"
 

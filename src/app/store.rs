@@ -9,14 +9,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::data::TIME_OFFSET;
+use crate::data::boosts;
 use crate::data::bossmap::{self, BossMap};
 use crate::data::catalog::Catalog;
 use crate::data::citymap;
 use crate::data::xp;
 use crate::format;
 use crate::model::{
-    Challenge, Deadline, GameState, Mastery, Ns, PollerStatus, PresenceState, RunState, Snapshot,
-    Tick, View, XpRate, XpSample, XpSource, XpStability,
+    Boosts, Challenge, Deadline, GameState, Mastery, Ns, PollerStatus, PresenceState, RunState,
+    Snapshot, Tick, View, XpRate, XpSample, XpSource, XpStability,
 };
 
 const DF_FOREVER: i64 = (1 << 31) - 8;
@@ -71,7 +72,8 @@ pub fn parse_snapshot(
     s.cash = num_var(vars, "df_cash");
     s.bank_cash = num_var(vars, "df_bankcash").unwrap_or(0);
     s.nourishment = num_var(vars, "df_hungerhp");
-    s.boost_exp = deadline_var(vars, "df_boostexpuntil", at);
+    s.boost = boosts_var(vars, "");
+    s.boost_ex = boosts_var(vars, "_ex");
     s.gold_member = bool_var(vars, "df_goldmember");
     s.dead = bool_var(vars, "df_dead");
     s.server_time = df_compact_time_var(vars, "df_servertime");
@@ -121,7 +123,17 @@ fn df_compact_time_var(vars: &HashMap<String, String>, key: &str) -> Option<Date
     DateTime::from_timestamp(v + TIME_OFFSET, 0)
 }
 
-fn deadline_var(vars: &HashMap<String, String>, key: &str, now: DateTime<Utc>) -> Deadline {
+/// Boosts can be bought years ahead, and their encoding is settled, so no
+/// plausibility window.
+fn boosts_var(vars: &HashMap<String, String>, suffix: &str) -> Boosts {
+    Boosts {
+        exp: unix_deadline_var(vars, &format!("df_boostexpuntil{suffix}")),
+        damage: unix_deadline_var(vars, &format!("df_boostdamageuntil{suffix}")),
+        speed: unix_deadline_var(vars, &format!("df_boostspeeduntil{suffix}")),
+    }
+}
+
+fn unix_deadline_var(vars: &HashMap<String, String>, key: &str) -> Deadline {
     let Some(v) = num_var::<i64>(vars, key) else {
         return Deadline::None;
     };
@@ -131,8 +143,13 @@ fn deadline_var(vars: &HashMap<String, String>, key: &str, now: DateTime<Utc>) -
     if v >= DF_FOREVER {
         return Deadline::Forever;
     }
-    let Some(at) = DateTime::from_timestamp(v, 0) else {
-        return Deadline::None;
+    DateTime::from_timestamp(v, 0).map_or(Deadline::None, Deadline::At)
+}
+
+fn deadline_var(vars: &HashMap<String, String>, key: &str, now: DateTime<Utc>) -> Deadline {
+    let d = unix_deadline_var(vars, key);
+    let Deadline::At(at) = d else {
+        return d;
     };
     let skew = if now >= at {
         (now - at).to_std().unwrap_or(Duration::MAX)
@@ -506,6 +523,7 @@ impl Store {
             v.in_outpost = snap.in_outpost;
             v.outpost_name = citymap::outpost_name(x, y).to_string();
             v.block_support = Ns::from_std(snap.block_support.remaining(now));
+            v.boosts = boosts::group(snap.boost, snap.boost_ex, now);
             v.exp_in_level = snap.exp_in_level;
             v.exp_needed = snap.exp_needed;
         }
@@ -985,8 +1003,8 @@ mod tests {
             now,
             None,
         );
-        assert_eq!(snap.boost_exp, Deadline::At(target));
-        assert_eq!(snap.boost_exp.remaining(now), Duration::from_secs(90));
+        assert_eq!(snap.boost.exp, Deadline::At(target));
+        assert_eq!(snap.boost.exp.remaining(now), Duration::from_secs(90));
 
         let snap = parse_snapshot(
             &HashMap::from([("df_servertime".into(), "586484051".into())]),
@@ -1000,7 +1018,7 @@ mod tests {
             now,
             None,
         );
-        assert!(!snap.boost_exp.set());
+        assert!(!snap.boost.exp.set());
     }
 
     #[test]
@@ -1012,10 +1030,45 @@ mod tests {
                 now,
                 None,
             );
-            assert_eq!(snap.boost_exp, Deadline::Forever, "{raw}");
-            assert_eq!(snap.boost_exp.remaining(now), Duration::ZERO);
-            assert!(snap.boost_exp.set());
+            assert_eq!(snap.boost.exp, Deadline::Forever, "{raw}");
+            assert_eq!(snap.boost.exp.remaining(now), Duration::ZERO);
+            assert!(snap.boost.exp.set());
         }
+    }
+
+    #[test]
+    fn parse_snapshot_reads_every_boost_and_ex_boost() {
+        let now = DateTime::from_timestamp(1_786_484_051, 0).unwrap();
+        let t = |secs: i64| itoa64(now.timestamp() + secs);
+        let snap = parse_snapshot(
+            &HashMap::from([
+                ("df_boostexpuntil".into(), "2147483647".into()),
+                ("df_boostdamageuntil".into(), t(60)),
+                ("df_boostspeeduntil".into(), t(120)),
+                ("df_boostexpuntil_ex".into(), t(180)),
+                ("df_boostdamageuntil_ex".into(), t(240)),
+                ("df_boostspeeduntil_ex".into(), t(300)),
+            ]),
+            now,
+            None,
+        );
+        let at = |secs: i64| Deadline::At(now + chrono::Duration::seconds(secs));
+        assert_eq!(
+            snap.boost,
+            Boosts {
+                exp: Deadline::Forever,
+                damage: at(60),
+                speed: at(120),
+            }
+        );
+        assert_eq!(
+            snap.boost_ex,
+            Boosts {
+                exp: at(180),
+                damage: at(240),
+                speed: at(300),
+            }
+        );
     }
 
     #[test]
@@ -1033,6 +1086,18 @@ mod tests {
     }
 
     #[test]
+    fn boosts_bought_years_ahead_are_kept() {
+        let now = DateTime::from_timestamp(1_786_484_051, 0).unwrap();
+        let far = now + chrono::Duration::days(3 * 365);
+        let snap = parse_snapshot(
+            &HashMap::from([("df_boostdamageuntil_ex".into(), itoa64(far.timestamp()))]),
+            now,
+            None,
+        );
+        assert_eq!(snap.boost_ex.damage, Deadline::At(far));
+    }
+
+    #[test]
     fn store_apply_tick_and_derive() {
         let s = Store::new(Some(load_fixture_catalog()));
         let now = Utc::now();
@@ -1040,9 +1105,14 @@ mod tests {
         assert!(!v.have_data);
         assert!(!v.status.is_empty());
 
+        let mut vars = sample_player_record();
+        vars.insert(
+            "df_boostspeeduntil_ex".into(),
+            itoa64(now.timestamp() + 600),
+        );
         assert!(s.apply_tick(Tick {
             at: now,
-            vars: sample_player_record(),
+            vars,
             err: None,
             scheduled: true,
         }));
@@ -1054,6 +1124,8 @@ mod tests {
         });
         let v = s.derive(now + chrono::Duration::seconds(3));
         assert!(v.have_data);
+        assert_eq!(v.boosts.len(), 1);
+        assert_eq!(v.boosts[0].stats, [crate::model::BoostStat::Speed]);
         assert_eq!(
             v.client_uptime,
             Ns::from_std(Duration::from_secs(42 * 60 + 3))

@@ -86,7 +86,7 @@ pub fn window_reset(prev: &Snapshot, next: &Snapshot) -> Option<&'static str> {
     if next.at < prev.at {
         return Some("the clock went backwards");
     }
-    if prev.boost_exp != next.boost_exp {
+    if prev.boost.exp != next.boost.exp {
         return Some("the XP boost changed");
     }
     if next.cumulative_xp < prev.cumulative_xp {
@@ -107,7 +107,7 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
 
-    use crate::model::{Deadline, XpStability};
+    use crate::model::{Boosts, Deadline, XpStability};
 
     fn sample_ring(
         start: DateTime<Utc>,
@@ -250,7 +250,10 @@ mod tests {
         };
         assert_eq!(window_reset(&prev, &next), None, "ordinary step reset");
         let boosted = Snapshot {
-            boost_exp: Deadline::Forever,
+            boost: Boosts {
+                exp: Deadline::Forever,
+                ..Boosts::default()
+            },
             ..next
         };
         assert_eq!(window_reset(&prev, &boosted), Some("the XP boost changed"));
@@ -294,13 +297,17 @@ mod tests {
         ] {
             assert_eq!(window_reset(&prev, &snap), Some(want));
         }
+        let forever = Boosts {
+            exp: Deadline::Forever,
+            ..Boosts::default()
+        };
         let boosted = Snapshot {
-            boost_exp: Deadline::Forever,
+            boost: forever,
             ..next.clone()
         };
         assert_eq!(window_reset(&prev, &boosted), Some("the XP boost changed"));
         let prev_boosted = Snapshot {
-            boost_exp: Deadline::Forever,
+            boost: forever,
             ..prev.clone()
         };
         assert_eq!(

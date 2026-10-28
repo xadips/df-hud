@@ -1,3 +1,4 @@
+pub mod boosts;
 pub mod bossmap;
 pub mod catalog;
 pub mod challenges;

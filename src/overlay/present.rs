@@ -8,7 +8,8 @@ use crate::data::bossmap::{self, MarkCategory};
 use crate::data::citymap;
 use crate::format;
 use crate::model::{
-    Challenge, CityEvent, CityEventKind, CityMark, Mastery, View as ModelView, XpStability,
+    BoostStat, BoostTier, Challenge, CityEvent, CityEventKind, CityMark, Mastery,
+    View as ModelView, XpStability,
 };
 use crate::overlay::layout::Viewport;
 use crate::overlay::scene::{self, Line, MapCell, MapMarker, MapView, MapWindow, TextRun, View};
@@ -94,6 +95,14 @@ pub fn hud_lines(v: &ModelView, cfg: &Config, groups: &Groups) -> Vec<String> {
             cfg.widget.bosses.y,
         );
         rows.push((y, x, scene.bosses.iter().map(line_plain).collect()));
+    }
+    if !scene.boosts.is_empty() {
+        let [x, y] = cfg.hud.place(
+            cfg.widget.boosts.anchor,
+            cfg.widget.boosts.x,
+            cfg.widget.boosts.y,
+        );
+        rows.push((y, x, scene.boosts.iter().map(line_plain).collect()));
     }
     if !scene.clock.is_empty() {
         let [x, y] = cfg.hud.place(
@@ -203,6 +212,9 @@ pub fn from_view(v: &ModelView, cfg: &Config, groups: &Groups) -> View {
     if groups.shown(Group::Bosses) {
         out.bosses = boss_lines(v, cfg);
     }
+    if groups.shown(Group::Boosts) {
+        out.boosts = boost_lines(v, cfg);
+    }
     if groups.shown(Group::Keybinds) && cfg.widget.keybinds.enabled {
         out.keybinds = keybind_lines(cfg);
     }
@@ -254,7 +266,7 @@ fn line_plain(l: &Line) -> String {
     s.push_str(&l.text);
     if !l.timer.is_empty() {
         s.push_str("  ");
-        s.push_str(&l.timer);
+        s.push_str(l.timer.trim_start());
     }
     s
 }
@@ -360,6 +372,51 @@ fn boss_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
         });
     }
     rows
+}
+
+fn boost_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
+    if !cfg.widget.boosts.enabled || !v.have_data {
+        return Vec::new();
+    }
+    v.boosts
+        .iter()
+        .filter(|g| cfg.widget.boosts.show_ultra || !g.ultra())
+        .map(|g| {
+            if g.ultra() {
+                return Line {
+                    text: "UB: Yes".into(),
+                    ..Line::default()
+                };
+            }
+            let stats = if g.all_stats() {
+                "Trinity".to_string()
+            } else {
+                g.stats
+                    .iter()
+                    .map(|s| match s {
+                        BoostStat::Exp => "EXP",
+                        BoostStat::Damage => "DMG",
+                        BoostStat::Speed => "SPEED",
+                    })
+                    .collect::<Vec<_>>()
+                    .join("+")
+            };
+            let text = match g.tier {
+                BoostTier::Normal => stats,
+                BoostTier::Ex => format!("{stats} EX"),
+            };
+            Line {
+                text,
+                // Timers right-align to the widest row. Padded to "35m 05s" so
+                // that edge does not jump when a countdown drops its seconds.
+                timer: g
+                    .left
+                    .map(|left| format!("{:>7}", format::countdown(left.std())))
+                    .unwrap_or_default(),
+                ..Line::default()
+            }
+        })
+        .collect()
 }
 
 fn onslaught_header_timer(v: &ModelView) -> Option<String> {
@@ -1347,7 +1404,7 @@ fn map_list(marks: &[&CityMark], max_listed: i32, in_onslaught: bool) -> Vec<Lin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Ns, Objective, Walk};
+    use crate::model::{BoostGroup, Ns, Objective, Walk};
     use chrono::Duration as ChronoDuration;
     use std::time::Duration;
 
@@ -1658,6 +1715,97 @@ mod tests {
         let rows = boss_lines(&v, &Config::default());
         assert_eq!(rows[0].text, "OUTPOST ATTACK");
         assert_eq!(rows[0].color, Some(EXPIRING_RGB));
+    }
+
+    fn boost(tier: BoostTier, stats: &[BoostStat], left: Option<u64>) -> BoostGroup {
+        BoostGroup {
+            tier,
+            stats: stats.to_vec(),
+            left: left.map(|s| Ns::from_std(Duration::from_secs(s))),
+        }
+    }
+
+    #[test]
+    fn boost_rows_name_stats_only_when_the_pack_is_split() {
+        let v = ModelView {
+            have_data: true,
+            boosts: vec![
+                boost(BoostTier::Normal, &BoostStat::ALL, None),
+                boost(
+                    BoostTier::Ex,
+                    &[BoostStat::Exp, BoostStat::Damage],
+                    Some(2100),
+                ),
+                boost(BoostTier::Ex, &[BoostStat::Speed], Some(3720)),
+            ],
+            ..ModelView::default()
+        };
+        let rows: Vec<String> = boost_lines(&v, &Config::default())
+            .iter()
+            .map(line_plain)
+            .collect();
+        assert_eq!(rows, ["UB: Yes", "EXP+DMG EX  35m", "SPEED EX  1h 02m"]);
+
+        let mut cfg = Config::default();
+        cfg.widget.boosts.show_ultra = false;
+        let rows: Vec<String> = boost_lines(&v, &cfg).iter().map(line_plain).collect();
+        assert_eq!(rows, ["EXP+DMG EX  35m", "SPEED EX  1h 02m"]);
+    }
+
+    #[test]
+    fn boost_timers_keep_one_width_as_seconds_come_and_go() {
+        let v = ModelView {
+            have_data: true,
+            boosts: vec![
+                boost(BoostTier::Normal, &[BoostStat::Exp], Some(2100)),
+                boost(BoostTier::Normal, &[BoostStat::Damage], Some(2105)),
+                boost(BoostTier::Ex, &[BoostStat::Speed], Some(7200)),
+            ],
+            ..ModelView::default()
+        };
+        let timers: Vec<String> = boost_lines(&v, &Config::default())
+            .into_iter()
+            .map(|l| l.timer)
+            .collect();
+        assert_eq!(timers, ["    35m", "35m 05s", "     2h"]);
+    }
+
+    #[test]
+    fn full_packs_are_one_trinity_row_per_tier() {
+        let v = ModelView {
+            have_data: true,
+            boosts: vec![
+                boost(BoostTier::Normal, &BoostStat::ALL, Some(7800)),
+                boost(BoostTier::Ex, &BoostStat::ALL, Some(2100)),
+            ],
+            ..ModelView::default()
+        };
+        let rows: Vec<String> = boost_lines(&v, &Config::default())
+            .iter()
+            .map(line_plain)
+            .collect();
+        assert_eq!(rows, ["Trinity  2h 10m", "Trinity EX  35m"]);
+    }
+
+    #[test]
+    fn boost_rows_need_data_the_switch_and_the_group() {
+        let v = ModelView {
+            have_data: true,
+            boosts: vec![boost(BoostTier::Ex, &[BoostStat::Exp], Some(60))],
+            ..ModelView::default()
+        };
+        let mut cfg = Config::default();
+        assert_eq!(boost_lines(&v, &cfg).len(), 1);
+        let groups = Groups::default();
+        groups.toggle(Group::Boosts);
+        assert!(from_view(&v, &cfg, &groups).boosts.is_empty());
+        cfg.widget.boosts.enabled = false;
+        assert!(boost_lines(&v, &cfg).is_empty());
+        let stale = ModelView {
+            have_data: false,
+            ..v
+        };
+        assert!(boost_lines(&stale, &Config::default()).is_empty());
     }
 
     #[test]
@@ -2719,6 +2867,11 @@ mod tests {
             have_data: true,
             has_position: true,
             zone_name: "South Eastern".into(),
+            boosts: vec![BoostGroup {
+                tier: BoostTier::Ex,
+                stats: vec![BoostStat::Speed],
+                left: Some(Ns::from_std(Duration::from_secs(600))),
+            }],
             ..ModelView::default()
         };
         assert_eq!(
@@ -2727,6 +2880,7 @@ mod tests {
                 "IC Time: 1:00:00",
                 "Xp/Hr: --",
                 "South Eastern",
+                "SPEED EX  10m",
                 "G - Minimap",
                 "Z - Challenges",
                 "J - Overlay",
@@ -2743,6 +2897,7 @@ mod tests {
         cfg.widget.session.enabled = false;
         cfg.widget.xp.enabled = false;
         cfg.widget.keybinds.enabled = false;
+        cfg.widget.boosts.enabled = false;
         assert_eq!(hud_lines(&v, &cfg, &groups), ["session expired"]);
     }
 

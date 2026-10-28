@@ -10,6 +10,7 @@
 
 - [Block info](widgets/block.md)
 - [Bosses](widgets/bosses.md)
+- [Boosts](widgets/boosts.md)
 - [Keybinds](widgets/keybinds.md)
 - [Run clock](widgets/session.md)
 - [XP/hr](widgets/xp.md)

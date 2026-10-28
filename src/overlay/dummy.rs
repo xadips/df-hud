@@ -50,6 +50,7 @@ pub fn view(clock: &str) -> View {
         challenges: vec![],
         masteries: vec![],
         bosses: vec![],
+        boosts: vec![],
         keybinds: vec![
             "G - Minimap".into(),
             "Z - Challenges".into(),

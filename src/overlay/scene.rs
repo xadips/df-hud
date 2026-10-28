@@ -34,6 +34,7 @@ pub struct View {
     pub challenges: Vec<Line>,
     pub masteries: Vec<Line>,
     pub bosses: Vec<Line>,
+    pub boosts: Vec<Line>,
     pub keybinds: Vec<String>,
     pub map: MapView,
 }
@@ -302,6 +303,24 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
                 hud_a,
             },
             &view.bosses,
+        );
+    }
+
+    if cfg.widget.boosts.enabled && !view.boosts.is_empty() {
+        push_lines(
+            &mut scene,
+            xf,
+            LineLayout {
+                at: cfg.hud.place(
+                    cfg.widget.boosts.anchor,
+                    cfg.widget.boosts.x,
+                    cfg.widget.boosts.y,
+                ),
+                font_px: font_px(cfg, cfg.widget.boosts.font_size, xf),
+                default_color: widget_color(cfg, &cfg.widget.boosts.color),
+                hud_a,
+            },
+            &view.boosts,
         );
     }
 
@@ -962,6 +981,43 @@ mod tests {
             .expect("challenges key");
         assert!((map_key.x - 2340.0).abs() < 0.5, "keys x = {}", map_key.x);
         assert!(board.y > map_key.y);
+    }
+
+    /// The default boosts spot clears a full Onslaught panel above (title,
+    /// prev, "ended ago", now, next) and fits the most rows boosts can make,
+    /// both tiers split per stat, before the keybinds.
+    #[test]
+    fn default_boosts_sit_between_five_boss_rows_and_the_keybinds() {
+        let mut view = dummy_view();
+        view.map = MapView::default();
+        let row = |text: &str| Line {
+            text: text.into(),
+            ..Line::default()
+        };
+        view.bosses = (0..5).map(|i| row(&format!("boss {i}"))).collect();
+        view.boosts = (0..6).map(|i| row(&format!("boost {i}"))).collect();
+        for vp in [
+            vp_1440(),
+            Viewport {
+                width: 1920.0,
+                height: 1080.0,
+            },
+        ] {
+            let scene = build(&view, &Config::default(), vp);
+            let at = |text: &str| {
+                scene
+                    .texts
+                    .iter()
+                    .find(|t| t.text == text)
+                    .unwrap_or_else(|| panic!("{text}"))
+            };
+            let step = at("boss 0").font_px * LINE_HEIGHT;
+            let gap = at("boost 0").y - at("boss 4").y;
+            assert!(gap >= step * 1.5, "boosts crowd the bosses: {gap}");
+            let room = at(&view.keybinds[0]).y - at("boost 5").y;
+            assert!(room >= step * 1.5, "boosts run into the keybinds: {room}");
+            assert!((at("boost 0").x - at("boss 0").x).abs() < 0.5);
+        }
     }
 
     #[test]

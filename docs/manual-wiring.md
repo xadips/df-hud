@@ -20,7 +20,7 @@ Every built-in action is reachable, and so are the groups that have no key:
 | Restart the run clock | `POST /api/run/start` |
 | Reset XP/hr | `POST /api/xp/reset` |
 | Show or hide the overlay | `POST /api/overlay/toggle` |
-| Other groups | `POST /api/widget/<name>/toggle`, where name is `block`, `bosses`, `session`, `xp`, or `keybinds` |
+| Other groups | `POST /api/widget/<name>/toggle`, where name is `block`, `bosses`, `boosts`, `session`, `xp`, or `keybinds` |
 
 Hyprland:
 

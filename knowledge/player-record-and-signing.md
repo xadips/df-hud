@@ -95,11 +95,19 @@ permanent boost. Treating anything more than 600,000 seconds out as infinite
 arrives at the same place from the other direction.
 
 df-hud models this as a state (`dfDeadline.Forever`) rather than a very large
-number, and additionally refuses any deadline more than a year away. That guard
-exists specifically for `df_block_support_until`, whose encoding is **unverified**
-because it has been 0 in every observation: if it turns out to use the compact
-epoch, the HUD omits the line instead of confidently showing a decades-wrong
-countdown.
+number, and additionally refuses a `df_block_support_until` more than a year
+away. That guard exists because its encoding is **unverified** - it has been 0
+in every observation: if it turns out to use the compact epoch, the HUD omits
+the line instead of confidently showing a decades-wrong countdown. The boost
+fields skip it: their encoding is settled by the game's arithmetic above, and
+boosts (EX too) can legitimately be bought more than a year ahead.
+
+**An expired boost keeps its timestamp.** The `*until` fields are not zeroed
+when a boost runs out; a live record had every `_ex` field months in the past
+next to normal fields at `2147483647` (an ultra boost: all three normal stats
+permanent; ex boosts have no permanent form). "Set" is not "active": compare
+against now. A pack covering all three stats stamps the same expiry on each,
+which is how the boosts widget folds them back into one timer.
 
 ## `df_inoutpost` does not mean what it looks like
 
