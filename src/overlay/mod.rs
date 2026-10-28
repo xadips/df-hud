@@ -11,7 +11,7 @@
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
 
@@ -37,6 +37,9 @@ pub mod win32;
 use scene::Scene;
 
 pub const TICK: Duration = Duration::from_secs(1);
+/// Lands the tick past the second boundary even when the wait returns early;
+/// covers Windows' ~15.6 ms timer granularity.
+const TICK_SLACK: Duration = Duration::from_millis(20);
 #[cfg(any(test, windows))]
 const WIN32_WAIT_TIMEOUT: u32 = 0x102;
 
@@ -74,15 +77,21 @@ pub fn seed_reference() -> Option<(i32, i32)> {
     }
 }
 
-pub fn start_tick(started: Instant) -> Instant {
-    started + TICK
+/// Just after the next wall-clock second. Deadlines are whole unix seconds,
+/// so every countdown steps once per tick; `now + TICK` drifts by the wake
+/// latency each time and skips a second whenever it crosses a boundary.
+pub fn next_tick(now: Instant, wall: SystemTime) -> Instant {
+    let into = wall.duration_since(UNIX_EPOCH).map_or(Duration::ZERO, |d| {
+        Duration::from_nanos(d.subsec_nanos().into())
+    });
+    now + (TICK - into) + TICK_SLACK
 }
 
-pub fn due(now: Instant, next_tick: &mut Instant) -> bool {
-    if now < *next_tick {
+pub fn due(now: Instant, wall: SystemTime, next: &mut Instant) -> bool {
+    if now < *next {
         return false;
     }
-    *next_tick = now + TICK;
+    *next = next_tick(now, wall);
     true
 }
 
@@ -113,7 +122,7 @@ impl Runtime {
             cfg,
             started,
             duration,
-            next_tick: start_tick(started),
+            next_tick: next_tick(started, SystemTime::now()),
         }
     }
 
@@ -167,7 +176,7 @@ pub fn step(
     handle: &Handle,
     hooks: &mut impl Hooks,
 ) -> Result<(), Box<dyn Error>> {
-    if due(Instant::now(), &mut rt.next_tick) {
+    if due(Instant::now(), SystemTime::now(), &mut rt.next_tick) {
         if let Some(cfg) = take_reload(&mut rt.watch) {
             handle.note_config_watch(&rt.watch, true);
             handle.replace_config(cfg);
@@ -218,14 +227,39 @@ pub fn wait_ms(now: Instant, started: Instant, duration: Duration, next_tick: In
 mod tests {
     use super::*;
 
+    fn wall(ms: u64) -> SystemTime {
+        UNIX_EPOCH + Duration::from_millis(ms)
+    }
+
     #[test]
     fn due_only_when_reached() {
         let now = Instant::now();
         let mut next = now + Duration::from_secs(10);
-        assert!(!due(now, &mut next));
+        assert!(!due(now, wall(100_300), &mut next));
         let mut next = now;
-        assert!(due(now, &mut next));
-        assert!(next > now);
+        assert!(due(now, wall(100_300), &mut next));
+        assert_eq!(next, now + Duration::from_millis(720));
+    }
+
+    #[test]
+    fn ticks_land_just_past_each_wall_second() {
+        let now = Instant::now();
+        assert_eq!(
+            next_tick(now, wall(100_300)),
+            now + Duration::from_millis(720)
+        );
+        assert_eq!(
+            next_tick(now, wall(100_000)),
+            now + Duration::from_millis(1020)
+        );
+        // A tick that fired on time schedules exactly one second on, so the
+        // phase never slides.
+        assert_eq!(next_tick(now, wall(100_020)), now + TICK);
+        // A late wake catches up to the boundary instead of carrying the delay.
+        assert_eq!(
+            next_tick(now, wall(100_950)),
+            now + Duration::from_millis(70)
+        );
     }
 
     #[test]

@@ -4,6 +4,13 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
+## [Unreleased]
+
+### Fixed
+
+- Countdowns no longer skip a second now and then. The overlay redraws just
+  after each wall-clock second instead of on a 1 s timer that drifted.
+
 ## [0.4.16] - 2026-09-21
 
 ### Changed
