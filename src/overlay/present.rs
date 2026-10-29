@@ -316,6 +316,8 @@ fn tally_lines(v: &ModelView, cfg: &Config) -> Vec<String> {
         (w.show_weekly_ts, "Weekly TS: ", t.weekly_ts),
         (w.show_daily_loots, "Daily Loots: ", t.daily_loots),
         (w.show_weekly_loots, "Weekly Loots: ", t.weekly_loots),
+        (w.show_daily_pks, "Daily PKs: ", t.daily_pks),
+        (w.show_weekly_pks, "Weekly PKs: ", t.weekly_pks),
     ]
     .into_iter()
     .filter(|(on, ..)| *on)
@@ -1876,6 +1878,8 @@ mod tests {
                 weekly_ts: Some(2_364_345_710),
                 daily_loots: None,
                 weekly_loots: Some(10),
+                daily_pks: Some(0),
+                weekly_pks: Some(3),
             },
             ..ModelView::default()
         };
@@ -1892,6 +1896,8 @@ mod tests {
 
         cfg.widget.xp.show_daily_ts = true;
         cfg.widget.xp.show_daily_loots = true;
+        cfg.widget.xp.show_daily_pks = true;
+        cfg.widget.xp.show_weekly_pks = true;
         assert_eq!(
             from_view(&v, &cfg, &g).xp_tallies,
             [
@@ -1899,6 +1905,8 @@ mod tests {
                 "Weekly TS: 2,364,345,710",
                 "Daily Loots: --",
                 "Weekly Loots: 10",
+                "Daily PKs: 0",
+                "Weekly PKs: 3",
             ]
         );
 

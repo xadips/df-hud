@@ -79,6 +79,8 @@ pub fn parse_snapshot(
         weekly_ts: num_var(vars, "df_expdeath_weekly"),
         daily_loots: num_var(vars, "df_loots_daily"),
         weekly_loots: num_var(vars, "df_loots_weekly"),
+        daily_pks: num_var(vars, "df_playerkills_daily"),
+        weekly_pks: num_var(vars, "df_playerkills_weekly"),
     };
     s.gold_member = bool_var(vars, "df_goldmember");
     s.dead = bool_var(vars, "df_dead");
@@ -1099,6 +1101,7 @@ mod tests {
                 ("df_expdeath_daily".into(), "0".into()),
                 ("df_expdeath_weekly".into(), "2364345710".into()),
                 ("df_loots_weekly".into(), "10".into()),
+                ("df_playerkills_weekly".into(), "3".into()),
             ]),
             DateTime::from_timestamp(1_786_484_051, 0).unwrap(),
             None,
@@ -1110,6 +1113,8 @@ mod tests {
                 weekly_ts: Some(2_364_345_710),
                 daily_loots: None,
                 weekly_loots: Some(10),
+                daily_pks: None,
+                weekly_pks: Some(3),
             }
         );
     }

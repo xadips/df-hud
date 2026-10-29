@@ -14,8 +14,9 @@ first within each section.
   `show_ultra = false` drops that row. Sits under the bosses list on the
   right. Tray **Show boosts** hides it for the run.
 - `[widget.xp]` `show_daily_ts`, `show_weekly_ts`, `show_daily_loots`,
-  `show_weekly_loots`: rows under XP/hr with your daily and weekly TS and loot
-  counts from the player record. All off by default.
+  `show_weekly_loots`, `show_daily_pks`, `show_weekly_pks`: rows under XP/hr
+  with your daily and weekly TS, loot and player kill counts from the player
+  record. All off by default.
 
 ### Changed
 

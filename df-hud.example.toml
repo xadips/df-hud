@@ -272,12 +272,15 @@ prefix = "Xp/Hr: "
 # Drawn left of the prefix. Off by default.
 show_progress = false
 
-# Rows under the rate: "Weekly TS: 2,364,345,710", "Weekly Loots: 10". TS is
-# XP since the last death within the day or week. All off by default.
+# Rows under the rate: "Weekly TS: 2,364,345,710", "Weekly Loots: 10",
+# "Weekly PKs: 3". TS is XP since the last death within the day or week; PKs
+# are player kills. All off by default. Four fit above [widget.challenges].
 show_daily_ts = false
 show_weekly_ts = false
 show_daily_loots = false
 show_weekly_loots = false
+show_daily_pks = false
+show_weekly_pks = false
 
 # The rate is the last XP change, scaled to an hour. Flat polls are
 # ignored. min_samples is how many changes before a number is shown.

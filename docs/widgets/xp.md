@@ -20,7 +20,7 @@ updates on each player-record poll (`poll.active_interval`, default 10
 seconds). At the level cap, or if the catalog has not loaded, the prefix is
 omitted.
 
-Four switches add rows under the rate, in `color`, from the same poll:
+Six switches add rows under the rate, in `color`, from the same poll:
 
 ```
 Xp/Hr: 52,340,112
@@ -28,11 +28,15 @@ Daily TS: 41,201,544
 Weekly TS: 2,364,345,710
 Daily Loots: 3
 Weekly Loots: 10
+Daily PKs: 0
+Weekly PKs: 3
 ```
 
 TS is `df_expdeath_daily` / `df_expdeath_weekly`: XP since your last death
-within the day or week. Loots are `df_loots_daily` / `df_loots_weekly`. A
-field missing from the record shows `--`.
+within the day or week. Loots are `df_loots_daily` / `df_loots_weekly`, PKs
+(player kills) `df_playerkills_daily` / `df_playerkills_weekly`. A field
+missing from the record shows `--`. Four rows fit above the default
+challenges spot; with more, raise `[widget.challenges] y`.
 
 | Key | Default | |
 | --- | --- | --- |
@@ -42,6 +46,7 @@ field missing from the record shows `--`.
 | `show_progress` | `false` | Overflow `%` to the left of the prefix |
 | `show_daily_ts`, `show_weekly_ts` | `false` | TS rows under the rate |
 | `show_daily_loots`, `show_weekly_loots` | `false` | Loot count rows under the rate |
+| `show_daily_pks`, `show_weekly_pks` | `false` | Player kill rows under the rate |
 | `color` | `#ffffff` | Normal colour. Amber and red still win. |
 | `window` | `60` | Unused for the rate; kept so existing configs still parse |
 | `min_samples` | `3` | Changes before a rate is shown |

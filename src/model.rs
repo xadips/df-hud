@@ -132,13 +132,15 @@ impl BoostGroup {
 }
 
 /// Daily and weekly counters from the record. TS is `df_expdeath_*`, XP since
-/// the last death within the day or week.
+/// the last death within the day or week; PKs are `df_playerkills_*`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Tallies {
     pub daily_ts: Option<i64>,
     pub weekly_ts: Option<i64>,
     pub daily_loots: Option<i64>,
     pub weekly_loots: Option<i64>,
+    pub daily_pks: Option<i64>,
+    pub weekly_pks: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default)]

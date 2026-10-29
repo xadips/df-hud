@@ -242,6 +242,8 @@ pub struct XpWidget {
     pub show_weekly_ts: bool,
     pub show_daily_loots: bool,
     pub show_weekly_loots: bool,
+    pub show_daily_pks: bool,
+    pub show_weekly_pks: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -567,6 +569,8 @@ impl Default for Widget {
                 show_weekly_ts: false,
                 show_daily_loots: false,
                 show_weekly_loots: false,
+                show_daily_pks: false,
+                show_weekly_pks: false,
             },
             block: BlockWidget {
                 enabled: true,

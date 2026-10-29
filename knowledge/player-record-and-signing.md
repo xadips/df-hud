@@ -51,6 +51,7 @@ Far more than df-hud uses. The ones that matter, with their verified meanings:
 | `df_expdeath` | XP since the last death (matches DFProfiler's `exp_since_death`) |
 | `df_expdeathrecord`, `*_daily`, `*_weekly` | best-ever and periodic variants; `df_expdeath_weekly` is weekly TS |
 | `df_loots_total`, `df_loots_daily`, `df_loots_weekly` | loot counts |
+| `df_playerkills`, `*_daily`, `*_weekly` | player kills |
 | `df_positionx/y/z` | block coordinates; z is a floor index, 0 is the street |
 | `df_tradezone` | 1..9 region, 10 wastelands, 21 outpost, 22 Valcrest |
 | `df_inoutpost` | "1" inside an outpost |
