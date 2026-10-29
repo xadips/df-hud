@@ -425,13 +425,16 @@ fn boost_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
                 BoostTier::Normal => stats,
                 BoostTier::Ex => format!("{stats} EX"),
             };
-            Line {
-                text,
-                timer: g
-                    .left
-                    .map(|left| format::countdown(left.std()))
-                    .unwrap_or_default(),
-                ..Line::default()
+            match g.left {
+                Some(left) => Line {
+                    text,
+                    timer: format::countdown(left.std()),
+                    ..Line::default()
+                },
+                None => Line {
+                    text: format!("{text}: Yes"),
+                    ..Line::default()
+                },
             }
         })
         .collect()
@@ -1768,6 +1771,23 @@ mod tests {
         cfg.widget.boosts.show_ultra = false;
         let rows: Vec<String> = boost_lines(&v, &cfg).iter().map(line_plain).collect();
         assert_eq!(rows, ["EXP+DMG EX  35m", "SPEED EX  1h 02m"]);
+    }
+
+    #[test]
+    fn a_permanent_stat_short_of_ultra_says_yes() {
+        let v = ModelView {
+            have_data: true,
+            boosts: vec![
+                boost(BoostTier::Normal, &[BoostStat::Exp], None),
+                boost(BoostTier::Normal, &[BoostStat::Damage], Some(600)),
+            ],
+            ..ModelView::default()
+        };
+        let rows: Vec<String> = boost_lines(&v, &Config::default())
+            .iter()
+            .map(line_plain)
+            .collect();
+        assert_eq!(rows, ["EXP: Yes", "DMG  10m"]);
     }
 
     #[test]
