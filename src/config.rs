@@ -404,6 +404,10 @@ pub fn default_path() -> PathBuf {
     }
 }
 
+fn watch_path(path: Option<PathBuf>) -> PathBuf {
+    path.unwrap_or_else(default_path)
+}
+
 /// `%APPDATA%` / `%LOCALAPPDATA%`, else `%USERPROFILE%\AppData\<kind>`.
 #[cfg(any(windows, test))]
 fn windows_app_dir(env_val: Option<&str>, home: Option<&str>, kind: &str) -> PathBuf {
@@ -1581,7 +1585,7 @@ impl Watch {
         path: Option<PathBuf>,
         reference: Option<(i32, i32)>,
     ) -> Result<Self, Box<dyn Error>> {
-        let path = path.unwrap_or_else(default_path);
+        let path = watch_path(path);
         #[cfg(test)]
         let _ = reference;
         #[cfg(not(test))]
@@ -1600,11 +1604,6 @@ impl Watch {
             cfg,
             error: None,
         })
-    }
-
-    #[cfg(test)]
-    pub fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
     }
 
     pub fn error(&self) -> Option<&str> {
@@ -2029,8 +2028,9 @@ mod tests {
 
     #[test]
     fn watch_none_uses_default_path() {
-        let watch = Watch::open_with_reference(None, None).unwrap();
-        assert_eq!(watch.path(), Some(default_path().as_path()));
+        assert_eq!(watch_path(None), default_path());
+        let given = PathBuf::from("/no/such/df-hud-config.toml");
+        assert_eq!(watch_path(Some(given.clone())), given);
     }
 
     #[test]

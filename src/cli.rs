@@ -1037,7 +1037,7 @@ mod tests {
 
     #[test]
     fn check_game_starts_with_the_matching_rule() {
-        let text = check_game_text(None).unwrap();
+        let text = check_game_text(Some(Path::new("/no/such/df-hud-config.toml"))).unwrap();
         let want = game::scan_description(game::DEFAULT_PROCESS);
         assert!(text.starts_with(&want), "{text}");
         assert!(
