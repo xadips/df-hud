@@ -3,6 +3,8 @@
 `[widget.boosts]`. Boost timers. The game client does not show them, only
 DFProfiler does. Sits under [bosses](bosses.md) on the right.
 
+![Boosts: ultra boost and a Trinity EX timer](../images/boosts.png)
+
 Normal boosts and EX boosts each cover movement speed, damage and XP. A
 trinity boost covers all three and gives every stat the same expiry, so one
 row stands for it:

@@ -2,7 +2,7 @@
 
 `[widget.xp]`. Experience per hour from the last time cumulative XP moved.
 
-![XP/hr](../images/xp.png)
+![XP/hr with all four daily and weekly rows on](../images/xp.png)
 
 A poll that repeats the same total is ignored. When the total changes, the
 rate is that gain over the time since the previous change, scaled to an hour.
