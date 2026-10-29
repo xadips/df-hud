@@ -238,12 +238,19 @@ pub struct XpWidget {
     pub window: Duration,
     pub min_samples: i32,
     pub show_progress: bool,
-    pub show_daily_ts: bool,
-    pub show_weekly_ts: bool,
-    pub show_daily_loots: bool,
-    pub show_weekly_loots: bool,
-    pub show_daily_pks: bool,
-    pub show_weekly_pks: bool,
+    pub rows: Vec<XpRow>,
+}
+
+/// A record counter drawn under the rate, in the order `rows` lists them.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum XpRow {
+    DailyTs,
+    WeeklyTs,
+    DailyLoots,
+    WeeklyLoots,
+    DailyPks,
+    WeeklyPks,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -565,12 +572,7 @@ impl Default for Widget {
                 window: Duration(StdDuration::from_secs(60)),
                 min_samples: 3,
                 show_progress: false,
-                show_daily_ts: false,
-                show_weekly_ts: false,
-                show_daily_loots: false,
-                show_weekly_loots: false,
-                show_daily_pks: false,
-                show_weekly_pks: false,
+                rows: Vec::new(),
             },
             block: BlockWidget {
                 enabled: true,
@@ -2203,6 +2205,15 @@ window = 120
             cfg.widget.xp.min_samples,
             Config::default().widget.xp.min_samples
         );
+    }
+
+    #[test]
+    fn xp_rows_keep_their_order_and_reject_typos() {
+        assert!(Config::default().widget.xp.rows.is_empty());
+        let cfg = Config::parse("[widget.xp]\nrows = [\"weekly_loots\", \"weekly_ts\"]\n").unwrap();
+        assert_eq!(cfg.widget.xp.rows, [XpRow::WeeklyLoots, XpRow::WeeklyTs]);
+        let err = Config::parse("[widget.xp]\nrows = [\"weekly_tz\"]\n").unwrap_err();
+        assert!(err.to_string().contains("weekly_ts"), "{err}");
     }
 
     #[test]

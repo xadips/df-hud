@@ -13,16 +13,17 @@ first within each section.
   differ. The ultra boost (permanent normal boost) is `UB: Yes`;
   `show_ultra = false` drops that row. Sits under the bosses list on the
   right. Tray **Show boosts** hides it for the run.
-- `[widget.xp]` `show_daily_ts`, `show_weekly_ts`, `show_daily_loots`,
-  `show_weekly_loots`, `show_daily_pks`, `show_weekly_pks`: rows under XP/hr
-  with your daily and weekly TS, loot and player kill counts from the player
-  record. All off by default.
+- `[widget.xp] rows`: your daily and weekly TS, loot and player kill counts
+  from the player record, under XP/hr in the order listed, e.g.
+  `rows = ["weekly_ts", "weekly_loots"]`. Empty by default.
 
 ### Changed
 
 - The right column starts 40px lower: default `y` for `[widget.block]` is 340
   (was 300), `[widget.bosses]` 384 (was 344). `[widget.keybinds]` is 624
   (was 530), making room for boosts. Configs that set `y` keep their value.
+- XP/hr no longer blanks to `--` when an XP boost starts or ends. The rate is
+  the last change alone, so only the one reading across the edge mixes both.
 
 ### Fixed
 
@@ -31,6 +32,11 @@ first within each section.
 - A reply with no `key=value` pairs is logged as what it was: `server replied
   "Invalid action"`, `empty response`, or its size, instead of always
   "response contained no key=value pairs".
+- With `poll.only_when_game_running` (the default), the city event map and the
+  allstats XP table are no longer fetched while the game is closed, so nothing
+  is requested until it starts. The map is dropped from the overlay meanwhile.
+- rustls 0.23.46, rustls-webpki 0.103.16 and webpki-roots 1.0.11
+  (RUSTSEC-2026-0346 to 0349, 0381, 0382).
 
 ## [0.4.16] - 2026-09-21
 

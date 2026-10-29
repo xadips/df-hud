@@ -18,6 +18,8 @@ const MAP_MARKER_FONT: f32 = 0.72;
 /// 27px cell yields ~14pt instead of tracking the grid 1:1.
 const MAP_LIST_FROM_CELL: f32 = 0.52;
 const LINE_HEIGHT: f32 = 1.25;
+/// As wide as `format::countdown` gets short of 10 days.
+const BOOST_TIMER_WIDEST: &str = "35m 05s";
 /// Vertical gutter between legend chips (I5 / N5). Text size stays the same.
 const MAP_CHIP_GAP: f32 = 4.0;
 
@@ -315,7 +317,7 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
     }
 
     if cfg.widget.boosts.enabled && !view.boosts.is_empty() {
-        push_lines(
+        push_lines_min_timer(
             &mut scene,
             xf,
             LineLayout {
@@ -329,6 +331,7 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
                 hud_a,
             },
             &view.boosts,
+            BOOST_TIMER_WIDEST,
         );
     }
 
@@ -422,6 +425,19 @@ fn push_centered_rows(scene: &mut Scene, xf: Transform, layout: LineLayout, rows
 }
 
 fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line]) {
+    push_lines_min_timer(scene, xf, layout, rows, "");
+}
+
+/// Timers right-align to the widest row. `min_timer` reserves the column at
+/// that text's width so a countdown dropping its seconds on the minute does
+/// not pull that edge in.
+fn push_lines_min_timer(
+    scene: &mut Scene,
+    xf: Transform,
+    layout: LineLayout,
+    rows: &[Line],
+    min_timer: &str,
+) {
     let LineLayout {
         at: [ax, ay],
         font_px,
@@ -446,6 +462,7 @@ fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line
     label_color[3] *= hud_a;
 
     let timer_gap = 2.0 * mono_advance(" ", font_px);
+    let min_timer_w = mono_advance(min_timer, font_px);
     let group_w = rows
         .iter()
         .map(|row| {
@@ -454,7 +471,7 @@ fn push_lines(scene: &mut Scene, xf: Transform, layout: LineLayout, rows: &[Line
             let timer = if row.timer.is_empty() {
                 0.0
             } else {
-                timer_gap + mono_advance(&row.timer, font_px)
+                timer_gap + mono_advance(&row.timer, font_px).max(min_timer_w)
             };
             left + content + timer
         })
@@ -1026,6 +1043,33 @@ mod tests {
             assert!(room >= step * 1.5, "boosts run into the keybinds: {room}");
             assert!((at("boost 0").x - at("boss 0").x).abs() < 0.5);
         }
+    }
+
+    #[test]
+    fn boost_timers_hold_their_right_edge_when_seconds_drop() {
+        let edge = |timer: &str| {
+            let mut view = dummy_view();
+            view.map = MapView::default();
+            view.boosts = vec![Line {
+                text: "Trinity EX".into(),
+                timer: timer.into(),
+                ..Line::default()
+            }];
+            view.bosses = view.boosts.clone();
+            let scene = build(&view, &Config::default(), vp_1440());
+            let ends: Vec<f32> = scene
+                .texts
+                .iter()
+                .filter(|t| t.text == timer)
+                .map(|t| t.x + mono_advance(&t.text, t.font_px))
+                .collect();
+            assert_eq!(ends.len(), 2, "one timer per group");
+            (ends[0], ends[1])
+        };
+        let (bosses_full, boosts_full) = edge("35m 05s");
+        let (bosses_short, boosts_short) = edge("35m");
+        assert!((boosts_full - boosts_short).abs() < 0.5);
+        assert!(bosses_short < bosses_full, "only boosts reserve the column");
     }
 
     #[test]

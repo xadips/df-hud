@@ -20,7 +20,12 @@ updates on each player-record poll (`poll.active_interval`, default 10
 seconds). At the level cap, or if the catalog has not loaded, the prefix is
 omitted.
 
-Six switches add rows under the rate, in `color`, from the same poll:
+`rows` adds record counters under the rate, in `color`, from the same poll,
+top to bottom in the order listed. All six:
+
+```toml
+rows = ["daily_ts", "weekly_ts", "daily_loots", "weekly_loots", "daily_pks", "weekly_pks"]
+```
 
 ```
 Xp/Hr: 52,340,112
@@ -44,9 +49,7 @@ challenges spot; with more, raise `[widget.challenges] y`.
 | `x`, `y` | `220`, `80` | Position at 2560x1440 |
 | `prefix` | `"Xp/Hr: "` | Text before the number |
 | `show_progress` | `false` | Overflow `%` to the left of the prefix |
-| `show_daily_ts`, `show_weekly_ts` | `false` | TS rows under the rate |
-| `show_daily_loots`, `show_weekly_loots` | `false` | Loot count rows under the rate |
-| `show_daily_pks`, `show_weekly_pks` | `false` | Player kill rows under the rate |
+| `rows` | `[]` | Counters under the rate: `daily_ts`, `weekly_ts`, `daily_loots`, `weekly_loots`, `daily_pks`, `weekly_pks` |
 | `color` | `#ffffff` | Normal colour. Amber and red still win. |
 | `window` | `60` | Unused for the rate; kept so existing configs still parse |
 | `min_samples` | `3` | Changes before a rate is shown |

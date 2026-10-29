@@ -134,6 +134,7 @@ impl BoostGroup {
 /// Daily and weekly counters from the record. TS is `df_expdeath_*`, XP since
 /// the last death within the day or week; PKs are `df_playerkills_*`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct Tallies {
     pub daily_ts: Option<i64>,
     pub weekly_ts: Option<i64>,
@@ -938,6 +939,26 @@ mod json_tests {
   "Started": true,
   "Ended": true,
   "Onslaught": true
+}"#
+        );
+    }
+
+    #[test]
+    fn tallies_json() {
+        let t = Tallies {
+            weekly_ts: Some(2_364_345_710),
+            weekly_loots: Some(10),
+            ..Tallies::default()
+        };
+        assert_eq!(
+            pretty(&t),
+            r#"{
+  "DailyTs": null,
+  "WeeklyTs": 2364345710,
+  "DailyLoots": null,
+  "WeeklyLoots": 10,
+  "DailyPks": null,
+  "WeeklyPks": null
 }"#
         );
     }

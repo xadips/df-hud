@@ -74,8 +74,10 @@ pub fn run_reset(prev: Option<DateTime<Utc>>, next: Option<DateTime<Utc>>) -> bo
 /// Why the rate window must be discarded when moving from one snapshot to the
 /// next, or `None` to keep it.
 ///
-/// Each of these makes the samples either side incomparable: a boost starting
-/// or ending, cumulative XP falling, or the clock jumping backwards. A long
+/// Each of these makes the samples either side incomparable: cumulative XP
+/// falling, or the clock jumping backwards. A boost edge is not a reason: the
+/// rate is the last change only, so one reading straddles it and the next is
+/// clean, where a reset would blank the rate for `min_samples` changes. A long
 /// quiet stretch is [`change_gap_reset`], checked against the last XP change
 /// rather than every poll. A change in `in_outpost` is not a reason; that
 /// field does not mean what its name suggests.
@@ -85,9 +87,6 @@ pub fn window_reset(prev: &Snapshot, next: &Snapshot) -> Option<&'static str> {
     }
     if next.at < prev.at {
         return Some("the clock went backwards");
-    }
-    if prev.boost.exp != next.boost.exp {
-        return Some("the XP boost changed");
     }
     if next.cumulative_xp < prev.cumulative_xp {
         return Some("cumulative XP fell (death or correction)");
@@ -249,14 +248,6 @@ mod tests {
             ..Snapshot::default()
         };
         assert_eq!(window_reset(&prev, &next), None, "ordinary step reset");
-        let boosted = Snapshot {
-            boost: Boosts {
-                exp: Deadline::Forever,
-                ..Boosts::default()
-            },
-            ..next
-        };
-        assert_eq!(window_reset(&prev, &boosted), Some("the XP boost changed"));
     }
 
     #[test]
@@ -303,22 +294,11 @@ mod tests {
         };
         let boosted = Snapshot {
             boost: forever,
+            boost_ex: forever,
             ..next.clone()
         };
-        assert_eq!(window_reset(&prev, &boosted), Some("the XP boost changed"));
-        let prev_boosted = Snapshot {
-            boost: forever,
-            ..prev.clone()
-        };
-        assert_eq!(
-            window_reset(&prev_boosted, &next),
-            Some("the XP boost changed")
-        );
-        assert_eq!(
-            window_reset(&prev_boosted, &boosted),
-            None,
-            "unchanged boost reset"
-        );
+        assert_eq!(window_reset(&prev, &boosted), None, "boost started");
+        assert_eq!(window_reset(&boosted, &next), None, "boost ended");
         let later = Snapshot {
             at: base + chrono::Duration::minutes(5),
             cumulative_xp: 1_001_000,

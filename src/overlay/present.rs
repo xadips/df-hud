@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::app::groups::{Group, Groups};
-use crate::config::{Config, MasteriesWidget};
+use crate::config::{Config, MasteriesWidget, XpRow};
 use crate::data::bossmap::{self, MarkCategory};
 use crate::data::citymap;
 use crate::format;
@@ -265,7 +265,7 @@ fn line_plain(l: &Line) -> String {
     s.push_str(&l.text);
     if !l.timer.is_empty() {
         s.push_str("  ");
-        s.push_str(l.timer.trim_start());
+        s.push_str(&l.timer);
     }
     s
 }
@@ -309,23 +309,24 @@ fn xp_line(v: &ModelView, cfg: &Config) -> Option<(String, Option<[f32; 4]>)> {
 }
 
 fn tally_lines(v: &ModelView, cfg: &Config) -> Vec<String> {
-    let w = &cfg.widget.xp;
     let t = &v.tallies;
-    [
-        (w.show_daily_ts, "Daily TS: ", t.daily_ts),
-        (w.show_weekly_ts, "Weekly TS: ", t.weekly_ts),
-        (w.show_daily_loots, "Daily Loots: ", t.daily_loots),
-        (w.show_weekly_loots, "Weekly Loots: ", t.weekly_loots),
-        (w.show_daily_pks, "Daily PKs: ", t.daily_pks),
-        (w.show_weekly_pks, "Weekly PKs: ", t.weekly_pks),
-    ]
-    .into_iter()
-    .filter(|(on, ..)| *on)
-    .map(|(_, name, n)| {
-        let n = n.map_or_else(|| XP_PENDING.to_string(), format::int);
-        format!("{name}{n}")
-    })
-    .collect()
+    cfg.widget
+        .xp
+        .rows
+        .iter()
+        .map(|row| {
+            let (name, n) = match row {
+                XpRow::DailyTs => ("Daily TS", t.daily_ts),
+                XpRow::WeeklyTs => ("Weekly TS", t.weekly_ts),
+                XpRow::DailyLoots => ("Daily Loots", t.daily_loots),
+                XpRow::WeeklyLoots => ("Weekly Loots", t.weekly_loots),
+                XpRow::DailyPks => ("Daily PKs", t.daily_pks),
+                XpRow::WeeklyPks => ("Weekly PKs", t.weekly_pks),
+            };
+            let n = n.map_or_else(|| XP_PENDING.to_string(), format::int);
+            format!("{name}: {n}")
+        })
+        .collect()
 }
 
 fn block_lines(v: &ModelView, cfg: &Config) -> Option<(String, String)> {
@@ -426,11 +427,9 @@ fn boost_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
             };
             Line {
                 text,
-                // Timers right-align to the widest row. Padded to "35m 05s" so
-                // that edge does not jump when a countdown drops its seconds.
                 timer: g
                     .left
-                    .map(|left| format!("{:>7}", format::countdown(left.std())))
+                    .map(|left| format::countdown(left.std()))
                     .unwrap_or_default(),
                 ..Line::default()
             }
@@ -1772,24 +1771,6 @@ mod tests {
     }
 
     #[test]
-    fn boost_timers_keep_one_width_as_seconds_come_and_go() {
-        let v = ModelView {
-            have_data: true,
-            boosts: vec![
-                boost(BoostTier::Normal, &[BoostStat::Exp], Some(2100)),
-                boost(BoostTier::Normal, &[BoostStat::Damage], Some(2105)),
-                boost(BoostTier::Ex, &[BoostStat::Speed], Some(7200)),
-            ],
-            ..ModelView::default()
-        };
-        let timers: Vec<String> = boost_lines(&v, &Config::default())
-            .into_iter()
-            .map(|l| l.timer)
-            .collect();
-        assert_eq!(timers, ["    35m", "35m 05s", "     2h"]);
-    }
-
-    #[test]
     fn full_packs_are_one_trinity_row_per_tier() {
         let v = ModelView {
             have_data: true,
@@ -1887,27 +1868,31 @@ mod tests {
         let g = Groups::new();
         assert!(from_view(&v, &cfg, &g).xp_tallies.is_empty());
 
-        cfg.widget.xp.show_weekly_ts = true;
-        cfg.widget.xp.show_weekly_loots = true;
+        cfg.widget.xp.rows = vec![XpRow::WeeklyTs, XpRow::WeeklyLoots];
         assert_eq!(
             hud_lines(&v, &cfg, &g)[..3],
             ["Xp/Hr: --", "Weekly TS: 2,364,345,710", "Weekly Loots: 10"]
         );
 
-        cfg.widget.xp.show_daily_ts = true;
-        cfg.widget.xp.show_daily_loots = true;
-        cfg.widget.xp.show_daily_pks = true;
-        cfg.widget.xp.show_weekly_pks = true;
+        cfg.widget.xp.rows = vec![
+            XpRow::WeeklyPks,
+            XpRow::DailyPks,
+            XpRow::WeeklyLoots,
+            XpRow::DailyLoots,
+            XpRow::WeeklyTs,
+            XpRow::DailyTs,
+        ];
         assert_eq!(
             from_view(&v, &cfg, &g).xp_tallies,
             [
-                "Daily TS: 0",
-                "Weekly TS: 2,364,345,710",
-                "Daily Loots: --",
-                "Weekly Loots: 10",
-                "Daily PKs: 0",
                 "Weekly PKs: 3",
-            ]
+                "Daily PKs: 0",
+                "Weekly Loots: 10",
+                "Daily Loots: --",
+                "Weekly TS: 2,364,345,710",
+                "Daily TS: 0",
+            ],
+            "the order is the config's"
         );
 
         let blank = ModelView {

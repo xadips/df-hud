@@ -272,21 +272,18 @@ prefix = "Xp/Hr: "
 # Drawn left of the prefix. Off by default.
 show_progress = false
 
-# Rows under the rate: "Weekly TS: 2,364,345,710", "Weekly Loots: 10",
-# "Weekly PKs: 3". TS is XP since the last death within the day or week; PKs
-# are player kills. All off by default. Four fit above [widget.challenges].
-show_daily_ts = false
-show_weekly_ts = false
-show_daily_loots = false
-show_weekly_loots = false
-show_daily_pks = false
-show_weekly_pks = false
+# Record counters under the rate, top to bottom in the order listed, e.g.
+# rows = ["weekly_ts", "weekly_loots"] draws "Weekly TS: 2,364,345,710" and
+# "Weekly Loots: 10". Pick from daily_ts, weekly_ts, daily_loots,
+# weekly_loots, daily_pks, weekly_pks. TS is XP since the last death within
+# the day or week; PKs are player kills. Four fit above [widget.challenges].
+rows = []
 
 # The rate is the last XP change, scaled to an hour. Flat polls are
 # ignored. min_samples is how many changes before a number is shown.
 # window is unused for the rate; kept so older configs still parse.
-# The count resets on a new run, a death, a boost edge, a clock jump,
-# or 300s with no change.
+# The count resets on a new run, a death, a clock jump, or 300s with no
+# change. A boost starting or ending does not blank it.
 window = 60
 min_samples = 3
 
