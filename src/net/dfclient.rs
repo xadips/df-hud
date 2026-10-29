@@ -138,7 +138,17 @@ pub fn parse_flash(body: &str) -> Result<Vars, Error> {
         }
     }
     if out.is_empty() {
-        return Err(Error::Other("response contained no key=value pairs".into()));
+        let text = body.trim();
+        return Err(Error::Other(if text.is_empty() {
+            "empty response".into()
+        } else if text.len() <= 64 && text.bytes().all(|b| b.is_ascii_graphic() || b == b' ') {
+            format!("server replied {text:?} instead of key=value pairs")
+        } else {
+            format!(
+                "response contained no key=value pairs ({} bytes)",
+                body.len()
+            )
+        }));
     }
     Ok(out)
 }
@@ -592,6 +602,22 @@ mod tests {
             assert!(err.stale(), "{err}");
             assert!(err.to_string().contains("rejected"), "{err}");
         }
+    }
+
+    #[test]
+    fn bodies_without_pairs_say_what_came_back() {
+        let err = parse_flash("Invalid action\n").unwrap_err();
+        assert!(!err.stale());
+        assert!(
+            err.to_string().contains(r#"replied "Invalid action""#),
+            "{err}"
+        );
+
+        let err = parse_flash("  ").unwrap_err();
+        assert!(err.to_string().contains("empty response"), "{err}");
+
+        let err = parse_flash(&"x".repeat(100)).unwrap_err();
+        assert!(err.to_string().contains("(100 bytes)"), "{err}");
     }
 
     #[test]

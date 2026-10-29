@@ -23,6 +23,9 @@ first within each section.
 
 - Countdowns no longer skip a second now and then. The overlay redraws just
   after each wall-clock second instead of on a 1 s timer that drifted.
+- A reply with no `key=value` pairs is logged as what it was: `server replied
+  "Invalid action"`, `empty response`, or its size, instead of always
+  "response contained no key=value pairs".
 
 ## [0.4.16] - 2026-09-21
 
