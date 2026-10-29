@@ -4,7 +4,7 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
-## [Unreleased]
+## [0.5.0] - 2026-10-29
 
 ### Added
 
