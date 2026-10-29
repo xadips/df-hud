@@ -29,5 +29,5 @@ Restart puts it back to shown. `enabled = false` turns it off for good.
 | --- | --- | --- |
 | `enabled` | `true` | On or off. Starts shown; hide is session-only. |
 | `anchor` | `right` | `x` is an inset from `hud.reference_width` |
-| `x`, `y` | `220`, `584` | 220px in from the right, below six boost rows |
+| `x`, `y` | `220`, `624` | 220px in from the right, below six boost rows |
 | `color` | `#a0a0a0` | Mid grey, so it does not compete with the rest of the HUD |

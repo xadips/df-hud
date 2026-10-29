@@ -45,6 +45,7 @@ pub fn view(clock: &str) -> View {
         xp: "12,345,678".into(),
         xp_progress: String::new(),
         xp_color: None,
+        xp_tallies: vec![],
         block: "Nastya's Holdout".into(),
         block_sub: String::new(),
         challenges: vec![],

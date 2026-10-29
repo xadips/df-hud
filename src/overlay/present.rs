@@ -120,14 +120,12 @@ pub fn hud_lines(v: &ModelView, cfg: &Config, groups: &Groups) -> Vec<String> {
         let [x, y] = cfg
             .hud
             .place(cfg.widget.xp.anchor, cfg.widget.xp.x, cfg.widget.xp.y);
-        rows.push((
-            y,
-            x,
-            vec![format!(
-                "{}{}{}",
-                scene.xp_progress, cfg.widget.xp.prefix, scene.xp
-            )],
-        ));
+        let mut text = vec![format!(
+            "{}{}{}",
+            scene.xp_progress, cfg.widget.xp.prefix, scene.xp
+        )];
+        text.extend(scene.xp_tallies);
+        rows.push((y, x, text));
     }
     if !scene.challenges.is_empty() {
         let [x, y] = cfg.hud.place(
@@ -196,6 +194,7 @@ pub fn from_view(v: &ModelView, cfg: &Config, groups: &Groups) -> View {
         out.xp = text;
         out.xp_color = color;
         out.xp_progress = xp_progress_text(v, cfg);
+        out.xp_tallies = tally_lines(v, cfg);
     }
     if groups.shown(Group::Block)
         && let Some((head, sub)) = block_lines(v, cfg)
@@ -307,6 +306,24 @@ fn xp_line(v: &ModelView, cfg: &Config) -> Option<(String, Option<[f32; 4]>)> {
         XpStability::Steady => None,
     };
     Some((n, color))
+}
+
+fn tally_lines(v: &ModelView, cfg: &Config) -> Vec<String> {
+    let w = &cfg.widget.xp;
+    let t = &v.tallies;
+    [
+        (w.show_daily_ts, "Daily TS: ", t.daily_ts),
+        (w.show_weekly_ts, "Weekly TS: ", t.weekly_ts),
+        (w.show_daily_loots, "Daily Loots: ", t.daily_loots),
+        (w.show_weekly_loots, "Weekly Loots: ", t.weekly_loots),
+    ]
+    .into_iter()
+    .filter(|(on, ..)| *on)
+    .map(|(_, name, n)| {
+        let n = n.map_or_else(|| XP_PENDING.to_string(), format::int);
+        format!("{name}{n}")
+    })
+    .collect()
 }
 
 fn block_lines(v: &ModelView, cfg: &Config) -> Option<(String, String)> {
@@ -1848,6 +1865,48 @@ mod tests {
         v.exp_needed = 0;
         assert!(from_view(&v, &cfg, &g).xp_progress.is_empty());
         assert_eq!(hud_lines(&v, &cfg, &g)[0], "Xp/Hr: 1,234,567");
+    }
+
+    #[test]
+    fn tallies_sit_under_the_rate_only_when_picked() {
+        let v = ModelView {
+            have_data: true,
+            tallies: crate::model::Tallies {
+                daily_ts: Some(0),
+                weekly_ts: Some(2_364_345_710),
+                daily_loots: None,
+                weekly_loots: Some(10),
+            },
+            ..ModelView::default()
+        };
+        let mut cfg = Config::default();
+        let g = Groups::new();
+        assert!(from_view(&v, &cfg, &g).xp_tallies.is_empty());
+
+        cfg.widget.xp.show_weekly_ts = true;
+        cfg.widget.xp.show_weekly_loots = true;
+        assert_eq!(
+            hud_lines(&v, &cfg, &g)[..3],
+            ["Xp/Hr: --", "Weekly TS: 2,364,345,710", "Weekly Loots: 10"]
+        );
+
+        cfg.widget.xp.show_daily_ts = true;
+        cfg.widget.xp.show_daily_loots = true;
+        assert_eq!(
+            from_view(&v, &cfg, &g).xp_tallies,
+            [
+                "Daily TS: 0",
+                "Weekly TS: 2,364,345,710",
+                "Daily Loots: --",
+                "Weekly Loots: 10",
+            ]
+        );
+
+        let blank = ModelView {
+            have_data: false,
+            ..v
+        };
+        assert!(from_view(&blank, &cfg, &g).xp_tallies.is_empty());
     }
 
     #[test]

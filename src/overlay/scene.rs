@@ -29,6 +29,8 @@ pub struct View {
     pub xp: String,
     pub xp_progress: String,
     pub xp_color: Option<[f32; 4]>,
+    /// Daily/weekly tallies under the XP/hr line, in the widget colour.
+    pub xp_tallies: Vec<String>,
     pub block: String,
     pub block_sub: String,
     pub challenges: Vec<Line>,
@@ -211,8 +213,16 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
     }
 
     if cfg.widget.xp.enabled && !view.xp.is_empty() {
-        let line = format!("{}{}{}", view.xp_progress, cfg.widget.xp.prefix, view.xp);
-        push_text_group(
+        let mut rows = vec![Line {
+            text: format!("{}{}{}", view.xp_progress, cfg.widget.xp.prefix, view.xp),
+            color: view.xp_color,
+            ..Line::default()
+        }];
+        rows.extend(view.xp_tallies.iter().map(|t| Line {
+            text: t.clone(),
+            ..Line::default()
+        }));
+        push_lines(
             &mut scene,
             xf,
             LineLayout {
@@ -220,12 +230,10 @@ pub fn build(view: &View, cfg: &Config, viewport: Viewport) -> Scene {
                     .hud
                     .place(cfg.widget.xp.anchor, cfg.widget.xp.x, cfg.widget.xp.y),
                 font_px: font_px(cfg, cfg.widget.xp.font_size, xf),
-                default_color: view
-                    .xp_color
-                    .unwrap_or(widget_color(cfg, &cfg.widget.xp.color)),
+                default_color: widget_color(cfg, &cfg.widget.xp.color),
                 hud_a,
             },
-            &[&line],
+            &rows,
         );
     }
 
@@ -1018,6 +1026,40 @@ mod tests {
             assert!(room >= step * 1.5, "boosts run into the keybinds: {room}");
             assert!((at("boost 0").x - at("boss 0").x).abs() < 0.5);
         }
+    }
+
+    #[test]
+    fn tallies_stack_under_the_rate_in_the_widget_colour() {
+        let mut view = dummy_view();
+        view.map = MapView::default();
+        let amber = [1.0, 0.8, 0.4, 1.0];
+        view.xp_color = Some(amber);
+        view.xp_tallies = (0..4).map(|i| format!("tally {i}")).collect();
+        view.challenges = vec![Line {
+            text: "challenge".into(),
+            ..Line::default()
+        }];
+        let cfg = Config::default();
+        let scene = build(&view, &cfg, vp_1440());
+        let at = |text: &str| {
+            scene
+                .texts
+                .iter()
+                .find(|t| t.text == text)
+                .unwrap_or_else(|| panic!("{text}"))
+        };
+        let rate = at("Xp/Hr: 12,345,678");
+        let step = rate.font_px * LINE_HEIGHT;
+        assert_eq!(rate.color[..3], amber[..3]);
+        let plain = widget_color(&cfg, &cfg.widget.xp.color);
+        for i in 0..4 {
+            let t = at(&format!("tally {i}"));
+            assert!((t.x - rate.x).abs() < 0.5);
+            assert!((t.y - rate.y - step * (i + 1) as f32).abs() < 0.5);
+            assert_eq!(t.color[..3], plain[..3]);
+        }
+        let room = at("challenge").y - at("tally 3").y;
+        assert!(room >= step, "tallies run into the challenges: {room}");
     }
 
     #[test]

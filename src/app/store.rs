@@ -17,7 +17,7 @@ use crate::data::xp;
 use crate::format;
 use crate::model::{
     Boosts, Challenge, Deadline, GameState, Mastery, Ns, PollerStatus, PresenceState, RunState,
-    Snapshot, Tick, View, XpRate, XpSample, XpSource, XpStability,
+    Snapshot, Tallies, Tick, View, XpRate, XpSample, XpSource, XpStability,
 };
 
 const DF_FOREVER: i64 = (1 << 31) - 8;
@@ -74,6 +74,12 @@ pub fn parse_snapshot(
     s.nourishment = num_var(vars, "df_hungerhp");
     s.boost = boosts_var(vars, "");
     s.boost_ex = boosts_var(vars, "_ex");
+    s.tallies = Tallies {
+        daily_ts: num_var(vars, "df_expdeath_daily"),
+        weekly_ts: num_var(vars, "df_expdeath_weekly"),
+        daily_loots: num_var(vars, "df_loots_daily"),
+        weekly_loots: num_var(vars, "df_loots_weekly"),
+    };
     s.gold_member = bool_var(vars, "df_goldmember");
     s.dead = bool_var(vars, "df_dead");
     s.server_time = df_compact_time_var(vars, "df_servertime");
@@ -526,6 +532,7 @@ impl Store {
             v.boosts = boosts::group(snap.boost, snap.boost_ex, now);
             v.exp_in_level = snap.exp_in_level;
             v.exp_needed = snap.exp_needed;
+            v.tallies = snap.tallies;
         }
         if let Some(p) = presence_position_locked(s, now) {
             v.client_loading = p.loading;
@@ -1083,6 +1090,28 @@ mod tests {
             );
             assert!(!snap.block_support.set(), "{raw}");
         }
+    }
+
+    #[test]
+    fn parse_snapshot_reads_daily_and_weekly_tallies() {
+        let snap = parse_snapshot(
+            &HashMap::from([
+                ("df_expdeath_daily".into(), "0".into()),
+                ("df_expdeath_weekly".into(), "2364345710".into()),
+                ("df_loots_weekly".into(), "10".into()),
+            ]),
+            DateTime::from_timestamp(1_786_484_051, 0).unwrap(),
+            None,
+        );
+        assert_eq!(
+            snap.tallies,
+            Tallies {
+                daily_ts: Some(0),
+                weekly_ts: Some(2_364_345_710),
+                daily_loots: None,
+                weekly_loots: Some(10),
+            }
+        );
     }
 
     #[test]

@@ -238,6 +238,10 @@ pub struct XpWidget {
     pub window: Duration,
     pub min_samples: i32,
     pub show_progress: bool,
+    pub show_daily_ts: bool,
+    pub show_weekly_ts: bool,
+    pub show_daily_loots: bool,
+    pub show_weekly_loots: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -559,12 +563,16 @@ impl Default for Widget {
                 window: Duration(StdDuration::from_secs(60)),
                 min_samples: 3,
                 show_progress: false,
+                show_daily_ts: false,
+                show_weekly_ts: false,
+                show_daily_loots: false,
+                show_weekly_loots: false,
             },
             block: BlockWidget {
                 enabled: true,
                 anchor: Anchor::Right,
                 x: 220,
-                y: 300,
+                y: 340,
                 font_size: 0.0,
                 color: "#9ecbff".into(),
                 show_position: false,
@@ -573,7 +581,7 @@ impl Default for Widget {
                 enabled: true,
                 anchor: Anchor::Right,
                 x: 320,
-                y: 344,
+                y: 384,
                 font_size: 0.0,
                 color: String::new(),
                 show_nearest: true,
@@ -582,7 +590,7 @@ impl Default for Widget {
                 enabled: true,
                 anchor: Anchor::Right,
                 x: 320,
-                y: 454,
+                y: 494,
                 font_size: 0.0,
                 color: "#c9a8ff".into(),
                 show_ultra: true,
@@ -591,7 +599,7 @@ impl Default for Widget {
                 enabled: true,
                 anchor: Anchor::Right,
                 x: 220,
-                y: 584,
+                y: 624,
                 font_size: 0.0,
                 color: "#a0a0a0".into(),
             },
@@ -1844,7 +1852,7 @@ mod tests {
     fn stub_toml_moves_block_x() {
         let cfg = Config::parse("[widget.block]\nx = 400\n").unwrap();
         assert_eq!(cfg.widget.block.x, 400);
-        assert_eq!(cfg.widget.block.y, 300);
+        assert_eq!(cfg.widget.block.y, 340);
         assert_eq!(cfg.widget.block.anchor, Anchor::Right);
         assert_eq!(cfg.poll.active_interval, Duration::from_secs(10));
     }
@@ -1858,7 +1866,7 @@ mod tests {
                 cfg.widget.block.x,
                 cfg.widget.block.y
             ),
-            [2340, 300]
+            [2340, 340]
         );
         let cfg =
             Config::parse("[hud]\nreference_width = 1920\nreference_height = 1200\n").unwrap();
@@ -1868,7 +1876,7 @@ mod tests {
                 cfg.widget.block.x,
                 cfg.widget.block.y
             ),
-            [1700, 300]
+            [1700, 340]
         );
         assert_eq!(
             cfg.hud.place(
@@ -1876,7 +1884,7 @@ mod tests {
                 cfg.widget.bosses.x,
                 cfg.widget.bosses.y
             ),
-            [1600, 344]
+            [1600, 384]
         );
         assert_eq!(
             cfg.hud.place(
@@ -1884,7 +1892,7 @@ mod tests {
                 cfg.widget.keybinds.x,
                 cfg.widget.keybinds.y
             ),
-            [1700, 584]
+            [1700, 624]
         );
         assert_eq!(
             cfg.hud.place(
@@ -1937,14 +1945,14 @@ mod tests {
         assert_eq!(cfg.hud.reference_height, 1200);
         assert_eq!(cfg.widget.block.anchor, Anchor::Right);
         // Coordinates rescale with the reference: block keeps its 220/2560
-        // inset and 300/1440 height as fractions of the 1920x1200 panel.
+        // inset and 340/1440 height as fractions of the 1920x1200 panel.
         assert_eq!(
             cfg.hud.place(
                 cfg.widget.block.anchor,
                 cfg.widget.block.x,
                 cfg.widget.block.y
             ),
-            [1920 - 165, 250]
+            [1920 - 165, 283]
         );
     }
 

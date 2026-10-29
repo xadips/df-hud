@@ -13,11 +13,15 @@ first within each section.
   differ. The ultra boost (permanent normal boost) is `UB: Yes`;
   `show_ultra = false` drops that row. Sits under the bosses list on the
   right.
+- `[widget.xp]` `show_daily_ts`, `show_weekly_ts`, `show_daily_loots`,
+  `show_weekly_loots`: rows under XP/hr with your daily and weekly TS and loot
+  counts from the player record. All off by default.
 
 ### Changed
 
-- `[widget.keybinds]` default `y` is 584 (was 530), making room for boosts.
-  Configs that set `y` keep their value.
+- The right column starts 40px lower: default `y` for `[widget.block]` is 340
+  (was 300), `[widget.bosses]` 384 (was 344). `[widget.keybinds]` is 624
+  (was 530), making room for boosts. Configs that set `y` keep their value.
 
 ### Fixed
 

@@ -37,7 +37,7 @@ It starts shown. There is no hotkey or tray item; `POST
 | --- | --- | --- |
 | `enabled` | `true` | On or off |
 | `anchor` | `right` | `x` is an inset from `hud.reference_width` |
-| `x`, `y` | `320`, `454` | Lined up with bosses, below five rows of them |
+| `x`, `y` | `320`, `494` | Lined up with bosses, below five rows of them |
 | `color` | `#c9a8ff` | Row names; timers are white |
 | `show_ultra` | `true` | `false` drops the `UB: Yes` row |
 

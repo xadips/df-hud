@@ -16,7 +16,7 @@ line under the name, to check df-hud against the client.
 | --- | --- | --- |
 | `enabled` | `true` | On or off |
 | `anchor` | `right` | `x` is an inset from `hud.reference_width` |
-| `x`, `y` | `220`, `300` | 220px in from the right, 300 down |
+| `x`, `y` | `220`, `340` | 220px in from the right, 340 down |
 | `color` | `#9ecbff` | Normal colour |
 | `show_position` | `false` | Print `x, y` under the name |
 

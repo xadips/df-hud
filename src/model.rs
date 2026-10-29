@@ -131,6 +131,16 @@ impl BoostGroup {
     }
 }
 
+/// Daily and weekly counters from the record. TS is `df_expdeath_*`, XP since
+/// the last death within the day or week.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Tallies {
+    pub daily_ts: Option<i64>,
+    pub weekly_ts: Option<i64>,
+    pub daily_loots: Option<i64>,
+    pub weekly_loots: Option<i64>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub at: DateTime<Utc>,
@@ -155,6 +165,7 @@ pub struct Snapshot {
     pub nourishment: Option<i32>,
     pub boost: Boosts,
     pub boost_ex: Boosts,
+    pub tallies: Tallies,
     pub session_3d: String,
     pub gold_member: bool,
     pub dead: bool,
@@ -577,6 +588,7 @@ pub struct View {
     /// when the catalog is missing.
     pub exp_in_level: i64,
     pub exp_needed: i64,
+    pub tallies: Tallies,
     pub boosts: Vec<BoostGroup>,
     pub challenges: Option<Vec<Challenge>>,
     pub challenge_status: String,
@@ -626,6 +638,7 @@ impl Default for View {
             xp_stability: XpStability::Steady,
             exp_in_level: 0,
             exp_needed: 0,
+            tallies: Tallies::default(),
             boosts: Vec::new(),
             challenges: None,
             challenge_status: String::new(),
