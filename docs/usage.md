@@ -84,6 +84,7 @@ The tray is how you find df-hud when the overlay is off.
   into the file, like the FPS switch. After that it toggles visibility for
   this run, like **Show challenges**. df-hud never turns it back off in the
   file; that is a config edit. See [masteries](widgets/masteries.md).
+- **Show boosts**: the boost timers. Starts shown. No key for this group.
 - **Show keybinds**: the overlay hotkey cheat sheet. Starts shown. No key for this group.
 - **FPS display on launch**: press the game's FPS key after the window appears
 - **Skip the launcher**: press Play on the configuration dialog. Turn this off

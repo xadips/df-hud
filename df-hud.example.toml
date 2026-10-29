@@ -223,7 +223,8 @@ show_nearest = true
 # share one timer ("Trinity 2h 10m"); only different expiries split per stat
 # ("EXP+DMG EX 35m"). The permanent ultra boost is "UB: Yes".
 # Sits under five bosses rows (a full Onslaught panel); six boost rows fit
-# above keybinds.
+# above keybinds. Tray "Show boosts" hides it for this run, enabled = false
+# for good.
 enabled = true
 anchor = "right"
 x = 320

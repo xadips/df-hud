@@ -508,6 +508,15 @@ mod linux {
                     .into()
                 },
                 CheckmarkItem {
+                    label: "Show boosts".into(),
+                    checked: self.handle.groups.shown(Group::Boosts),
+                    activate: Box::new(|this: &mut HudTray| {
+                        this.handle.toggle_group(Group::Boosts);
+                    }),
+                    ..CheckmarkItem::default()
+                }
+                .into(),
+                CheckmarkItem {
                     label: "Show keybinds".into(),
                     checked: self.handle.groups.shown(Group::Keybinds),
                     activate: Box::new(|this: &mut HudTray| {
@@ -756,6 +765,7 @@ mod windows {
     const ID_CHALLENGES: u16 = 2;
     const ID_MASTERIES: u16 = 6;
     const ID_KEYBINDS: u16 = 5;
+    const ID_BOOSTS: u16 = 7;
     const ID_FPS: u16 = 3;
     const ID_LAUNCHER: u16 = 4;
     const ID_XP: u16 = 20;
@@ -991,6 +1001,14 @@ mod windows {
                     wide("Enable masteries widget").as_ptr(),
                 );
             }
+            let boosts = ctx.handle.groups.shown(Group::Boosts);
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING | if boosts { MF_CHECKED } else { MF_UNCHECKED },
+                ID_BOOSTS as usize,
+                wide("Show boosts").as_ptr(),
+            );
             let keybinds = ctx.handle.groups.shown(Group::Keybinds);
             InsertMenuW(
                 menu,
@@ -1123,6 +1141,9 @@ mod windows {
             }
             ID_KEYBINDS => {
                 h.toggle_group(Group::Keybinds);
+            }
+            ID_BOOSTS => {
+                h.toggle_group(Group::Boosts);
             }
             ID_FPS => h.set_fps_display(!h.gamekeys.fps_display()),
             ID_LAUNCHER => h.set_dismiss_launcher(!h.gamekeys.dismiss_launcher()),

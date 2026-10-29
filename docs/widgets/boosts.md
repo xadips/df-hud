@@ -30,8 +30,8 @@ permanent boost; there is no EX version, so EX boosts always count down,
 stacked under it. Expired boosts are left off, and the group is
 blank with none active.
 
-It starts shown. There is no hotkey or tray item; `POST
-/api/widget/boosts/toggle` hides it for this run, `enabled = false` for good.
+It starts shown. There is no hotkey. Tray **Show boosts** and `POST
+/api/widget/boosts/toggle` hide it for this run, `enabled = false` for good.
 
 | Key | Default | |
 | --- | --- | --- |

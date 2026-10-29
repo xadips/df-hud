@@ -12,7 +12,7 @@ first within each section.
   shows. A trinity boost is one row; stats only split when their expiries
   differ. The ultra boost (permanent normal boost) is `UB: Yes`;
   `show_ultra = false` drops that row. Sits under the bosses list on the
-  right.
+  right. Tray **Show boosts** hides it for the run.
 - `[widget.xp]` `show_daily_ts`, `show_weekly_ts`, `show_daily_loots`,
   `show_weekly_loots`: rows under XP/hr with your daily and weekly TS and loot
   counts from the player record. All off by default.
