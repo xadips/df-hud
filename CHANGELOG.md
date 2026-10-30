@@ -4,6 +4,14 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
+## [0.5.1] - 2026-10-30
+
+### Fixed
+
+- Windows: the HUD hides when Dead Frontier is alt-tabbed, on another virtual
+  desktop, or minimized. A minimized window used to fall out of the match, so
+  the overlay stayed up. Linux is unchanged.
+
 ## [0.5.0] - 2026-10-29
 
 ### Added
