@@ -543,23 +543,33 @@ The HUD will still work; window-following visibility is disabled.\n"
             base
         }
         Ok(place) if place.known => {
-            let shown = if place.on_active_workspace {
-                "yes"
-            } else {
-                "no - the HUD will be hidden while it stays there"
+            let shown = |on: bool| {
+                if on {
+                    "yes"
+                } else {
+                    "no - the HUD will be hidden while it stays there"
+                }
             };
             if place.foreground_rule {
                 format!(
                     "\nWINDOW: class {:?} on monitor {} (matched by {})\n\
-        that window is visible and not minimized: {shown}\n\
+        that window is visible and not minimized: {}\n\
         that window is in the foreground: {}\n",
-                    place.class, place.monitor, place.matched_by, place.foreground
+                    place.class,
+                    place.monitor,
+                    place.matched_by,
+                    shown(!place.minimized),
+                    place.foreground
                 )
             } else {
                 format!(
                     "\nWINDOW: class {:?} on monitor {}, workspace {} (matched by {})\n\
-        that workspace is being shown: {shown}\n",
-                    place.class, place.monitor, place.workspace_name, place.matched_by
+        that workspace is being shown: {}\n",
+                    place.class,
+                    place.monitor,
+                    place.workspace_name,
+                    place.matched_by,
+                    shown(place.on_active_workspace)
                 )
             }
         }

@@ -3,9 +3,9 @@
 Clicks go through the overlay to the game. The HUD hides while Dead Frontier is
 not running (`hud.only_when_game_running`). That is pixels only.
 `poll.only_when_game_running` is the matching network switch: with it on,
-closing the game means zero requests. On Hyprland the overlay also follows the
-game's workspace (`hud.follow_game_workspace`), so it does not sit on every
-other desktop on that monitor.
+closing the game means zero requests. `hud.follow_game_workspace` also hides
+it when the game is not the thing on screen: on Hyprland, another workspace;
+on Windows, alt-tab, another virtual desktop, or a minimized game.
 
 `hud.enabled = false` turns the overlay off for good. Tray, `J`, and the HTTP
 toggle cannot override that.
@@ -61,8 +61,9 @@ turns the whole grab off.
 The [keybinds](widgets/keybinds.md) group prints these bindings on the overlay.
 
 The keys only work while Dead Frontier is focused. So `J` does nothing if you
-have alt-tabbed away. The HUD itself hides by workspace, not by focus. A window
-in front of the game on the same workspace still has the HUD over it.
+have alt-tabbed away. On Windows the HUD hides with that alt-tab, and when
+the game is minimized. On Hyprland it hides by workspace, so a window in
+front of the game on the same workspace still has the HUD over it.
 
 A bare key is eaten before the game sees it. Do not bind WASD, Tab, Shift, grave,
 the weapon numbers `1` `2` `3`, `F1`-`F4`, or a letter the game already uses

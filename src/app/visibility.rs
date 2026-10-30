@@ -41,22 +41,25 @@ pub fn decide(r: Rules, game: GameState, place: &Placement) -> (bool, String) {
             "the launcher is open but the game has not started".into(),
         );
     }
-    if r.follow_game_workspace && place.known && !place.on_active_workspace {
+    if r.follow_game_workspace && place.known {
         if place.minimized {
             return (false, "the game window is minimized".into());
         }
         if place.foreground_rule {
-            return (false, "the game is not the foreground window".into());
+            if !place.foreground {
+                return (false, "the game is not the foreground window".into());
+            }
+        } else if !place.on_active_workspace {
+            let where_ = if place.workspace_name.is_empty() {
+                place.workspace.to_string()
+            } else {
+                place.workspace_name.clone()
+            };
+            return (
+                false,
+                format!("the game is on workspace {where_}, which is not the one being shown"),
+            );
         }
-        let where_ = if place.workspace_name.is_empty() {
-            place.workspace.to_string()
-        } else {
-            place.workspace_name.clone()
-        };
-        return (
-            false,
-            format!("the game is on workspace {where_}, which is not the one being shown"),
-        );
     }
     (true, String::new())
 }
@@ -348,10 +351,14 @@ mod tests {
 
         let mut alt = on_screen.clone();
         alt.foreground_rule = true;
+        alt.foreground = false;
         let (visible, reason) = decide(all_rules(), running, &alt);
-        assert!(visible, "alt-tab should stay visible, got {reason}");
+        assert!(
+            !visible && reason.contains("foreground"),
+            "alt-tab should hide, got {visible} {reason}"
+        );
 
-        let mut minimized = elsewhere.clone();
+        let mut minimized = on_screen.clone();
         minimized.foreground_rule = true;
         minimized.minimized = true;
         let (visible, reason) = decide(all_rules(), running, &minimized);

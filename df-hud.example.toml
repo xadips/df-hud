@@ -119,8 +119,10 @@ enabled = true
 # is the separate network switch.
 only_when_game_running = true
 
-# Show the HUD only while the game's workspace is on screen. Hyprland only.
-# Fails open: missing IPC or unknown window keeps the HUD visible (KDE, Sway).
+# Show the HUD only while the game is the thing on screen. Hyprland: the
+# game's workspace. Windows: the game is the foreground window, so alt-tab,
+# another virtual desktop, or minimizing the game hides it. Fails open:
+# missing IPC or an unknown window keeps the HUD visible (KDE, Sway).
 follow_game_workspace = true
 
 # Connector name ("DP-1"), or "auto" = the monitor the game's window is on.

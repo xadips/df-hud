@@ -654,7 +654,9 @@ pub fn find_windows_game_window(
             class: w.class.clone(),
             title: w.title.clone(),
             address: format!("0x{:x}", w.handle),
-            on_active_workspace: !w.minimized,
+            // Windows has no workspace id. Foreground and minimized are the
+            // hide rules, so this stays true once the window is known.
+            on_active_workspace: true,
             foreground: fg,
             minimized: w.minimized,
             foreground_rule: true,
@@ -708,7 +710,12 @@ fn windows_game_candidate(w: &WinWindow) -> bool {
     if w.class.eq_ignore_ascii_case("ComboLBox") {
         return false;
     }
-    !w.title.trim().is_empty() && w.width >= 320 && w.height >= 200
+    if w.title.trim().is_empty() {
+        return false;
+    }
+    // Minimized windows report a tiny icon rectangle. They are still the game;
+    // dropping them makes placement unknown and the HUD fails open.
+    w.minimized || (w.width >= 320 && w.height >= 200)
 }
 
 #[cfg(any(test, windows))]
@@ -842,6 +849,27 @@ fn windows_monitor_name(hwnd: windows_sys::Win32::Foundation::HWND) -> String {
     String::from_utf16_lossy(&info.szDevice[..end])
 }
 
+/// Restored size of a minimized window. `GetWindowRect` reports the icon.
+#[cfg(windows)]
+fn restored_window_size(hwnd: windows_sys::Win32::Foundation::HWND) -> Option<(i32, i32)> {
+    use std::mem::size_of;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowPlacement, WINDOWPLACEMENT};
+
+    let mut place = WINDOWPLACEMENT {
+        length: size_of::<WINDOWPLACEMENT>() as u32,
+        ..WINDOWPLACEMENT::default()
+    };
+    // SAFETY: `hwnd` came from EnumWindows on this thread; `length` is set so
+    // GetWindowPlacement writes the struct it was given.
+    if unsafe { GetWindowPlacement(hwnd, &mut place) } == 0 {
+        return None;
+    }
+    let rect = place.rcNormalPosition;
+    let width = rect.right.saturating_sub(rect.left);
+    let height = rect.bottom.saturating_sub(rect.top);
+    (width > 0 && height > 0).then_some((width, height))
+}
+
 #[cfg(windows)]
 fn enumerate_windows() -> Result<Vec<WinWindow>, String> {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
@@ -861,7 +889,11 @@ fn enumerate_windows() -> Result<Vec<WinWindow>, String> {
         // every buffer is passed with the length it really has.
         unsafe {
             let state = &mut *(lp as *mut State);
-            if IsWindowVisible(hwnd) == 0 {
+            let minimized = IsIconic(hwnd) != 0;
+            // A minimized game keeps its window, but some styles clear
+            // WS_VISIBLE. Dropping it makes placement unknown and the HUD
+            // stays up.
+            if !minimized && IsWindowVisible(hwnd) == 0 {
                 return 1;
             }
             let mut pid = 0u32;
@@ -876,6 +908,20 @@ fn enumerate_windows() -> Result<Vec<WinWindow>, String> {
                 bottom: 0,
             };
             GetWindowRect(hwnd, &mut rect);
+            // The live rect of a minimized window is a small icon, often off
+            // to the corner. The restored size is what the game actually is,
+            // and what should win against other windows of the same process.
+            let (width, height) = if minimized {
+                restored_window_size(hwnd).unwrap_or((
+                    rect.right.saturating_sub(rect.left),
+                    rect.bottom.saturating_sub(rect.top),
+                ))
+            } else {
+                (
+                    rect.right.saturating_sub(rect.left),
+                    rect.bottom.saturating_sub(rect.top),
+                )
+            };
             let mut class = [0u16; 256];
             let n = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
             let class = String::from_utf16_lossy(&class[..n.max(0) as usize]);
@@ -892,9 +938,9 @@ fn enumerate_windows() -> Result<Vec<WinWindow>, String> {
                 class,
                 title,
                 pid,
-                minimized: IsIconic(hwnd) != 0,
-                width: rect.right - rect.left,
-                height: rect.bottom - rect.top,
+                minimized,
+                width,
+                height,
                 monitor: windows_monitor_name(hwnd),
             });
             1
@@ -1295,11 +1341,13 @@ mod tests {
         assert_eq!(got.matched_by, "process id");
         assert_eq!(got.monitor, r"\\.\DISPLAY2");
         let got = find_windows_game_window(&windows, 0x10, 42, &Match::default());
-        assert!(got.on_active_workspace);
-        assert!(!can_start_run(&got) || cfg!(windows) && !got.foreground);
+        assert!(got.on_active_workspace && !got.foreground);
+        assert!(!can_start_run(&got));
         windows[1].minimized = true;
+        windows[1].width = 160;
+        windows[1].height = 28;
         let got = find_windows_game_window(&windows, 0x10, 42, &Match::default());
-        assert!(!got.on_active_workspace && got.minimized);
+        assert!(got.known && got.on_active_workspace && got.minimized);
     }
 
     #[test]
