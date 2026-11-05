@@ -63,8 +63,8 @@ pub struct Persist {
     /// something to write, and by `poke` so it notices a stop.
     changed: Notify,
     /// One writer at a time on the temp file: the saver thread and the
-    /// shutdown flush both call `save`.
-    writing: Mutex<()>,
+    /// shutdown flush both call `save`. `true` once `save_final` ran.
+    writing: Mutex<bool>,
 }
 
 struct Inner {
@@ -90,7 +90,7 @@ impl Persist {
                 now: Box::new(Utc::now),
             }),
             changed: Notify::new(),
-            writing: Mutex::new(()),
+            writing: Mutex::new(false),
         }
     }
 
@@ -190,7 +190,21 @@ impl Persist {
     }
 
     pub fn save(&self) -> Result<(), String> {
-        let _one_writer = lock(&self.writing);
+        self.write(false)
+    }
+
+    /// The process is about to exit: a saver-thread write started after this
+    /// one would be cut off between the temp file and the rename.
+    pub fn save_final(&self) -> Result<(), String> {
+        self.write(true)
+    }
+
+    fn write(&self, last: bool) -> Result<(), String> {
+        let mut closed = lock(&self.writing);
+        if *closed {
+            return Ok(());
+        }
+        *closed = last;
         let (snapshot, revision, path) = {
             let mut g = lock(&self.inner);
             if self.path.as_os_str().is_empty() {
@@ -467,6 +481,25 @@ mod tests {
         s.reset_xp_window("death");
         assert!(s.get().xp_samples.is_empty());
         s.reset_xp_window("death");
+    }
+
+    #[test]
+    fn nothing_writes_after_the_final_save() {
+        let dir = tempfile();
+        let path = dir.join("state.json");
+        let s = Persist::new(&path);
+        s.update(|st| {
+            st.challenge_done.insert("a|2026-08-14".into());
+        });
+        s.save_final().unwrap();
+        let last = fs::read(&path).unwrap();
+        s.update(|st| {
+            st.challenge_done.insert("b|2026-08-14".into());
+        });
+        s.save().unwrap();
+        s.save_final().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), last);
+        assert!(!path.with_extension("json.tmp").exists());
     }
 
     #[test]

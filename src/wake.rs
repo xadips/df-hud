@@ -156,7 +156,7 @@ impl Wake {
     /// For a signal handler, which may `write(2)` but not lock or allocate.
     /// The fd stays open only for as long as `self` does; a holder that may
     /// outlive `self` (the SIGHUP handler's static) must `dup` it, as
-    /// `app::catch_sighup` does.
+    /// `app::catch_signals` does.
     #[cfg(unix)]
     pub fn write_fd(&self) -> RawFd {
         use std::os::fd::AsRawFd;

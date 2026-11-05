@@ -60,7 +60,9 @@ Logs: `journalctl --user -u df-hud -f`, or `make logs` from a clone.
 
 ## Windows
 
-Unzip the release and run `df-hud.exe`. Nothing else to install.
+Unzip the release and run `df-hud.exe`. Nothing else to install. Starting it
+while another df-hud runs, an older version included, closes the old one
+first.
 
 The exe is a GUI app, so Explorer does not open a console. If you launch it
 from `cmd`, `--version` and friends still print. Otherwise logs go to

@@ -6,6 +6,13 @@ first within each section.
 
 ## [Unreleased]
 
+### Added
+
+- The last df-hud started wins. An overlay or headless run first asks every
+  older copy to quit, waits up to 5 s, then ends the ones still running. A
+  second copy used to start without hotkeys, bridge or Discord presence and
+  draw a second HUD.
+
 ### Changed
 
 - Log lines carry local time and level (`2026-11-05 14:47:03.120 WARN  …`).
@@ -20,6 +27,10 @@ first within each section.
 
 ### Fixed
 
+- Linux: SIGTERM (`systemctl --user stop`) and Ctrl+C save the run clock and
+  XP window before exiting; they used to end df-hud without the final save.
+  A second signal still ends it at once.
+- A clean stop no longer leaves `state.json.tmp` behind.
 - Windows: the overlay could fail to start with `wglMakeCurrent: Win32 error 6`
   on some older or hybrid-GPU laptops. The window now gets its layered
   attributes before the OpenGL context is built, and the WGL helper window

@@ -27,6 +27,7 @@ mod config;
 mod data;
 mod format;
 mod game;
+mod instance;
 mod logging;
 mod model;
 mod net;
@@ -85,6 +86,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     match cli::parse()? {
         cli::Launch::Overlay(args) => {
             logging::start();
+            instance::take_over();
             #[cfg(target_os = "linux")]
             {
                 overlay::wayland::run(args.into())

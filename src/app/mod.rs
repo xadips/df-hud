@@ -42,8 +42,10 @@ use store::Store;
 
 #[cfg(target_os = "linux")]
 static HUP: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "linux")]
+static TERM: AtomicBool = AtomicBool::new(false);
 /// The SIGHUP handler's own duplicate of the wake pipe's write end, made by
-/// `catch_sighup` and never closed, so the handler does not depend on any
+/// `catch_signals` and never closed, so the handler does not depend on any
 /// `Handle` or `Wake` staying alive.
 #[cfg(target_os = "linux")]
 static HUP_FD: AtomicI32 = AtomicI32::new(-1);
@@ -55,6 +57,8 @@ pub struct AppWake {
     inner: Arc<Wake>,
     #[cfg(target_os = "linux")]
     on_hup: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    #[cfg(target_os = "linux")]
+    on_term: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl AppWake {
@@ -63,6 +67,8 @@ impl AppWake {
             inner,
             #[cfg(target_os = "linux")]
             on_hup: OnceLock::new(),
+            #[cfg(target_os = "linux")]
+            on_term: OnceLock::new(),
         }
     }
 
@@ -85,6 +91,12 @@ impl AppWake {
             && let Some(on_hup) = self.on_hup.get()
         {
             on_hup();
+        }
+        #[cfg(target_os = "linux")]
+        if TERM.swap(false, Ordering::SeqCst)
+            && let Some(on_term) = self.on_term.get()
+        {
+            on_term();
         }
     }
 
@@ -197,7 +209,7 @@ impl Handle {
             return;
         }
         self.persist_run();
-        if let Err(err) = self.persist.save() {
+        if let Err(err) = self.persist.save_final() {
             error!("state: could not save: {err}");
         }
         self.signal_stop();
@@ -900,7 +912,7 @@ pub fn start_with(
     }
 
     #[cfg(target_os = "linux")]
-    catch_sighup(&handle);
+    catch_signals(&handle);
 
     Ok(handle)
 }
@@ -910,11 +922,27 @@ extern "C" fn on_sighup(_: libc::c_int) {
     // Async-signal-safe only: an atomic store and one write(2). The byte
     // wakes the surface loop, whose `AppWake::take` runs the reload.
     HUP.store(true, Ordering::SeqCst);
+    poke_from_signal();
+}
+
+#[cfg(target_os = "linux")]
+extern "C" fn on_sigterm(sig: libc::c_int) {
+    TERM.store(true, Ordering::SeqCst);
+    // SAFETY: signal(2) is async-signal-safe and SIG_DFL is a valid handler;
+    // a second SIGTERM or Ctrl+C now ends the process without waiting.
+    unsafe {
+        libc::signal(sig, libc::SIG_DFL);
+    }
+    poke_from_signal();
+}
+
+#[cfg(target_os = "linux")]
+fn poke_from_signal() {
     let fd = HUP_FD.load(Ordering::SeqCst);
     if fd >= 0 {
         let byte = 1u8;
         // SAFETY: write(2) is async-signal-safe; the pointer is to one live
-        // byte on this frame and the length is 1. `fd` is `catch_sighup`'s
+        // byte on this frame and the length is 1. `fd` is `catch_signals`'s
         // private dup of the wake pipe's write end: nothing else knows the
         // number and nothing ever closes it, so it stays valid for the rest
         // of the process no matter what happens to the `Wake` or `Handle`.
@@ -927,12 +955,19 @@ extern "C" fn on_sighup(_: libc::c_int) {
 }
 
 #[cfg(target_os = "linux")]
-fn catch_sighup(handle: &Arc<Handle>) {
+fn catch_signals(handle: &Arc<Handle>) {
     let weak = Arc::downgrade(handle);
     let _ = handle.wake.on_hup.set(Box::new(move || {
         if let Some(h) = weak.upgrade() {
             info!("config: SIGHUP");
             h.reload_config();
+        }
+    }));
+    let weak = Arc::downgrade(handle);
+    let _ = handle.wake.on_term.set(Box::new(move || {
+        if let Some(h) = weak.upgrade() {
+            info!("asked to stop (SIGTERM or Ctrl+C)");
+            h.request_stop();
         }
     }));
     // The handler gets its own fd rather than the `Wake`'s: a static that
@@ -956,6 +991,12 @@ fn catch_sighup(handle: &Arc<Handle>) {
     // the handler never sees a stale fd.
     unsafe {
         libc::signal(libc::SIGHUP, on_sighup as *const () as libc::sighandler_t);
+    }
+    // SAFETY: as above; `on_sigterm` adds one more async-signal-safe call,
+    // signal(2) itself.
+    unsafe {
+        libc::signal(libc::SIGTERM, on_sigterm as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGINT, on_sigterm as *const () as libc::sighandler_t);
     }
 }
 

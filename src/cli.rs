@@ -392,6 +392,7 @@ pub fn run_headless(config: Option<PathBuf>, print_hud: bool) -> Result<(), Box<
     }
     let cfg = Config::load(&path)?;
     crate::logging::start();
+    crate::instance::take_over();
     info!("headless ({})", cfg.describe_source(&path));
     let handle = crate::app::start_with(cfg, crate::app::PrintOpts { hud: print_hud })?;
     let _stop_on_exit = crate::overlay::StopOnExit(&handle);

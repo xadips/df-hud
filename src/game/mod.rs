@@ -548,7 +548,7 @@ pub mod windows {
         Some(handle)
     }
 
-    fn creation_time(handle: HANDLE) -> Option<DateTime<Utc>> {
+    pub(crate) fn creation_time(handle: HANDLE) -> Option<DateTime<Utc>> {
         let mut creation = FILETIME {
             dwLowDateTime: 0,
             dwHighDateTime: 0,
@@ -589,7 +589,7 @@ pub mod windows {
         String::from_utf16_lossy(&buf[..len])
     }
 
-    fn enumerate(with_start: bool) -> Result<Vec<Proc>, String> {
+    pub(crate) fn enumerate(with_start: bool) -> Result<Vec<Proc>, String> {
         // SAFETY: `snap` is checked before use and closed exactly once at the
         // end. PROCESSENTRY32W is a plain C struct (all-zero is valid) and a
         // live local; `dwSize` is set before every call that reads it, as the
