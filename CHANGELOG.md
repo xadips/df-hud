@@ -4,42 +4,28 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
-## [Unreleased]
+## [0.5.2] - 2026-11-05
 
 ### Added
 
-- The last df-hud started wins. An overlay or headless run first asks every
-  older copy to quit, waits up to 5 s, then ends the ones still running. A
-  second copy used to start without hotkeys, bridge or Discord presence and
-  draw a second HUD.
+- Starting df-hud closes the copy already running, an older version included,
+  and ends it if it has not quit within 5 s. A second copy used to start
+  alongside it and draw a second HUD.
 
 ### Changed
 
-- Log lines carry local time and level (`2026-11-05 14:47:03.120 WARN  …`).
-  Under systemd the journal keeps its own timestamps and gets the level as a
-  priority, so `journalctl -p warning` works.
-- The log header, tray, `--version` and error dialogs name the exact build
-  (`0.5.1-1-g8b2b87f` for a test build), so a log says which exe wrote it.
-- The first OpenGL context logs its vendor, renderer and driver version.
-- Logging goes through the `log` crate, so warnings from the HTTP and TLS
-  libraries reach the log too.
-- Windows: a fatal error is written to `df-hud.log` once, not twice.
+- Log lines carry local time and level. Under systemd the journal keeps its
+  own timestamps and gets the level, so `journalctl -p warning` works.
+- The log, tray, `--version` and error dialogs name the exact build, and the
+  log names the graphics driver.
 
 ### Fixed
 
-- Linux: SIGTERM (`systemctl --user stop`) and Ctrl+C save the run clock and
-  XP window before exiting; they used to end df-hud without the final save.
-  A second signal still ends it at once.
-- A clean stop no longer leaves `state.json.tmp` behind.
-- Windows: the overlay could fail to start with `wglMakeCurrent: Win32 error 6`
-  on some older or hybrid-GPU laptops. The window now gets its layered
-  attributes before the OpenGL context is built, and the WGL helper window
-  matches the overlay's styles and monitor, so the context and the window end
-  up on the same driver.
-- Windows: an OpenGL context lost while running (sleep, a driver reset, a mode
-  switch) is rebuilt up to three times over about ten seconds instead of
-  ending df-hud on the first failure. If it cannot be rebuilt, the error
-  dialog says the overlay stopped and names the failing call.
+- Windows: the overlay could fail with `wglMakeCurrent: Win32 error 6` on some
+  laptops. A graphics context lost while running (sleep, driver reset) is now
+  rebuilt instead of ending df-hud.
+- Linux: `systemctl --user stop` and Ctrl+C save the run clock and XP window
+  before exiting.
 
 ## [0.5.1] - 2026-10-30
 
