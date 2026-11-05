@@ -4,7 +4,7 @@ set -eu
 if [ -n "${1:-}" ]; then
 	VERSION=$1
 else
-	VERSION=$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+	VERSION=$(git describe --tags --match 'v*' --always --dirty 2>/dev/null | sed 's/^v//')
 	VERSION=${VERSION:-unknown}
 fi
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

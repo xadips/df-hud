@@ -17,7 +17,7 @@ CARGO   ?= cargo
 RELEASE := target/release/$(BIN)
 
 # Tag CI passes VERSION= without the leading v.
-VERSION ?= $(or $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//'),unknown)
+VERSION ?= $(or $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null | sed 's/^v//'),unknown)
 
 .PHONY: all build test check package-linux package-windows install uninstall enable disable restart logs status clean
 

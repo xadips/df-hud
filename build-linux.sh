@@ -5,7 +5,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 if [ -n "${1:-}" ]; then
   version=$1
 else
-  version=$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+  version=$(git describe --tags --match 'v*' --always --dirty 2>/dev/null | sed 's/^v//')
   version=${version:-unknown}
 fi
 output_directory=${2:-"$repo_root/dist"}
