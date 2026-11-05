@@ -310,6 +310,7 @@ dependencies = [
  "lexopt",
  "libc",
  "libloading",
+ "log",
  "md-5",
  "png",
  "serde",

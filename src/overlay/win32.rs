@@ -299,7 +299,7 @@ fn write_fatal_log(err: &str) -> Option<PathBuf> {
         .append(true)
         .open(&path)
         .ok()?;
-    let line = crate::log::line(crate::log::Level::Error, format_args!("fatal: {err}"));
+    let line = crate::logging::line(log::Level::Error, format_args!("fatal: {err}"));
     writeln!(f, "{line}").ok()?;
     Some(path)
 }

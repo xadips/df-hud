@@ -391,7 +391,7 @@ pub fn run_headless(config: Option<PathBuf>, print_hud: bool) -> Result<(), Box<
         Err(err) => error!("config: could not write defaults: {err}"),
     }
     let cfg = Config::load(&path)?;
-    crate::log::start();
+    crate::logging::start();
     info!("headless ({})", cfg.describe_source(&path));
     let handle = crate::app::start_with(cfg, crate::app::PrintOpts { hud: print_hud })?;
     let _stop_on_exit = crate::overlay::StopOnExit(&handle);

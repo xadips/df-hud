@@ -19,7 +19,7 @@
 //!   does not end the process.
 
 #[macro_use]
-mod log;
+extern crate log;
 
 mod app;
 mod cli;
@@ -27,6 +27,7 @@ mod config;
 mod data;
 mod format;
 mod game;
+mod logging;
 mod model;
 mod net;
 #[cfg(any(target_os = "linux", windows))]
@@ -42,9 +43,10 @@ pub const BUILD: &str = match option_env!("DF_HUD_BUILD") {
 fn main() {
     #[cfg(windows)]
     overlay::win32::init_stdio();
+    logging::init();
     install_panic_hook();
     if let Err(err) = run() {
-        log::fatal(&err);
+        logging::fatal(&err);
         #[cfg(windows)]
         {
             let headline = if err.is::<overlay::win32::GpuLost>() {
@@ -65,7 +67,7 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("unnamed").to_string();
-        log::write(log::Level::Error, format_args!("{}", panic_banner(&name)));
+        error!("{}", panic_banner(&name));
         default(info);
         #[cfg(windows)]
         overlay::win32::fatal_alert(
@@ -82,7 +84,7 @@ fn panic_banner(thread: &str) -> String {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     match cli::parse()? {
         cli::Launch::Overlay(args) => {
-            log::start();
+            logging::start();
             #[cfg(target_os = "linux")]
             {
                 overlay::wayland::run(args.into())

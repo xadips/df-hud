@@ -14,6 +14,8 @@ first within each section.
 - The log header, tray, `--version` and error dialogs name the exact build
   (`0.5.1-1-g8b2b87f` for a test build), so a log says which exe wrote it.
 - The first OpenGL context logs its vendor, renderer and driver version.
+- Logging goes through the `log` crate, so warnings from the HTTP and TLS
+  libraries reach the log too.
 - Windows: a fatal error is written to `df-hud.log` once, not twice.
 
 ### Fixed
