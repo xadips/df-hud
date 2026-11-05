@@ -33,10 +33,7 @@ mod net;
 mod overlay;
 mod wake;
 
-/// What a person reads as the version: `git describe` from the packaging
-/// scripts (`0.5.1`, `0.5.1-1-g8b2b87f`, `0.5.1-dirty`), or the crate version
-/// from a plain `cargo build`. Update checks and the bridge compare
-/// `CARGO_PKG_VERSION`, never this.
+/// Update checks and the bridge compare `CARGO_PKG_VERSION`, not this.
 pub const BUILD: &str = match option_env!("DF_HUD_BUILD") {
     Some(build) => build,
     None => env!("CARGO_PKG_VERSION"),

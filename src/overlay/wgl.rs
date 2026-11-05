@@ -5,10 +5,7 @@
 //! `wglCreateContextAttribsARB` once per monitor. Dummy HWND uses
 //! [`crate::overlay::win32::DUMMY_CLASS`], not the overlay class — `WM_DESTROY`
 //! on a shared class ended the WGL spike.
-//!
-//! `opengl32` picks the ICD for a window by its monitor and styles, and
-//! `wglMakeCurrent` refuses a context from one ICD on a DC of another, so the
-//! dummy copies the overlay's ex-style and sits on its monitor.
+//! The dummy copies the overlay's ex-style and monitor so both land on one ICD.
 
 use std::error::Error;
 use std::ffi::{CString, c_void};
@@ -290,11 +287,7 @@ impl Drop for GlSurface {
     }
 }
 
-/// A driver may fail `wglMakeCurrent` without setting the last error; clearing
-/// it first keeps a stale code from an earlier call out of the report.
-///
-/// # Safety
-/// Same contract as `wglMakeCurrent`.
+/// A driver may fail without setting the last error.
 unsafe fn make_current(hdc: HDC, rc: HGLRC) -> i32 {
     // SAFETY: the caller upholds `wglMakeCurrent`'s contract; clearing this
     // thread's last-error slot takes no pointers.
@@ -312,8 +305,6 @@ struct WglProcs {
     swap_interval: Option<SwapIntervalExt>,
 }
 
-/// The extension pointers for `overlay`'s monitor, loaded through a dummy
-/// shaped like `overlay`, or through a plain one if that dummy fails.
 fn wgl_procs(
     instance: windows_sys::Win32::Foundation::HINSTANCE,
     overlay: HWND,
@@ -375,7 +366,6 @@ impl DummyShape {
     }
 }
 
-/// The dummy window, DC and context, torn down in reverse on drop.
 struct Dummy {
     hwnd: HWND,
     hdc: HDC,
@@ -407,7 +397,6 @@ fn load_wgl_extensions(
     let title = wide("df-hud-wgl-dummy");
     // SAFETY: `class`/`title` are NUL-terminated u16 buffers that outlive the
     // call; DUMMY_CLASS was registered for `instance` by `register_classes`.
-    // The window is never shown.
     let hwnd = unsafe {
         CreateWindowExW(
             shape.ex_style,
@@ -487,8 +476,6 @@ fn load_wgl_extensions(
         .ok_or("wglGetPixelFormatAttribivARB missing")?;
     let swap = load_wgl_symbol::<SwapIntervalExt>("wglSwapIntervalEXT");
 
-    // The extension pointers are process-wide for this ICD, so they outlive
-    // the dummy context `dummy` tears down here.
     drop(dummy);
     Ok(WglProcs {
         choose_fmt: choose,

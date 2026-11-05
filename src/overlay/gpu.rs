@@ -140,8 +140,6 @@ impl Gpu {
                 gl.get_parameter_string(glow::VERSION)
             )
         };
-        // Once per process at info, so a user's log names the driver; every
-        // re-show builds a context again and would repeat it.
         static NAMED: AtomicBool = AtomicBool::new(false);
         if NAMED.swap(true, Ordering::Relaxed) {
             debug!("{driver}");

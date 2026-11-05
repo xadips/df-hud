@@ -391,11 +391,8 @@ pub fn run_headless(config: Option<PathBuf>, print_hud: bool) -> Result<(), Box<
         Err(err) => error!("config: could not write defaults: {err}"),
     }
     let cfg = Config::load(&path)?;
-    info!(
-        "df-hud {} starting ({})",
-        crate::BUILD,
-        cfg.describe_source(&path)
-    );
+    crate::log::start();
+    info!("headless ({})", cfg.describe_source(&path));
     let handle = crate::app::start_with(cfg, crate::app::PrintOpts { hud: print_hud })?;
     let _stop_on_exit = crate::overlay::StopOnExit(&handle);
     // No surface, so main is the thread that drains the wake pipe: that is

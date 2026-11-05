@@ -122,15 +122,12 @@ fn rescan_due(display_changed: bool, surface_dirty: bool, want: &str, previous: 
     display_changed || surface_dirty || want != previous
 }
 
-/// Waits before each rebuild of a lost context; one entry per try.
 const REBUILD_DELAYS: [Duration; 3] = [
     Duration::from_secs(1),
     Duration::from_secs(3),
     Duration::from_secs(6),
 ];
 
-/// A context that worked and could not be rebuilt within [`REBUILD_DELAYS`].
-/// `main` gives it its own headline: the overlay stopped, it did start.
 #[derive(Debug)]
 pub struct GpuLost(String);
 
@@ -142,12 +139,8 @@ impl std::fmt::Display for GpuLost {
 
 impl Error for GpuLost {}
 
-/// Rebuild budget for a WGL context lost after startup (sleep, a driver
-/// reset, a mode switch). Startup builds the first context with `?`, so a
-/// machine that cannot draw at all never gets here.
 #[derive(Debug, Default)]
 struct Recovery {
-    /// Losses since the last presented frame.
     failures: usize,
     next_try: Option<Instant>,
 }
@@ -157,7 +150,6 @@ impl Recovery {
         self.next_try.is_some_and(|at| now < at)
     }
 
-    /// The wait before the next rebuild, or `None` once the budget is spent.
     fn lost(&mut self, now: Instant) -> Option<Duration> {
         let delay = *REBUILD_DELAYS.get(self.failures)?;
         self.failures += 1;
@@ -165,8 +157,6 @@ impl Recovery {
         Some(delay)
     }
 
-    /// The context got through a frame (drawn, or skipped as unchanged).
-    /// Returns how many losses that recovered from.
     fn frame_ok(&mut self) -> Option<usize> {
         self.next_try = None;
         (self.failures > 0).then(|| std::mem::take(&mut self.failures))
@@ -246,6 +236,9 @@ fn bind_log_file() {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_ROTATE_BYTES) {
+        let _ = std::fs::rename(&path, path.with_extension("old.log"));
+    }
     let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) else {
         return;
     };
@@ -260,8 +253,8 @@ fn bind_log_file() {
     STDERR_IS_LOG_FILE.store(true, Ordering::Relaxed);
 }
 
-/// `fatal_alert` appends to the file itself only when stderr went elsewhere;
-/// otherwise `log::fatal` already wrote the line there.
+const LOG_ROTATE_BYTES: u64 = 1024 * 1024;
+
 static STDERR_IS_LOG_FILE: AtomicBool = AtomicBool::new(false);
 
 /// No console window on Explorer / Run. Keep a dialog up so a bad config is
@@ -872,8 +865,7 @@ impl Surface {
         if let Some(gpu) = self.gpu.take()
             && !current
         {
-            // Its GL names die with the context; deleting them with no
-            // context current calls into the driver with nothing bound.
+            // Deleting GL names with no context current calls into the driver unbound.
             std::mem::forget(gpu);
         }
         self.gl.take();
@@ -887,8 +879,6 @@ impl Surface {
         self.rescan_monitors = true;
     }
 
-    /// The context failed after startup and is already dropped. Schedules a
-    /// rebuild, or ends the overlay with [`GpuLost`] once the budget is spent.
     fn lost(&mut self, err: &str) -> Result<(), Box<dyn Error>> {
         let tries = REBUILD_DELAYS.len();
         match self.recovery.lost(Instant::now()) {
@@ -1083,8 +1073,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let buf_w = monitor.width - 2 * WINDOW_INSET;
     let buf_h = monitor.height - 2 * WINDOW_INSET;
 
-    // Layered attributes before the context: until they are set the window
-    // has no drawing surface, and some drivers refuse to bind one to it.
+    // Some drivers refuse a context on a layered window before its attributes are set.
     let win = OverlayWindow::create(instance, &monitor)?;
     win.extend_dwm_frame()?;
     let (gl, gpu) = create_gpu(instance, win.hwnd, buf_w, buf_h, &watch.cfg.hud.font)?;

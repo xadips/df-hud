@@ -64,7 +64,8 @@ Unzip the release and run `df-hud.exe`. Nothing else to install.
 
 The exe is a GUI app, so Explorer does not open a console. If you launch it
 from `cmd`, `--version` and friends still print. Otherwise logs go to
-`%LOCALAPPDATA%\df-hud\df-hud.log`.
+`%LOCALAPPDATA%\df-hud\df-hud.log`. Past 1 MB, the next start moves it to
+`df-hud.old.log` and begins a new one.
 
 Right-click the tray icon and tick **Start df-hud with Windows** if you want it
 at login. The first start writes `%APPDATA%\df-hud\config.toml` if it is missing.

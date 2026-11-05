@@ -1,12 +1,8 @@
-//! The one sink for diagnostics. `error!` / `warn!` / `info!` / `debug!`,
-//! the run header (`start`) and the last words (`fatal`) all format here.
-//! A line is `2026-11-05 14:47:03.120 WARN  <message>`; under systemd the
-//! journal stamps lines itself, so those get a `<4>` priority prefix instead
-//! (`journalctl -p warning` filters on it). `DF_HUD_LOG` picks the lowest
-//! level that still prints (`error|warn|info|debug`, default `info`). On
-//! Windows `win32::init_stdio` has already pointed stderr at `df-hud.log`.
+//! Every diagnostic line goes through here. `DF_HUD_LOG` picks the lowest
+//! level that prints (`error|warn|info|debug`, default `info`).
 
 use std::fmt::{self, Display};
+use std::io::Write;
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Local};
@@ -47,7 +43,6 @@ impl Level {
         }
     }
 
-    /// sd-daemon(3) priority: err, warning, info, debug.
     fn syslog(self) -> u8 {
         match self {
             Level::Error => 3,
@@ -82,24 +77,34 @@ fn prefix() -> Prefix {
 }
 
 fn format_line(level: Level, prefix: Prefix, msg: impl Display) -> String {
-    match prefix {
-        Prefix::Journal => format!("<{}>{msg}", level.syslog()),
-        Prefix::Time(at) => format!(
-            "{} {:<5} {msg}",
-            at.format("%Y-%m-%d %H:%M:%S%.3f"),
-            level.tag()
-        ),
+    let msg = msg.to_string();
+    let mut lines = msg.lines().filter(|l| !l.trim().is_empty());
+    let (head, more) = match prefix {
+        Prefix::Journal => {
+            let p = format!("<{}>", level.syslog());
+            let more = format!("{p}    ");
+            (p, more)
+        }
+        Prefix::Time(at) => {
+            let p = format!("{} {:<5} ", at.format("%Y-%m-%d %H:%M:%S%.3f"), level.tag());
+            let more = " ".repeat(p.len());
+            (p, more)
+        }
+    };
+    let mut out = head + lines.next().unwrap_or("");
+    for line in lines {
+        out.push('\n');
+        out.push_str(&more);
+        out.push_str(line);
     }
+    out
 }
 
-/// A finished line for a sink other than stderr (the Windows fatal log when
-/// stderr is a console).
 pub fn line(level: Level, msg: impl Display) -> String {
     format_line(level, prefix(), msg)
 }
 
-/// systemd sets `JOURNAL_STREAM=dev:inode` for the stream it connected; a
-/// child that inherited the variable but writes to a terminal must not match.
+/// The variable is inherited by children whose stderr may be a terminal.
 #[cfg(target_os = "linux")]
 fn stderr_is_journal() -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -120,21 +125,30 @@ fn stderr_is_journal() -> bool {
     false
 }
 
+/// `eprintln!` panics on a failed write, and release builds abort on panic.
+fn emit(text: &str) {
+    let _ = std::io::stderr().write_all(text.as_bytes());
+}
+
 #[doc(hidden)]
 pub fn write(level: Level, args: fmt::Arguments<'_>) {
-    eprintln!("{}", line(level, args));
+    let mut text = line(level, args);
+    text.push('\n');
+    emit(&text);
 }
 
-/// The first line of a run: which build is talking. Printed at any level.
 pub fn start() {
-    let header = line(Level::Info, format_args!("--- df-hud {} ---", crate::BUILD));
-    match prefix() {
-        Prefix::Journal => eprintln!("{header}"),
-        Prefix::Time(_) => eprintln!("\n{header}"),
+    let header = format!(
+        "--- df-hud {} (UTC{}) ---",
+        crate::BUILD,
+        Local::now().format("%:z")
+    );
+    if !matches!(prefix(), Prefix::Journal) {
+        emit("\n");
     }
+    write(Level::Info, format_args!("{header}"));
 }
 
-/// The error that ends the process. Printed at any level.
 pub fn fatal(err: &dyn Display) {
     write(Level::Error, format_args!("fatal: {err}"));
 }
@@ -211,6 +225,24 @@ mod tests {
             "<4>hud: hiding"
         );
         assert_eq!(format_line(Level::Debug, Prefix::Journal, "x"), "<7>x");
+    }
+
+    #[test]
+    fn a_multi_line_message_stays_one_indented_entry() {
+        let at = Local.with_ymd_and_hms(2026, 11, 5, 14, 47, 3).unwrap();
+        let msg = "fatal: could not be rebuilt.\n\nwglMakeCurrent: Win32 error 6";
+        let indent = " ".repeat("2026-11-05 14:47:03.000 ERROR ".len());
+        assert_eq!(
+            format_line(Level::Error, Prefix::Time(at), msg),
+            format!(
+                "2026-11-05 14:47:03.000 ERROR fatal: could not be rebuilt.\n\
+                 {indent}wglMakeCurrent: Win32 error 6"
+            )
+        );
+        assert_eq!(
+            format_line(Level::Error, Prefix::Journal, msg),
+            "<3>fatal: could not be rebuilt.\n<3>    wglMakeCurrent: Win32 error 6"
+        );
     }
 
     #[test]
