@@ -33,12 +33,21 @@ mod net;
 mod overlay;
 mod wake;
 
+/// What a person reads as the version: `git describe` from the packaging
+/// scripts (`0.5.1`, `0.5.1-1-g8b2b87f`, `0.5.1-dirty`), or the crate version
+/// from a plain `cargo build`. Update checks and the bridge compare
+/// `CARGO_PKG_VERSION`, never this.
+pub const BUILD: &str = match option_env!("DF_HUD_BUILD") {
+    Some(build) => build,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 fn main() {
     #[cfg(windows)]
     overlay::win32::init_stdio();
     install_panic_hook();
     if let Err(err) = run() {
-        eprintln!("{err}");
+        log::fatal(&err);
         #[cfg(windows)]
         {
             let headline = if err.is::<overlay::win32::GpuLost>() {
@@ -59,7 +68,7 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("unnamed").to_string();
-        eprintln!("{}", panic_banner(&name));
+        log::write(log::Level::Error, format_args!("{}", panic_banner(&name)));
         default(info);
         #[cfg(windows)]
         overlay::win32::fatal_alert(
@@ -70,16 +79,13 @@ fn install_panic_hook() {
 }
 
 fn panic_banner(thread: &str) -> String {
-    format!(
-        "df-hud {} panicked on thread {thread:?}",
-        env!("CARGO_PKG_VERSION")
-    )
+    format!("df-hud {BUILD} panicked on thread {thread:?}")
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     match cli::parse()? {
         cli::Launch::Overlay(args) => {
-            println!("df-hud {}", env!("CARGO_PKG_VERSION"));
+            log::start();
             #[cfg(target_os = "linux")]
             {
                 overlay::wayland::run(args.into())
@@ -107,7 +113,7 @@ mod tests {
     fn panic_banner_names_thread_and_version() {
         let line = panic_banner("df-hud-poller");
         assert!(line.contains("df-hud-poller"), "{line}");
-        assert!(line.contains(env!("CARGO_PKG_VERSION")), "{line}");
+        assert!(line.contains(BUILD), "{line}");
     }
 
     #[test]

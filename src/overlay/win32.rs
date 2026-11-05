@@ -21,8 +21,8 @@ use std::time::{Duration, Instant};
 
 use glow::Context as Glow;
 use windows_sys::Win32::Foundation::{
-    GENERIC_WRITE, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT, RECT,
-    WPARAM,
+    ERROR_ACCESS_DENIED, GENERIC_WRITE, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM,
+    LRESULT, POINT, RECT, WPARAM,
 };
 use windows_sys::Win32::Graphics::Dwm::{
     DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND, DwmEnableBlurBehindWindow,
@@ -257,12 +257,12 @@ fn bind_log_file() {
         SetStdHandle(STD_ERROR_HANDLE, h);
     }
     std::mem::forget(file);
-    let _ = writeln!(
-        std::io::stderr(),
-        "\n--- df-hud {} ---",
-        env!("CARGO_PKG_VERSION")
-    );
+    STDERR_IS_LOG_FILE.store(true, Ordering::Relaxed);
 }
+
+/// `fatal_alert` appends to the file itself only when stderr went elsewhere;
+/// otherwise `log::fatal` already wrote the line there.
+static STDERR_IS_LOG_FILE: AtomicBool = AtomicBool::new(false);
 
 /// No console window on Explorer / Run. Keep a dialog up so a bad config is
 /// readable. `cmd` after AttachConsole already has stderr; skip the box there.
@@ -277,7 +277,8 @@ pub fn fatal_alert(err: &str, headline: &str) {
         return;
     }
     let text = wide(&format!(
-        "{err}\n\n{headline}. Fix the problem and launch df-hud again."
+        "{err}\n\n{headline}. Fix the problem and launch df-hud again.\n\ndf-hud {}",
+        crate::BUILD
     ));
     let title = wide("df-hud");
     // SAFETY: `text`/`title` are NUL-terminated u16 buffers that outlive the
@@ -294,6 +295,9 @@ pub fn fatal_alert(err: &str, headline: &str) {
 
 fn write_fatal_log(err: &str) -> Option<PathBuf> {
     let path = fatal_log_path()?;
+    if STDERR_IS_LOG_FILE.load(Ordering::Relaxed) {
+        return Some(path);
+    }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).ok()?;
     }
@@ -302,7 +306,8 @@ fn write_fatal_log(err: &str) -> Option<PathBuf> {
         .append(true)
         .open(&path)
         .ok()?;
-    writeln!(f, "fatal: {err}").ok()?;
+    let line = crate::log::line(crate::log::Level::Error, format_args!("fatal: {err}"));
+    writeln!(f, "{line}").ok()?;
     Some(path)
 }
 
@@ -314,7 +319,8 @@ fn show_fatal_task_dialog(err: &str, log: &Path, headline: &str) -> bool {
     let title = wide("df-hud");
     let instruction = wide(headline);
     let content = wide(&format!(
-        "{err}\n\nFix the problem and launch df-hud again."
+        "{err}\n\nFix the problem and launch df-hud again.\n\ndf-hud {}",
+        crate::BUILD
     ));
     let open_label = wide("Open log");
     let close_label = wide("Close");
@@ -375,7 +381,11 @@ fn enable_per_monitor_v2() {
     if ok == 0 {
         // SAFETY: reads this thread's last-error slot; no arguments.
         let code = unsafe { GetLastError() };
-        warn!("warning: SetProcessDpiAwarenessContext(PerMonitorV2) failed ({code})");
+        if code == ERROR_ACCESS_DENIED {
+            debug!("DPI: PerMonitorV2 (already set by the manifest)");
+        } else {
+            warn!("SetProcessDpiAwarenessContext(PerMonitorV2) failed ({code})");
+        }
     } else {
         debug!("DPI: PerMonitorV2");
     }

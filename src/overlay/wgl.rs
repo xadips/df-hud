@@ -181,7 +181,7 @@ impl GlSurface {
             pfd.cColorBits, pfd.dwFlags
         );
         if alpha < 8 {
-            warn!("WARNING: alpha bits {alpha} < 8 — DWM may composite this as opaque (the hole)");
+            warn!("alpha bits {alpha} < 8 — DWM may composite this as opaque (the hole)");
         }
 
         let ctx_attribs = [
@@ -218,7 +218,7 @@ impl GlSurface {
             // thread, which `rc` now is.
             unsafe { set_interval(0) };
         } else {
-            warn!("warning: wglSwapIntervalEXT missing; hitch test is inconclusive");
+            warn!("wglSwapIntervalEXT missing; hitch test is inconclusive");
         }
 
         Ok(Self {

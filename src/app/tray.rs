@@ -86,7 +86,7 @@ impl TrayState for TrayHint {
 }
 
 pub fn version_label() -> String {
-    format!("df-hud {}", env!("CARGO_PKG_VERSION"))
+    format!("df-hud {}", crate::BUILD)
 }
 
 /// The update item's label on both trays; clicking it (re-)checks.
@@ -95,7 +95,7 @@ pub fn update_label(status: &crate::app::updates::Status) -> String {
     match status {
         Status::Unchecked => "Check for updates".into(),
         Status::Checking => "Checking for updates…".into(),
-        Status::UpToDate => format!("{} is the latest", version_label()),
+        Status::UpToDate => format!("df-hud {} is the latest", env!("CARGO_PKG_VERSION")),
         Status::Newer(version) => format!("Update to {version}…"),
         Status::Failed => "Update check failed - see log".into(),
     }
@@ -152,7 +152,7 @@ pub fn tooltip_with_presence(
     ipc_missing: bool,
     config_err: Option<&str>,
 ) -> String {
-    let mut tip = tooltip_with_version(view, vis, env!("CARGO_PKG_VERSION"));
+    let mut tip = tooltip_with_version(view, vis, crate::BUILD);
     if let Some(line) = config_tray_line(config_err) {
         tip.push('\n');
         tip.push_str(&line);
@@ -1311,13 +1311,10 @@ mod tests {
         assert!(
             tooltip_with_version(Some(&playing), vis.clone(), "1.2.3").contains("version 1.2.3")
         );
-        assert_eq!(
-            version_label(),
-            format!("df-hud {}", env!("CARGO_PKG_VERSION"))
-        );
+        assert_eq!(version_label(), format!("df-hud {}", crate::BUILD));
         let live = tooltip_with_presence(Some(&playing), vis.clone(), false, false, None);
         assert!(
-            live.contains(&format!("version {}", env!("CARGO_PKG_VERSION"))),
+            live.contains(&format!("version {}", crate::BUILD)),
             "{live}"
         );
         let stale = View {

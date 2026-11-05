@@ -809,10 +809,10 @@ fn run_connected(conn: Connection, args: Args) -> Result<(), Box<dyn Error>> {
     app.handle = Some(handle.clone());
 
     if viewporter.is_none() {
-        warn!("warning: wp_viewporter missing; 125/150% will be blurry");
+        warn!("wp_viewporter missing; 125/150% will be blurry");
     }
     if frac_mgr.is_none() {
-        warn!("warning: wp_fractional_scale_v1 missing; using integer wl_output.scale");
+        warn!("wp_fractional_scale_v1 missing; using integer wl_output.scale");
         if let Some(output) = app.outputs.first() {
             app.frac_scale = (output.scale.max(1) as u32) * 120;
         }

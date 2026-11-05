@@ -6,6 +6,16 @@ first within each section.
 
 ## [Unreleased]
 
+### Changed
+
+- Log lines carry local time and level (`2026-11-05 14:47:03.120 WARN  …`).
+  Under systemd the journal keeps its own timestamps and gets the level as a
+  priority, so `journalctl -p warning` works.
+- The log header, tray, `--version` and error dialogs name the exact build
+  (`0.5.1-1-g8b2b87f` for a test build), so a log says which exe wrote it.
+- The first OpenGL context logs its vendor, renderer and driver version.
+- Windows: a fatal error is written to `df-hud.log` once, not twice.
+
 ### Fixed
 
 - Windows: the overlay could fail to start with `wglMakeCurrent: Win32 error 6`

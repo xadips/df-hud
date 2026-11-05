@@ -25,6 +25,8 @@ cd -- "$repo_root"
 cargo_home=${CARGO_HOME:-$HOME/.cargo}
 rustup_home=${RUSTUP_HOME:-$HOME/.rustup}
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$cargo_home/registry=/cargo/registry --remap-path-prefix=$rustup_home=/rustup --remap-path-prefix=$repo_root=/build"
+# The version people see in the log, tray and --version (see BUILD in main.rs).
+export DF_HUD_BUILD=$version
 
 cargo build --locked --release --target x86_64-unknown-linux-gnu
 cp -- target/x86_64-unknown-linux-gnu/release/df-hud "$stage/df-hud"

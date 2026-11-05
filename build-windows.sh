@@ -27,6 +27,9 @@ CARGO_HOME_DIR=${CARGO_HOME:-$HOME/.cargo}
 RUSTUP_HOME_DIR=${RUSTUP_HOME:-$HOME/.rustup}
 RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$CARGO_HOME_DIR/registry=/cargo/registry --remap-path-prefix=$RUSTUP_HOME_DIR=/rustup --remap-path-prefix=$ROOT=/build"
 export RUSTFLAGS
+# The version people see in the log, tray and --version (see BUILD in main.rs).
+DF_HUD_BUILD=$VERSION
+export DF_HUD_BUILD
 
 (
 	cd "$ROOT"

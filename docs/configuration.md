@@ -21,7 +21,10 @@ the TOML, and creates it if it is missing. **Open log file** opens the Explorer
 stderr log.
 
 `DF_HUD_LOG=error|warn|info|debug` (default `info`; `warning` also works) sets
-how much goes to stderr and, on Windows, to `df-hud.log`.
+how much goes to stderr and, on Windows, to `df-hud.log`. Each run starts with
+`--- df-hud <build> ---`, and each line carries local time and level
+(`2026-11-05 14:47:03.120 WARN  …`). Under systemd the journal keeps its own
+timestamps, and `journalctl -p warning` filters by level.
 
 A typo in a key name is a startup error, not a silent ignore. An interval below
 its floor is an error too, not a quiet bump.

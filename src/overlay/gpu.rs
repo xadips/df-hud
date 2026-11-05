@@ -12,6 +12,7 @@
 //! (`#version 330 core`). Same body; only the version string is `cfg`'d.
 
 use std::error::Error;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use glow::{Context as Glow, HasContext, PixelUnpackData};
 
@@ -131,12 +132,21 @@ impl Gpu {
     pub fn new(gl: Glow, buf_w: i32, buf_h: i32, font_want: &str) -> Result<Self, Box<dyn Error>> {
         // SAFETY: the caller's context is current on this thread (see above);
         // these are read-only queries on it.
-        unsafe {
-            debug!(
-                "GL renderer={} version={}",
+        let driver = unsafe {
+            format!(
+                "GL: {} / {} / {}",
+                gl.get_parameter_string(glow::VENDOR),
                 gl.get_parameter_string(glow::RENDERER),
                 gl.get_parameter_string(glow::VERSION)
-            );
+            )
+        };
+        // Once per process at info, so a user's log names the driver; every
+        // re-show builds a context again and would repeat it.
+        static NAMED: AtomicBool = AtomicBool::new(false);
+        if NAMED.swap(true, Ordering::Relaxed) {
+            debug!("{driver}");
+        } else {
+            info!("{driver}");
         }
 
         let font = Font::load(Some(font_want));

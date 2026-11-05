@@ -360,7 +360,7 @@ pub fn run(launch: Launch) -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         Launch::Version => {
-            println!("df-hud {}", env!("CARGO_PKG_VERSION"));
+            println!("df-hud {}", crate::BUILD);
             Ok(())
         }
         Launch::CheckConfig { config } => {
@@ -393,7 +393,7 @@ pub fn run_headless(config: Option<PathBuf>, print_hud: bool) -> Result<(), Box<
     let cfg = Config::load(&path)?;
     info!(
         "df-hud {} starting ({})",
-        env!("CARGO_PKG_VERSION"),
+        crate::BUILD,
         cfg.describe_source(&path)
     );
     let handle = crate::app::start_with(cfg, crate::app::PrintOpts { hud: print_hud })?;
