@@ -62,16 +62,25 @@ pub fn take_over() {
 mod platform {
     use super::{GRACE, Outcome, Peer};
     use crate::game::{base_name, linux};
+    use chrono::{DateTime, Utc};
     use std::os::unix::fs::MetadataExt;
     use std::path::Path;
+    use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
     const PROC: &str = "/proc";
 
+    /// Read once: `btime` can move by a second when the clock is adjusted,
+    /// which would shift every start time compared against the scan.
+    fn boot() -> Option<DateTime<Utc>> {
+        static BOOT: OnceLock<Option<DateTime<Utc>>> = OnceLock::new();
+        *BOOT.get_or_init(|| linux::boot_time(Path::new(PROC)).ok())
+    }
+
     pub fn df_hud_processes() -> Vec<Peer> {
         let root = Path::new(PROC);
-        let (Ok(boot), Ok(me), Ok(entries)) = (
-            linux::boot_time(root),
+        let (Some(boot), Ok(me), Ok(entries)) = (
+            boot(),
             std::fs::metadata("/proc/self"),
             std::fs::read_dir(root),
         ) else {
@@ -82,13 +91,7 @@ mod platform {
             let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse().ok()) else {
                 continue;
             };
-            if !entry.metadata().is_ok_and(|m| m.uid() == me.uid()) {
-                continue;
-            }
-            let Ok(argv0) = linux::process_argv0(root, pid) else {
-                continue;
-            };
-            if base_name(&argv0) != "df-hud" {
+            if !entry.metadata().is_ok_and(|m| m.uid() == me.uid()) || !is_df_hud(root, pid) {
                 continue;
             }
             if let Ok(started_at) = linux::process_start_time(root, pid, boot) {
@@ -101,11 +104,20 @@ mod platform {
         out
     }
 
+    /// A zombie keeps its `stat` but has an empty `cmdline`.
+    fn is_df_hud(root: &Path, pid: i32) -> bool {
+        linux::process_argv0(root, pid).is_ok_and(|argv0| base_name(&argv0) == "df-hud")
+    }
+
     fn alive(peer: &Peer) -> bool {
         let root = Path::new(PROC);
-        linux::boot_time(root)
-            .and_then(|boot| linux::process_start_time(root, peer.pid as i32, boot))
-            .is_ok_and(|started| started == peer.started_at)
+        let pid = peer.pid as i32;
+        let Some(boot) = boot() else {
+            return false;
+        };
+        is_df_hud(root, pid)
+            && linux::process_start_time(root, pid, boot)
+                .is_ok_and(|started| started == peer.started_at)
     }
 
     fn signal(peer: &Peer, sig: libc::c_int) -> Result<(), String> {
@@ -170,7 +182,9 @@ mod platform {
     use crate::overlay::win32::{OVERLAY_CLASS, last_err, wide};
     use std::ptr;
     use std::time::{Duration, Instant};
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, WAIT_OBJECT_0};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, HANDLE, HWND, WAIT_OBJECT_0,
+    };
     use windows_sys::Win32::System::Threading::{
         OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
         TerminateProcess, WaitForSingleObject,
@@ -208,6 +222,10 @@ mod platform {
         // SAFETY: takes an access mask, an inherit flag and a pid; no pointers.
         let handle = unsafe { OpenProcess(access, 0, peer.pid) };
         if handle.is_null() {
+            // SAFETY: reads this thread's last-error slot; no arguments.
+            if unsafe { GetLastError() } == ERROR_INVALID_PARAMETER {
+                return Ok(None);
+            }
             return Err(last_err("OpenProcess").to_string());
         }
         let process = Process(handle);
