@@ -40,7 +40,14 @@ fn main() {
     if let Err(err) = run() {
         eprintln!("{err}");
         #[cfg(windows)]
-        overlay::win32::fatal_alert(&err.to_string(), "The overlay did not start");
+        {
+            let headline = if err.is::<overlay::win32::GpuLost>() {
+                "The overlay stopped"
+            } else {
+                "The overlay did not start"
+            };
+            overlay::win32::fatal_alert(&err.to_string(), headline);
+        }
         std::process::exit(1);
     }
 }

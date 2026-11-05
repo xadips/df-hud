@@ -2,19 +2,25 @@
 //!
 //! `wglCreateContext` + `ChoosePixelFormat` cannot request a core profile or
 //! guarantee alpha. The dummy-context dance loads `wglChoosePixelFormatARB` and
-//! `wglCreateContextAttribsARB` once per process. Dummy HWND uses
+//! `wglCreateContextAttribsARB` once per monitor. Dummy HWND uses
 //! [`crate::overlay::win32::DUMMY_CLASS`], not the overlay class — `WM_DESTROY`
 //! on a shared class ended the WGL spike.
+//!
+//! `opengl32` picks the ICD for a window by its monitor and styles, and
+//! `wglMakeCurrent` refuses a context from one ICD on a DC of another, so the
+//! dummy copies the overlay's ex-style and sits on its monitor.
 
 use std::error::Error;
 use std::ffi::{CString, c_void};
 use std::mem::size_of;
 use std::ptr;
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 use libloading::Library;
-use windows_sys::Win32::Foundation::HWND;
-use windows_sys::Win32::Graphics::Gdi::{GetDC, HDC, ReleaseDC};
+use windows_sys::Win32::Foundation::{HWND, RECT, SetLastError};
+use windows_sys::Win32::Graphics::Gdi::{
+    GetDC, HDC, MONITOR_DEFAULTTONEAREST, MonitorFromWindow, ReleaseDC,
+};
 use windows_sys::Win32::Graphics::OpenGL::{
     ChoosePixelFormat, DescribePixelFormat, GetPixelFormat, HGLRC, PFD_DOUBLEBUFFER,
     PFD_DRAW_TO_WINDOW, PFD_SUPPORT_COMPOSITION, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA,
@@ -22,10 +28,12 @@ use windows_sys::Win32::Graphics::OpenGL::{
     wglGetProcAddress, wglMakeCurrent,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, WS_OVERLAPPEDWINDOW,
+    CreateWindowExW, DestroyWindow, GWL_EXSTYLE, GetWindowLongPtrW, GetWindowRect, LWA_ALPHA,
+    SetLayeredWindowAttributes, WS_EX_LAYERED, WS_OVERLAPPEDWINDOW, WS_POPUP,
 };
 
 use crate::overlay::win32::{DUMMY_CLASS, last_err, wide};
+use crate::wake::lock;
 
 const WGL_DRAW_TO_WINDOW_ARB: i32 = 0x2001;
 const WGL_ACCELERATION_ARB: i32 = 0x2003;
@@ -72,7 +80,7 @@ impl GlSurface {
             return Err(last_err("GetDC"));
         }
 
-        let procs = wgl_procs(instance)?;
+        let procs = wgl_procs(instance, hwnd)?;
         // SAFETY: opengl32.dll is a system library already mapped into this
         // process by windows-sys's imports; loading it again runs no new code.
         let opengl32 = unsafe { Library::new("opengl32.dll") }
@@ -195,13 +203,14 @@ impl GlSurface {
         }
         // SAFETY: `rc` was created on `hdc` just above; on failure both are
         // released exactly once and never used again.
-        if unsafe { wglMakeCurrent(hdc, rc) } == 0 {
+        if unsafe { make_current(hdc, rc) } == 0 {
+            let err = last_err("wglMakeCurrent (new context)");
             // SAFETY: see above.
             unsafe {
                 wglDeleteContext(rc);
                 ReleaseDC(hwnd, hdc);
             }
-            return Err(last_err("wglMakeCurrent"));
+            return Err(err);
         }
 
         if let Some(set_interval) = swap_interval_fn {
@@ -222,7 +231,7 @@ impl GlSurface {
 
     pub fn make_current(&self) -> Result<(), Box<dyn Error>> {
         // SAFETY: `hdc`/`rc` are owned by `self` and live until `Drop`.
-        if unsafe { wglMakeCurrent(self.hdc, self.rc) } == 0 {
+        if unsafe { make_current(self.hdc, self.rc) } == 0 {
             return Err(last_err("wglMakeCurrent"));
         }
         Ok(())
@@ -269,7 +278,8 @@ impl Drop for GlSurface {
         // released here exactly once; the owner dropped the `Gpu` before this
         // and keeps `hwnd` alive until after.
         unsafe {
-            wglMakeCurrent(ptr::null_mut(), ptr::null_mut());
+            // Intel fails a release with a null DC, and leaves error 6 behind.
+            wglMakeCurrent(self.hdc, ptr::null_mut());
             if !self.rc.is_null() {
                 wglDeleteContext(self.rc);
             }
@@ -280,6 +290,21 @@ impl Drop for GlSurface {
     }
 }
 
+/// A driver may fail `wglMakeCurrent` without setting the last error; clearing
+/// it first keeps a stale code from an earlier call out of the report.
+///
+/// # Safety
+/// Same contract as `wglMakeCurrent`.
+unsafe fn make_current(hdc: HDC, rc: HGLRC) -> i32 {
+    // SAFETY: the caller upholds `wglMakeCurrent`'s contract; clearing this
+    // thread's last-error slot takes no pointers.
+    unsafe {
+        SetLastError(0);
+        wglMakeCurrent(hdc, rc)
+    }
+}
+
+#[derive(Clone, Copy)]
 struct WglProcs {
     choose_fmt: ChoosePixelFormatArb,
     create_ctx: CreateContextAttribsArb,
@@ -287,32 +312,110 @@ struct WglProcs {
     swap_interval: Option<SwapIntervalExt>,
 }
 
+/// The extension pointers for `overlay`'s monitor, loaded through a dummy
+/// shaped like `overlay`, or through a plain one if that dummy fails.
 fn wgl_procs(
     instance: windows_sys::Win32::Foundation::HINSTANCE,
-) -> Result<&'static WglProcs, Box<dyn Error>> {
-    static PROCS: OnceLock<WglProcs> = OnceLock::new();
-    if let Some(procs) = PROCS.get() {
+    overlay: HWND,
+) -> Result<WglProcs, Box<dyn Error>> {
+    static PROCS: Mutex<Option<(usize, WglProcs)>> = Mutex::new(None);
+    // SAFETY: `overlay` is the caller's live window; the flag is a constant.
+    let monitor = unsafe { MonitorFromWindow(overlay, MONITOR_DEFAULTTONEAREST) } as usize;
+    let mut cached = lock(&PROCS);
+    if let Some((on, procs)) = *cached
+        && on == monitor
+    {
         return Ok(procs);
     }
-    let loaded = load_wgl_extensions(instance)?;
-    Ok(PROCS.get_or_init(|| loaded))
+    let procs = match load_wgl_extensions(instance, DummyShape::like(overlay)) {
+        Ok(procs) => procs,
+        Err(like) => {
+            let procs = load_wgl_extensions(instance, DummyShape::PLAIN)
+                .map_err(|plain| format!("{like}; with a plain dummy: {plain}"))?;
+            info!(
+                "WGL: a dummy shaped like the overlay failed ({like}); loaded through a plain one"
+            );
+            procs
+        }
+    };
+    *cached = Some((monitor, procs));
+    Ok(procs)
+}
+
+#[derive(Clone, Copy)]
+struct DummyShape {
+    ex_style: u32,
+    style: u32,
+    x: i32,
+    y: i32,
+}
+
+impl DummyShape {
+    const PLAIN: Self = Self {
+        ex_style: 0,
+        style: WS_OVERLAPPEDWINDOW,
+        x: 0,
+        y: 0,
+    };
+
+    fn like(overlay: HWND) -> Self {
+        let mut rect = RECT::default();
+        // SAFETY: `overlay` is the caller's live window; `rect` is a live
+        // out-param, left at 0,0 if the call fails.
+        let ex_style = unsafe {
+            GetWindowRect(overlay, &mut rect);
+            GetWindowLongPtrW(overlay, GWL_EXSTYLE) as u32
+        };
+        Self {
+            ex_style,
+            style: WS_POPUP,
+            x: rect.left,
+            y: rect.top,
+        }
+    }
+}
+
+/// The dummy window, DC and context, torn down in reverse on drop.
+struct Dummy {
+    hwnd: HWND,
+    hdc: HDC,
+    rc: HGLRC,
+}
+
+impl Drop for Dummy {
+    fn drop(&mut self) {
+        // SAFETY: each handle was created by `load_wgl_extensions` for this
+        // dummy and is released once, context before DC before window.
+        unsafe {
+            if !self.rc.is_null() {
+                wglMakeCurrent(self.hdc, ptr::null_mut());
+                wglDeleteContext(self.rc);
+            }
+            if !self.hdc.is_null() {
+                ReleaseDC(self.hwnd, self.hdc);
+            }
+            DestroyWindow(self.hwnd);
+        }
+    }
 }
 
 fn load_wgl_extensions(
     instance: windows_sys::Win32::Foundation::HINSTANCE,
+    shape: DummyShape,
 ) -> Result<WglProcs, Box<dyn Error>> {
     let class = wide(DUMMY_CLASS);
     let title = wide("df-hud-wgl-dummy");
     // SAFETY: `class`/`title` are NUL-terminated u16 buffers that outlive the
     // call; DUMMY_CLASS was registered for `instance` by `register_classes`.
+    // The window is never shown.
     let hwnd = unsafe {
         CreateWindowExW(
-            0,
+            shape.ex_style,
             class.as_ptr(),
             title.as_ptr(),
-            WS_OVERLAPPEDWINDOW,
-            0,
-            0,
+            shape.style,
+            shape.x,
+            shape.y,
             16,
             16,
             ptr::null_mut(),
@@ -324,14 +427,26 @@ fn load_wgl_extensions(
     if hwnd.is_null() {
         return Err(last_err("CreateWindowExW dummy"));
     }
+    let mut dummy = Dummy {
+        hwnd,
+        hdc: ptr::null_mut(),
+        rc: ptr::null_mut(),
+    };
 
-    // SAFETY: `hwnd` was just created and is destroyed only below.
-    let hdc = unsafe { GetDC(hwnd) };
-    if hdc.is_null() {
-        // SAFETY: destroying the window created above, once.
-        unsafe { DestroyWindow(hwnd) };
+    // A layered window has no drawing surface until its layered attributes are set.
+    if shape.ex_style & WS_EX_LAYERED != 0 {
+        // SAFETY: `hwnd` is the live dummy; the rest are a colour key, alpha and flags.
+        if unsafe { SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA) } == 0 {
+            return Err(last_err("dummy SetLayeredWindowAttributes"));
+        }
+    }
+
+    // SAFETY: `hwnd` is the live dummy, destroyed only by `Dummy::drop`.
+    dummy.hdc = unsafe { GetDC(hwnd) };
+    if dummy.hdc.is_null() {
         return Err(last_err("GetDC dummy"));
     }
+    let hdc = dummy.hdc;
 
     let pfd = PIXELFORMATDESCRIPTOR {
         nSize: size_of::<PIXELFORMATDESCRIPTOR>() as u16,
@@ -352,30 +467,16 @@ fn load_wgl_extensions(
         format != 0 && SetPixelFormat(hdc, format, &pfd) != 0
     };
     if !format_set {
-        // SAFETY: the dummy DC and window are released once, in that order.
-        unsafe {
-            ReleaseDC(hwnd, hdc);
-            DestroyWindow(hwnd);
-        }
         return Err(last_err("dummy SetPixelFormat"));
     }
-    // SAFETY: `hdc` has its pixel format set; `rc` is only made current when non-null.
-    let rc = unsafe {
-        let rc = wglCreateContext(hdc);
-        if !rc.is_null() && wglMakeCurrent(hdc, rc) == 0 {
-            wglDeleteContext(rc);
-            ptr::null_mut()
-        } else {
-            rc
-        }
-    };
-    if rc.is_null() {
-        // SAFETY: the dummy DC and window are released once, in that order.
-        unsafe {
-            ReleaseDC(hwnd, hdc);
-            DestroyWindow(hwnd);
-        }
+    // SAFETY: `hdc` has its pixel format set.
+    dummy.rc = unsafe { wglCreateContext(hdc) };
+    if dummy.rc.is_null() {
         return Err(last_err("dummy wglCreateContext"));
+    }
+    // SAFETY: `rc` was created on `hdc` just above; `Dummy::drop` releases both.
+    if unsafe { make_current(hdc, dummy.rc) } == 0 {
+        return Err(last_err("dummy wglMakeCurrent"));
     }
 
     let choose = load_wgl_symbol::<ChoosePixelFormatArb>("wglChoosePixelFormatARB")
@@ -386,16 +487,9 @@ fn load_wgl_extensions(
         .ok_or("wglGetPixelFormatAttribivARB missing")?;
     let swap = load_wgl_symbol::<SwapIntervalExt>("wglSwapIntervalEXT");
 
-    // SAFETY: the dummy context, DC and window are torn down once, in
-    // reverse creation order; the extension pointers loaded above are
-    // process-wide for this ICD, so they outlive the dummy context.
-    unsafe {
-        wglMakeCurrent(ptr::null_mut(), ptr::null_mut());
-        wglDeleteContext(rc);
-        ReleaseDC(hwnd, hdc);
-        DestroyWindow(hwnd);
-    }
-
+    // The extension pointers are process-wide for this ICD, so they outlive
+    // the dummy context `dummy` tears down here.
+    drop(dummy);
     Ok(WglProcs {
         choose_fmt: choose,
         create_ctx: create,

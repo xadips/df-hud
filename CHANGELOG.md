@@ -4,6 +4,20 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
+## [Unreleased]
+
+### Fixed
+
+- Windows: the overlay could fail to start with `wglMakeCurrent: Win32 error 6`
+  on some older or hybrid-GPU laptops. The window now gets its layered
+  attributes before the OpenGL context is built, and the WGL helper window
+  matches the overlay's styles and monitor, so the context and the window end
+  up on the same driver.
+- Windows: an OpenGL context lost while running (sleep, a driver reset, a mode
+  switch) is rebuilt up to three times over about ten seconds instead of
+  ending df-hud on the first failure. If it cannot be rebuilt, the error
+  dialog says the overlay stopped and names the failing call.
+
 ## [0.5.1] - 2026-10-30
 
 ### Fixed

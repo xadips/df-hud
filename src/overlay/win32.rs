@@ -122,6 +122,57 @@ fn rescan_due(display_changed: bool, surface_dirty: bool, want: &str, previous: 
     display_changed || surface_dirty || want != previous
 }
 
+/// Waits before each rebuild of a lost context; one entry per try.
+const REBUILD_DELAYS: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(3),
+    Duration::from_secs(6),
+];
+
+/// A context that worked and could not be rebuilt within [`REBUILD_DELAYS`].
+/// `main` gives it its own headline: the overlay stopped, it did start.
+#[derive(Debug)]
+pub struct GpuLost(String);
+
+impl std::fmt::Display for GpuLost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Error for GpuLost {}
+
+/// Rebuild budget for a WGL context lost after startup (sleep, a driver
+/// reset, a mode switch). Startup builds the first context with `?`, so a
+/// machine that cannot draw at all never gets here.
+#[derive(Debug, Default)]
+struct Recovery {
+    /// Losses since the last presented frame.
+    failures: usize,
+    next_try: Option<Instant>,
+}
+
+impl Recovery {
+    fn waiting(&self, now: Instant) -> bool {
+        self.next_try.is_some_and(|at| now < at)
+    }
+
+    /// The wait before the next rebuild, or `None` once the budget is spent.
+    fn lost(&mut self, now: Instant) -> Option<Duration> {
+        let delay = *REBUILD_DELAYS.get(self.failures)?;
+        self.failures += 1;
+        self.next_try = Some(now + delay);
+        Some(delay)
+    }
+
+    /// The context got through a frame (drawn, or skipped as unchanged).
+    /// Returns how many losses that recovered from.
+    fn frame_ok(&mut self) -> Option<usize> {
+        self.next_try = None;
+        (self.failures > 0).then(|| std::mem::take(&mut self.failures))
+    }
+}
+
 pub struct Args {
     monitor: Option<String>,
     duration: Duration,
@@ -802,20 +853,61 @@ struct Surface {
     buf_h: i32,
     mapped: bool,
     swaps: u32,
+    recovery: Recovery,
 }
 
 impl Surface {
-    fn hide_window(&mut self) {
-        if let Some(gl) = &self.gl {
-            let _ = gl.make_current();
+    fn drop_gl(&mut self) {
+        let current = self.gl.as_ref().is_some_and(|gl| gl.make_current().is_ok());
+        if let Some(gpu) = self.gpu.take()
+            && !current
+        {
+            // Its GL names die with the context; deleting them with no
+            // context current calls into the driver with nothing bound.
+            std::mem::forget(gpu);
         }
-        self.gpu.take();
         self.gl.take();
+    }
+
+    fn hide_window(&mut self) {
+        self.drop_gl();
         self.win.hide();
         self.mapped = false;
         // The next map places the window again; do it from a fresh list.
         self.rescan_monitors = true;
     }
+
+    /// The context failed after startup and is already dropped. Schedules a
+    /// rebuild, or ends the overlay with [`GpuLost`] once the budget is spent.
+    fn lost(&mut self, err: &str) -> Result<(), Box<dyn Error>> {
+        let tries = REBUILD_DELAYS.len();
+        match self.recovery.lost(Instant::now()) {
+            Some(delay) => {
+                warn!(
+                    "WGL: {err}; overlay hidden, rebuilding in {delay:?} (try {} of {tries})",
+                    self.recovery.failures
+                );
+                Ok(())
+            }
+            None => Err(Box::new(GpuLost(format!(
+                "The overlay's OpenGL context failed and could not be rebuilt after {tries} tries.\n\n{err}"
+            )))),
+        }
+    }
+}
+
+fn draw_frame(
+    gl: &GlSurface,
+    gpu: &mut Gpu,
+    frame: Frame,
+    built: overlay::scene::Scene,
+) -> Result<bool, Box<dyn Error>> {
+    gl.make_current()?;
+    if !gpu.draw(frame, built, false)? {
+        return Ok(false);
+    }
+    gl.swap()?;
+    Ok(true)
 }
 
 impl overlay::Hooks for Surface {
@@ -866,7 +958,7 @@ impl overlay::Hooks for Surface {
     }
 
     fn show(&mut self, cfg: &Config) -> Result<(), Box<dyn Error>> {
-        if self.mapped {
+        if self.mapped || self.recovery.waiting(Instant::now()) {
             return Ok(());
         }
         if let Some(m) = &self.picked
@@ -891,7 +983,7 @@ impl overlay::Hooks for Surface {
                 self.win.show()?;
                 self.mapped = true;
             }
-            Err(err) => error!("WGL: {err}"),
+            Err(err) => self.lost(&err.to_string())?,
         }
         Ok(())
     }
@@ -910,11 +1002,18 @@ impl overlay::Hooks for Surface {
             return Ok(());
         };
         self.win.reassert_exstyle();
-        gl.make_current()?;
         let built = overlay::scene(&self.handle, cfg, self.buf_w as f32, self.buf_h as f32);
-        if gpu.draw(Frame::square(self.buf_w, self.buf_h), built, false)? {
-            gl.swap()?;
-            self.swaps += 1;
+        match draw_frame(gl, gpu, Frame::square(self.buf_w, self.buf_h), built) {
+            Ok(swapped) => {
+                self.swaps += u32::from(swapped);
+                if let Some(n) = self.recovery.frame_ok() {
+                    info!("WGL: context rebuilt after {n} loss(es)");
+                }
+            }
+            Err(err) => {
+                self.hide_window();
+                self.lost(&err.to_string())?;
+            }
         }
         Ok(())
     }
@@ -974,10 +1073,11 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let buf_w = monitor.width - 2 * WINDOW_INSET;
     let buf_h = monitor.height - 2 * WINDOW_INSET;
 
+    // Layered attributes before the context: until they are set the window
+    // has no drawing surface, and some drivers refuse to bind one to it.
     let win = OverlayWindow::create(instance, &monitor)?;
-    let (gl, gpu) = create_gpu(instance, win.hwnd, buf_w, buf_h, &watch.cfg.hud.font)?;
     win.extend_dwm_frame()?;
-    win.reassert_exstyle();
+    let (gl, gpu) = create_gpu(instance, win.hwnd, buf_w, buf_h, &watch.cfg.hud.font)?;
     win.show()?;
 
     debug!(
@@ -1011,6 +1111,7 @@ pub fn run(args: Args) -> Result<(), Box<dyn Error>> {
         buf_h,
         mapped: true,
         swaps: 0,
+        recovery: Recovery::default(),
     };
     let mut wait_failed = false;
     let mut rt = overlay::Runtime::new(watch, handle.config(), args.duration);
@@ -1107,6 +1208,36 @@ mod tests {
                 also: WANTED_EXSTYLE & !WS_EX_TOPMOST
             }
         );
+    }
+
+    #[test]
+    fn recovery_has_a_bounded_budget() {
+        let t0 = Instant::now();
+        let mut r = Recovery::default();
+        assert!(!r.waiting(t0));
+        let mut at = t0;
+        for want in REBUILD_DELAYS {
+            assert_eq!(r.lost(at), Some(want));
+            assert!(r.waiting(at));
+            at += want;
+            assert!(!r.waiting(at), "the rebuild is due after its delay");
+        }
+        assert_eq!(r.lost(at), None, "the budget is spent");
+    }
+
+    #[test]
+    fn a_working_frame_refills_the_budget() {
+        let t0 = Instant::now();
+        let mut r = Recovery::default();
+        assert_eq!(r.frame_ok(), None, "nothing to recover from");
+        r.lost(t0);
+        r.lost(t0);
+        assert_eq!(r.frame_ok(), Some(2));
+        assert!(!r.waiting(t0));
+        for want in REBUILD_DELAYS {
+            assert_eq!(r.lost(t0), Some(want));
+        }
+        assert_eq!(r.lost(t0), None);
     }
 
     #[test]
