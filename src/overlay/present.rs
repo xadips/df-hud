@@ -1781,8 +1781,8 @@ mod tests {
         assert_eq!(rows[0].text, "Next outpost attack");
         assert_eq!(rows[0].timer, "10m");
         assert_eq!(rows[0].color, Some(SHAKY_RGB));
-        assert_eq!(boss_lines(&at(900), &cfg).len(), 1);
-        assert!(boss_lines(&at(901), &cfg).is_empty());
+        assert_eq!(boss_lines(&at(3600), &cfg).len(), 1);
+        assert!(boss_lines(&at(3601), &cfg).is_empty());
         let mut off = Config::default();
         off.widget.bosses.outpost_warning = crate::config::Duration::from_secs(0);
         assert!(boss_lines(&at(60), &off).is_empty());

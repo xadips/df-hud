@@ -43,7 +43,7 @@ on that grid.
 | `x`, `y` | `320`, `384` | 320px in from the right, under block info |
 | `show_nearest` | `true` | Nearest event when this block is empty |
 | `show_outpost_attack` | `true` | OUTPOST ATTACK and its countdown. Tray **Show outpost attacks** |
-| `outpost_warning` | `900` | Seconds before an outpost attack to show its countdown; `0` is off, at most `10800` |
+| `outpost_warning` | `3600` | Seconds before an outpost attack to show its countdown; `0` is off, at most `10800` |
 
 These rows are the longest thing the HUD draws. Leave room on the right. Lines
 clip, they do not wrap.

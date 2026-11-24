@@ -226,7 +226,7 @@ show_outpost_attack = true
 
 # Seconds before an outpost attack to show its countdown. 0 is off, at most
 # 10800 (attacks are three hours apart).
-outpost_warning = 900
+outpost_warning = 3600
 
 [widget.boosts]
 # Boost timers, which the game client never shows. Stats bought together

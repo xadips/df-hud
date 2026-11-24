@@ -598,7 +598,7 @@ impl Default for Widget {
                 color: String::new(),
                 show_nearest: true,
                 show_outpost_attack: true,
-                outpost_warning: Duration::from_secs(900),
+                outpost_warning: Duration::from_secs(3600),
             },
             boosts: BoostsWidget {
                 enabled: true,

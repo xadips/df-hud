@@ -9,7 +9,7 @@ first within each section.
 ### Added
 
 - Outpost attack timer, on by default. OUTPOST ATTACK shows how long the
-  attack has left, and for the last 15 minutes before one an amber "Next
+  attack has left, and for the last hour before one an amber "Next
   outpost attack" row counts down to it. Attacks follow a fixed three-hour
   schedule, so the rows work between feed updates. Turn it off with tray
   **Show outpost attacks** or `[widget.bosses] show_outpost_attack = false`;
