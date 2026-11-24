@@ -11,6 +11,7 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained, merged into zbus 6; no ksni release on zbus 6" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained, merged into zbus 6; no ksni release on zbus 6" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained, merged into zbus 6; no ksni release on zbus 6" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono: unmaintained, no vulnerability; used throughout and in saved state, so a move to jiff is its own change" },
 ]
 
 [licenses]
