@@ -355,6 +355,18 @@ impl Handle {
         self.config().widget.masteries.enabled
     }
 
+    pub fn set_outpost_attack(&self, on: bool) {
+        if persist_tray(self, crate::config::TrayOption::OutpostAttack, on) {
+            self.cfg
+                .update(|c| c.widget.bosses.show_outpost_attack = on);
+            self.wake_ui();
+        }
+    }
+
+    pub fn outpost_attack_shown(&self) -> bool {
+        self.config().widget.bosses.show_outpost_attack
+    }
+
     pub fn has_presence(&self) -> bool {
         self.presence.is_some()
     }

@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod challenges;
 pub mod citymap;
 pub mod masteries;
+pub mod outpost_attack;
 pub mod xp;
 
 use std::borrow::Cow;

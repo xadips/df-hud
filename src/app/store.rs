@@ -10,9 +10,10 @@ use std::time::Duration;
 
 use crate::data::TIME_OFFSET;
 use crate::data::boosts;
-use crate::data::bossmap::{self, BossMap};
+use crate::data::bossmap::{self, BossMap, FeedOa};
 use crate::data::catalog::Catalog;
 use crate::data::citymap;
+use crate::data::outpost_attack;
 use crate::data::xp;
 use crate::format;
 use crate::model::{
@@ -556,8 +557,12 @@ impl Store {
                 }
             }
         }
+        (
+            v.outpost_attack,
+            v.outpost_attack_left,
+            v.outpost_attack_next,
+        ) = outpost_attack_state(s.boss_map.as_ref(), now);
         if let Some(boss) = &s.boss_map {
-            v.outpost_attack = boss.outpost_attack;
             if v.has_position {
                 let events = boss.at(v.position_x, v.position_y, now);
                 if !events.is_empty() {
@@ -740,6 +745,35 @@ fn stability_locked(s: &Inner) -> XpStability {
         1 => XpStability::Shaky,
         _ => XpStability::Unstable,
     }
+}
+
+/// `(live, time left, time to the next one)`. The feed wins when it carries
+/// outpost attack entries; the fixed schedule covers no feed, and a feed that
+/// still only holds the previous attack once the schedule says a new one began.
+fn outpost_attack_state(
+    boss: Option<&BossMap>,
+    now: DateTime<Utc>,
+) -> (bool, Option<Ns>, Option<Ns>) {
+    let until = |t: DateTime<Utc>| Ns::from_chrono(t - now);
+    let scheduled = outpost_attack::live_end(now);
+    let (live_end, upcoming) = match boss.map_or(FeedOa::Unknown, |b| b.outpost_attack(now)) {
+        FeedOa::Live(end) => return (true, end.or(scheduled).map(until), None),
+        FeedOa::Unknown => (scheduled, None),
+        FeedOa::Idle {
+            upcoming,
+            latest_end,
+        } => {
+            let stale = |end: DateTime<Utc>| {
+                upcoming.is_none() && latest_end.is_none_or(|l| l <= end - outpost_attack::DURATION)
+            };
+            (scheduled.filter(|&end| stale(end)), upcoming)
+        }
+    };
+    if let Some(end) = live_end {
+        return (true, Some(until(end)), None);
+    }
+    let next = upcoming.unwrap_or_else(|| outpost_attack::next_start(now));
+    (false, None, Some(until(next)))
 }
 
 /// The city BFS from `(x, y)`, recomputed only when the position moves.
@@ -1799,7 +1833,8 @@ mod tests {
 
     #[test]
     fn clear_boss_map_and_challenges_are_independent() {
-        let now = DateTime::from_timestamp(1000, 0).unwrap();
+        // 20:06 Eastern: outside the scheduled 19:00 slot, so no fallback banner.
+        let now = DateTime::from_timestamp(4000, 0).unwrap();
         let s = Store::new(None);
         s.set_challenges(vec![Challenge {
             name: "Travel".into(),
@@ -1818,6 +1853,98 @@ mod tests {
         s.clear_boss_map();
         assert!(!s.has_boss_map());
         assert!(!s.derive(now).outpost_attack);
+    }
+
+    fn oa_map(start: i64, end: i64) -> BossMap {
+        bossmap::parse(
+            format!(
+                r#"{{"0":{{"event_id":"1","isoa":"1","locations":[["fortPastor"]],"started":"1","ended":"0",
+                "title":"","boss_num":"0","event_type":"","start_time":"{start}","end_time":"{end}"}},
+                "bosshash":"x","servertime":0,"version":"1"}}"#
+            )
+            .as_bytes(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn outpost_attack_uses_the_feed_window() {
+        // 2026-11-19 15:00-15:20 UTC, the captured attack.
+        let start = 1_795_100_400;
+        let map = oa_map(start, start + 1200);
+        let at = |s| DateTime::from_timestamp(s, 0).unwrap();
+        assert_eq!(
+            outpost_attack_state(Some(&map), at(start + 300)),
+            (true, Some(Ns(900 * 1_000_000_000)), None)
+        );
+        let (live, left, next) = outpost_attack_state(Some(&map), at(start + 1500));
+        assert!(!live);
+        assert_eq!(left, None);
+        assert_eq!(next, Some(Ns((3 * 3600 - 1500) * 1_000_000_000)));
+    }
+
+    #[test]
+    fn outpost_attack_falls_back_to_the_schedule() {
+        let slot = DateTime::parse_from_rfc3339("2026-11-19T18:00:00Z")
+            .unwrap()
+            .to_utc();
+        let now = slot + chrono::Duration::minutes(2);
+        assert_eq!(
+            outpost_attack_state(None, now),
+            (true, Some(Ns(18 * 60 * 1_000_000_000)), None)
+        );
+        let previous = oa_map(
+            slot.timestamp() - 3 * 3600,
+            slot.timestamp() - 3 * 3600 + 1200,
+        );
+        assert_eq!(
+            outpost_attack_state(Some(&previous), now),
+            (true, Some(Ns(18 * 60 * 1_000_000_000)), None),
+            "a feed still holding the last attack does not hide this one"
+        );
+        let before = slot - chrono::Duration::minutes(10);
+        assert_eq!(
+            outpost_attack_state(None, before),
+            (false, None, Some(Ns(600 * 1_000_000_000)))
+        );
+    }
+
+    #[test]
+    fn outpost_attack_edge_feeds() {
+        let slot = DateTime::parse_from_rfc3339("2026-11-19T18:00:00Z")
+            .unwrap()
+            .to_utc();
+        let now = slot + chrono::Duration::minutes(2);
+        let live_18m = (true, Some(Ns(18 * 60 * 1_000_000_000)), None);
+        let feed = |body: &str| {
+            bossmap::parse(
+                format!(r#"{{{body}"bosshash":"x","servertime":0,"version":"1"}}"#).as_bytes(),
+            )
+            .unwrap()
+        };
+
+        let untimed_live =
+            feed(r#""0":{"event_id":"1","isoa":"1","locations":[],"started":"1","ended":"0"},"#);
+        assert_eq!(
+            outpost_attack_state(Some(&untimed_live), now),
+            live_18m,
+            "an undated live attack borrows the schedule's end"
+        );
+
+        let untimed_ended =
+            feed(r#""0":{"event_id":"1","isoa":"1","locations":[],"started":"1","ended":"1"},"#);
+        assert_eq!(
+            outpost_attack_state(Some(&untimed_ended), now),
+            live_18m,
+            "an undated leftover does not hide the scheduled attack"
+        );
+
+        let moved = oa_map(slot.timestamp() + 3600, slot.timestamp() + 3600 + 1200);
+        assert_eq!(
+            outpost_attack_state(Some(&moved), now),
+            (false, None, Some(Ns(58 * 60 * 1_000_000_000))),
+            "a feed announcing a later start overrides the schedule"
+        );
     }
 
     #[test]

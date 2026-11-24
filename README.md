@@ -11,7 +11,7 @@ scraping, no OCR.
 ## Features
 
 - [Block info](docs/widgets/block.md): region or outpost, and block support. Top right.
-- [Bosses](docs/widgets/bosses.md): what is on your block, or the nearest event. In Onslaught this is last / now / next
+- [Bosses](docs/widgets/bosses.md): what is on your block, or the nearest event, and an outpost attack timer. In Onslaught this is last / now / next
 - [Boosts](docs/widgets/boosts.md): boost and EX boost timers, which the game client does not show. Under bosses
 - [Keybinds](docs/widgets/keybinds.md): the overlay hotkeys, one per line. Starts shown.
 - [Run clock](docs/widgets/session.md): elapsed since the run started. It keeps ticking if you pause

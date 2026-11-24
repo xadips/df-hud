@@ -14,7 +14,14 @@ impl Ns {
     }
 
     pub fn from_chrono(d: chrono::Duration) -> Self {
-        Self(d.num_nanoseconds().unwrap_or(0))
+        Self(
+            d.num_nanoseconds()
+                .unwrap_or(if d < chrono::Duration::zero() {
+                    i64::MIN
+                } else {
+                    i64::MAX
+                }),
+        )
     }
 
     pub fn std(self) -> Duration {
@@ -574,6 +581,10 @@ pub struct View {
     pub has_onslaught_countdown: bool,
     pub onslaught_countdown: Ns,
     pub outpost_attack: bool,
+    pub outpost_attack_left: Option<Ns>,
+    /// Until the next attack starts, whenever none is live. `present`
+    /// decides whether that is close enough to draw.
+    pub outpost_attack_next: Option<Ns>,
     pub has_nearest: bool,
     pub nearest_dx: i32,
     pub nearest_dy: i32,
@@ -627,6 +638,8 @@ impl Default for View {
             has_onslaught_countdown: false,
             onslaught_countdown: Ns(0),
             outpost_attack: false,
+            outpost_attack_left: None,
+            outpost_attack_next: None,
             has_nearest: false,
             nearest_dx: 0,
             nearest_dy: 0,

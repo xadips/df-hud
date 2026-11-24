@@ -4,6 +4,18 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
+## [Unreleased]
+
+### Added
+
+- Outpost attack timer, on by default. OUTPOST ATTACK shows how long the
+  attack has left, and for the last 15 minutes before one an amber "Next
+  outpost attack" row counts down to it. Attacks follow a fixed three-hour
+  schedule, so the rows work between feed updates. Turn it off with tray
+  **Show outpost attacks** or `[widget.bosses] show_outpost_attack = false`;
+  `outpost_warning` sets the lead time in seconds, `0` for none. Older builds
+  reject a config carrying the new keys.
+
 ## [0.5.2] - 2026-11-05
 
 ### Added

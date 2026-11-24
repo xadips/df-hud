@@ -273,6 +273,8 @@ pub struct BossesWidget {
     pub font_size: f32,
     pub color: String,
     pub show_nearest: bool,
+    pub show_outpost_attack: bool,
+    pub outpost_warning: Duration,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -595,6 +597,8 @@ impl Default for Widget {
                 font_size: 0.0,
                 color: String::new(),
                 show_nearest: true,
+                show_outpost_attack: true,
+                outpost_warning: Duration::from_secs(900),
             },
             boosts: BoostsWidget {
                 enabled: true,
@@ -1101,6 +1105,13 @@ impl Config {
         for p in &mut self.widget.masteries.pin {
             *p = p.trim().to_string();
         }
+        push_range(
+            &mut errs,
+            "widget.bosses.outpost_warning",
+            self.widget.bosses.outpost_warning.0,
+            StdDuration::ZERO,
+            StdDuration::from_hours(3),
+        );
         if self.widget.map.enabled {
             if self.widget.map.scale <= 0.0 {
                 errs.push(format!(
@@ -1669,6 +1680,7 @@ pub enum TrayOption {
     FpsDisplay,
     DismissLauncher,
     MasteriesWidget,
+    OutpostAttack,
 }
 
 impl TrayOption {
@@ -1677,6 +1689,7 @@ impl TrayOption {
             Self::FpsDisplay => ("game_keys", "fps_display"),
             Self::DismissLauncher => ("game_keys", "dismiss_launcher"),
             Self::MasteriesWidget => ("widget.masteries", "enabled"),
+            Self::OutpostAttack => ("widget.bosses", "show_outpost_attack"),
         }
     }
 }
@@ -2650,6 +2663,30 @@ window = 120
         let got = std::fs::read_to_string(&path).unwrap();
         assert_eq!(got.matches("[widget.masteries]").count(), 1, "{got}");
         assert!(got.contains("enabled = false"), "{got}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_tray_option_turns_outpost_attacks_off_in_place() {
+        let dir = std::env::temp_dir().join(format!("df-hud-tray-oa-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[widget.bosses]\nshow_nearest = true # keep this\n").unwrap();
+        set_tray_option(&path, TrayOption::OutpostAttack, false).unwrap();
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert!(got.contains("show_nearest = true # keep this"), "{got}");
+        assert!(got.contains("show_outpost_attack = false"), "{got}");
+        let cfg = Config::load(&path).unwrap();
+        assert!(!cfg.widget.bosses.show_outpost_attack);
+        assert!(cfg.widget.bosses.show_nearest);
+        set_tray_option(&path, TrayOption::OutpostAttack, true).unwrap();
+        assert!(
+            Config::load(&path)
+                .unwrap()
+                .widget
+                .bosses
+                .show_outpost_attack
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

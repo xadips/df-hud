@@ -27,7 +27,7 @@ value inside an event is a **string**, including numbers and booleans.
 | `need_briefing` | `"1"` marks a **mission** |
 | `event_type` | `""`, `mission`, `qrf`, `qrfdr` |
 | `dfp_objectives` | an object when present, an **empty array** when not - so it cannot be decoded straight into a map |
-| `isoa` | `"1"` means every outpost is under attack; map-wide, not a block |
+| `isoa` | `"1"` marks an outpost attack: one entry per outpost, `locations` a name (`[["nastyasHoldout"]]`) rather than a block, all sharing one 20-minute window |
 | `started` / `ended` | `ended = "1"` is last cycle's |
 | `start_time` / `end_time` | plain unix seconds |
 | `boss_num` | the game's own event slot, numbered **per event type** - see below |
@@ -202,6 +202,32 @@ it is worth fetching:
 
 The last row is why a heartbeat exists at all: nothing in the data predicts a
 random daily spawn appearing, so no amount of boundary arithmetic will catch one.
+
+## Outpost attacks run on a fixed clock
+
+Captured 2026-11-19: six `isoa` entries, Nastya's, Dogg's, Precinct 13, Fort
+Pastor, Secronom and Valcrest, each `15:00-15:20 UTC`. The
+[wiki](https://deadfrontier.fandom.com/wiki/Outpost_Attack) gives the rest:
+every outpost at once, 20 minutes, every three hours, at UTC 09/12/15/... in
+winter and an hour earlier in summer. The switch dates are the US ones, so on
+US Eastern time it never moves: 01, 04, 07, 10, 13, 16, 19, 22, i.e.
+`hour % 3 == 1`.
+
+`src/data/outpost_attack.rs` encodes that with the US rule written out (second
+Sunday of March to first Sunday of November, 02:00 local) rather than pulling
+in a timezone database. The feed still wins: a timed entry covering now sets
+the countdown from its own `end_time`. The schedule fills in when there are no
+`isoa` entries at all, when the feed still only holds the previous attack after
+a new slot began, and for the "next" countdown.
+
+A window over an hour long, or starting more than a day from `servertime`, is
+dropped as a unit or data error: milliseconds would read as the year 58000
+and pin the banner up for good. An entry without times only counts while no
+timed entry exists, and only once `started = "1"`.
+
+A live fetch at 13:59 UTC on 2026-11-24 held no `isoa` entries at all: the
+12:00 attack was gone and 15:00 not yet listed. So between attacks the feed
+is usually silent and the schedule alone decides.
 
 ## The feed carries the changeover before it happens
 

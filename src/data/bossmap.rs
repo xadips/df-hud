@@ -14,6 +14,8 @@ pub const QRF_MARKER: &str = "Δ";
 pub const QRF_DEATH_ROW_MARKER: &str = "▼";
 const PAST_WINDOW: Duration = Duration::from_mins(12);
 const LEGENDARY_BANDIT_PACK: i32 = 8;
+const OA_MAX_WINDOW: chrono::Duration = chrono::Duration::hours(1);
+const OA_MAX_SKEW: chrono::Duration = chrono::Duration::days(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MarkCategory {
@@ -29,11 +31,59 @@ pub enum MarkCategory {
 pub struct BossMap {
     pub server_time: DateTime<Utc>,
     pub events: Vec<CityEvent>,
-    pub outpost_attack: bool,
+    /// `(start, end)` per timed `isoa` entry, one per outpost.
+    outpost_attacks: Vec<(DateTime<Utc>, DateTime<Utc>)>,
+    /// An untimed `isoa` entry that has not ended.
+    outpost_attack_flag: bool,
+    outpost_attack_seen: bool,
     by_block: HashMap<(i32, i32), Vec<usize>>,
 }
 
+/// What the feed says about outpost attacks at one instant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeedOa {
+    /// Under attack, until the end when the entry carries one.
+    Live(Option<DateTime<Utc>>),
+    /// Entries present, none covering now; `upcoming` is the soonest start
+    /// and `latest_end` the end of the newest timed one.
+    Idle {
+        upcoming: Option<DateTime<Utc>>,
+        latest_end: Option<DateTime<Utc>>,
+    },
+    /// No `isoa` entries at all.
+    Unknown,
+}
+
 impl BossMap {
+    pub fn outpost_attack(&self, now: DateTime<Utc>) -> FeedOa {
+        let live_end = self
+            .outpost_attacks
+            .iter()
+            .filter(|(start, end)| *start <= now && now < *end)
+            .map(|&(_, end)| end)
+            .max();
+        if let Some(end) = live_end {
+            return FeedOa::Live(Some(end));
+        }
+        // Timed entries are judged by the clock; an untimed straggler beside
+        // them only means its `ended` flag has not caught up.
+        if self.outpost_attack_flag && self.outpost_attacks.is_empty() {
+            return FeedOa::Live(None);
+        }
+        if !self.outpost_attack_seen {
+            return FeedOa::Unknown;
+        }
+        FeedOa::Idle {
+            upcoming: self
+                .outpost_attacks
+                .iter()
+                .map(|&(start, _)| start)
+                .filter(|start| *start > now)
+                .min(),
+            latest_end: self.outpost_attacks.iter().map(|&(_, end)| end).max(),
+        }
+    }
+
     pub fn at(&self, x: i32, y: i32, now: DateTime<Utc>) -> Vec<CityEvent> {
         self.events_at(x, y, |e| e.active_at(now))
     }
@@ -262,8 +312,17 @@ pub fn parse(data: &[u8]) -> Result<BossMap, String> {
             || ev.get("isoa").and_then(serde_json::Value::as_i64) == Some(1);
         let ended = ev.get("ended").and_then(|v| v.as_str()) == Some("1");
         if isoa {
-            if !ended {
-                out.outpost_attack = true;
+            out.outpost_attack_seen = true;
+            let start =
+                unix_field(ev.get("start_time")).and_then(|t| DateTime::from_timestamp(t, 0));
+            let end = unix_field(ev.get("end_time")).and_then(|t| DateTime::from_timestamp(t, 0));
+            let started = ev.get("started").and_then(|v| v.as_str()) == Some("1");
+            match (start, end) {
+                (Some(start), Some(end)) if plausible_oa_window(start, end, out.server_time) => {
+                    out.outpost_attacks.push((start, end));
+                }
+                _ if started && !ended => out.outpost_attack_flag = true,
+                _ => {}
             }
             continue;
         }
@@ -340,6 +399,16 @@ pub fn parse(data: &[u8]) -> Result<BossMap, String> {
         out.events.push(event);
     }
     Ok(out)
+}
+
+/// Attacks run 20 minutes. Anything longer, or more than a day from the
+/// feed's own clock, is a unit or data error (milliseconds would read as the
+/// year 58000) and must not pin the banner up.
+fn plausible_oa_window(start: DateTime<Utc>, end: DateTime<Utc>, server: DateTime<Utc>) -> bool {
+    if start.timestamp() <= 0 || end <= start || end - start > OA_MAX_WINDOW {
+        return false;
+    }
+    server.timestamp() <= 0 || (start - server).abs() <= OA_MAX_SKEW
 }
 
 fn unix_field(v: Option<&Value>) -> Option<i64> {
@@ -680,12 +749,109 @@ mod tests {
 	  "0":{"event_id":"1","isoa":"1","locations":[],"started":"1","ended":"1",
 	       "title":"Outpost Attack","boss_num":"0","event_type":""},
 	  "bosshash":"same","servertime":1060,"version":"1"}"#;
+        let now = DateTime::from_timestamp(1000, 0).unwrap();
         let (m, print) = parse_if_changed(live, None).unwrap().unwrap();
-        assert!(m.outpost_attack);
+        assert_eq!(m.outpost_attack(now), FeedOa::Live(None));
         let (m, _) = parse_if_changed(over, Some(&print))
             .unwrap()
             .expect("same bosshash must not hide an ended flag");
-        assert!(!m.outpost_attack);
+        assert_eq!(
+            m.outpost_attack(now),
+            FeedOa::Idle {
+                upcoming: None,
+                latest_end: None
+            }
+        );
+    }
+
+    #[test]
+    fn timed_outpost_attack_follows_the_clock_not_the_flags() {
+        let raw = br#"{
+	  "0":{"event_id":"1","isoa":"1","locations":[["nastyasHoldout"]],"started":"0","ended":"1",
+	       "title":"","boss_num":"0","event_type":"","start_time":"1000","end_time":"2200"},
+	  "1":{"event_id":"2","isoa":"1","locations":[["precinct13"]],"started":"0","ended":"1",
+	       "title":"","boss_num":"0","event_type":"","start_time":"1000","end_time":"2200"},
+	  "bosshash":"x","servertime":1000,"version":"1"}"#;
+        let m = parse(raw).unwrap();
+        let at = |s| DateTime::from_timestamp(s, 0).unwrap();
+        assert_eq!(
+            m.outpost_attack(at(900)),
+            FeedOa::Idle {
+                upcoming: Some(at(1000)),
+                latest_end: Some(at(2200))
+            }
+        );
+        assert_eq!(m.outpost_attack(at(1000)), FeedOa::Live(Some(at(2200))));
+        assert_eq!(m.outpost_attack(at(2199)), FeedOa::Live(Some(at(2200))));
+        assert_eq!(
+            m.outpost_attack(at(2200)),
+            FeedOa::Idle {
+                upcoming: None,
+                latest_end: Some(at(2200))
+            }
+        );
+        assert!(m.events.is_empty(), "outpost names are not blocks");
+    }
+
+    #[test]
+    fn implausible_outpost_attack_times_are_dropped() {
+        let at = |s| DateTime::from_timestamp(s, 0).unwrap();
+        for (start, end) in [
+            ("1795100400000", "1795101600000"),
+            ("1795100400", "1795107600"),
+            ("1795600400", "1795601600"),
+            ("1795101600", "1795100400"),
+        ] {
+            let raw = format!(
+                r#"{{"0":{{"event_id":"1","isoa":"1","locations":[],"started":"1","ended":"1",
+                "start_time":"{start}","end_time":"{end}"}},
+                "bosshash":"x","servertime":1795101000,"version":"1"}}"#
+            );
+            let m = parse(raw.as_bytes()).unwrap();
+            assert_eq!(
+                m.outpost_attack(at(1_795_101_000)),
+                FeedOa::Idle {
+                    upcoming: None,
+                    latest_end: None
+                },
+                "{start}..{end}"
+            );
+        }
+    }
+
+    #[test]
+    fn untimed_straggler_does_not_outlive_timed_entries() {
+        let raw = br#"{
+	  "0":{"event_id":"1","isoa":"1","locations":[],"started":"1","ended":"0",
+	       "start_time":"1000","end_time":"2200"},
+	  "1":{"event_id":"2","isoa":"1","locations":[],"started":"1","ended":"0",
+	       "start_time":"0","end_time":"0"},
+	  "bosshash":"x","servertime":1000,"version":"1"}"#;
+        let m = parse(raw).unwrap();
+        let at = |s| DateTime::from_timestamp(s, 0).unwrap();
+        assert_eq!(m.outpost_attack(at(1500)), FeedOa::Live(Some(at(2200))));
+        assert!(matches!(m.outpost_attack(at(2300)), FeedOa::Idle { .. }));
+    }
+
+    #[test]
+    fn untimed_entry_not_yet_started_is_not_live() {
+        let raw = br#"{
+	  "0":{"event_id":"1","isoa":"1","locations":[],"started":"0","ended":"0"},
+	  "bosshash":"x","servertime":1000,"version":"1"}"#;
+        let m = parse(raw).unwrap();
+        assert!(matches!(
+            m.outpost_attack(DateTime::from_timestamp(1000, 0).unwrap()),
+            FeedOa::Idle { .. }
+        ));
+    }
+
+    #[test]
+    fn no_isoa_entries_is_unknown() {
+        let m = parse(br#"{"bosshash":"x","servertime":1000,"version":"1"}"#).unwrap();
+        assert_eq!(
+            m.outpost_attack(DateTime::from_timestamp(1000, 0).unwrap()),
+            FeedOa::Unknown
+        );
     }
 
     #[test]

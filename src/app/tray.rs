@@ -517,6 +517,16 @@ mod linux {
                 }
                 .into(),
                 CheckmarkItem {
+                    label: "Show outpost attacks".into(),
+                    checked: self.handle.outpost_attack_shown(),
+                    activate: Box::new(|this: &mut HudTray| {
+                        this.handle
+                            .set_outpost_attack(!this.handle.outpost_attack_shown());
+                    }),
+                    ..CheckmarkItem::default()
+                }
+                .into(),
+                CheckmarkItem {
                     label: "Show keybinds".into(),
                     checked: self.handle.groups.shown(Group::Keybinds),
                     activate: Box::new(|this: &mut HudTray| {
@@ -766,6 +776,7 @@ mod windows {
     const ID_MASTERIES: u16 = 6;
     const ID_KEYBINDS: u16 = 5;
     const ID_BOOSTS: u16 = 7;
+    const ID_OUTPOST_ATTACK: u16 = 8;
     const ID_FPS: u16 = 3;
     const ID_LAUNCHER: u16 = 4;
     const ID_XP: u16 = 20;
@@ -1009,6 +1020,19 @@ mod windows {
                 ID_BOOSTS as usize,
                 wide("Show boosts").as_ptr(),
             );
+            let outpost_attack = ctx.handle.outpost_attack_shown();
+            InsertMenuW(
+                menu,
+                u32::MAX,
+                MF_STRING
+                    | if outpost_attack {
+                        MF_CHECKED
+                    } else {
+                        MF_UNCHECKED
+                    },
+                ID_OUTPOST_ATTACK as usize,
+                wide("Show outpost attacks").as_ptr(),
+            );
             let keybinds = ctx.handle.groups.shown(Group::Keybinds);
             InsertMenuW(
                 menu,
@@ -1145,6 +1169,7 @@ mod windows {
             ID_BOOSTS => {
                 h.toggle_group(Group::Boosts);
             }
+            ID_OUTPOST_ATTACK => h.set_outpost_attack(!h.outpost_attack_shown()),
             ID_FPS => h.set_fps_display(!h.gamekeys.fps_display()),
             ID_LAUNCHER => h.set_dismiss_launcher(!h.gamekeys.dismiss_launcher()),
             ID_XP => h.reset_xp(),

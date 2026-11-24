@@ -60,7 +60,8 @@ everything below it jump. Leave room for the longest string that group can show.
 `hud.margin_*` shrinks the surface from each edge and moves that origin, useful
 if you have a bar at the top. `font_size` and `color` are optional per group.
 Leave them off to use `[hud]`. `color` is the normal colour. Status red/amber,
-outpost attack, bandits, and a shaky XP rate still override it.
+outpost attack and its amber warning, bandits, and a shaky XP rate still
+override it.
 
 `hud.layer` must stay `"overlay"`. `"top"` sits under fullscreen windows, so the
 HUD vanishes when you play.

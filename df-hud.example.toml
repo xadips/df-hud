@@ -220,6 +220,14 @@ color = ""
 # When your block is empty, point at the nearest event.
 show_nearest = true
 
+# Outpost attacks: OUTPOST ATTACK with the time left while one runs, and a
+# "Next outpost attack" countdown before it. Tray: "Show outpost attacks".
+show_outpost_attack = true
+
+# Seconds before an outpost attack to show its countdown. 0 is off, at most
+# 10800 (attacks are three hours apart).
+outpost_warning = 900
+
 [widget.boosts]
 # Boost timers, which the game client never shows. Stats bought together
 # share one timer ("Trinity 2h 10m"); only different expiries split per stat

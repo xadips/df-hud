@@ -351,18 +351,42 @@ fn block_lines(v: &ModelView, cfg: &Config) -> Option<(String, String)> {
     Some((head, parts.join("  ")))
 }
 
-fn boss_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
-    if !cfg.widget.bosses.enabled || !v.have_data {
-        return Vec::new();
+/// Hidden with the bossmap off, where the schedule alone would otherwise
+/// drive it. The warning stays out of Onslaught, whose panel already fills
+/// the room above the boosts.
+fn outpost_attack_line(v: &ModelView, cfg: &Config) -> Option<Line> {
+    if !cfg.bossmap.enabled || !cfg.widget.bosses.show_outpost_attack {
+        return None;
     }
-    let mut rows = Vec::new();
     if v.outpost_attack {
-        rows.push(Line {
+        return Some(Line {
             text: "OUTPOST ATTACK".into(),
+            timer: v
+                .outpost_attack_left
+                .map(|l| format::countdown(l.std()))
+                .unwrap_or_default(),
             color: Some(EXPIRING_RGB),
             ..Line::default()
         });
     }
+    let next = v.outpost_attack_next?.std();
+    let warn = cfg.widget.bosses.outpost_warning.0;
+    if warn.is_zero() || next > warn || in_onslaught(v) {
+        return None;
+    }
+    Some(Line {
+        text: "Next outpost attack".into(),
+        timer: format::countdown(next),
+        color: Some(SHAKY_RGB),
+        ..Line::default()
+    })
+}
+
+fn boss_lines(v: &ModelView, cfg: &Config) -> Vec<Line> {
+    if !cfg.widget.bosses.enabled || !v.have_data {
+        return Vec::new();
+    }
+    let mut rows: Vec<Line> = outpost_attack_line(v, cfg).into_iter().collect();
     if let Some(panel) = onslaught_panel(v) {
         rows.extend(panel);
         return rows;
@@ -1736,6 +1760,80 @@ mod tests {
         let rows = boss_lines(&v, &Config::default());
         assert_eq!(rows[0].text, "OUTPOST ATTACK");
         assert_eq!(rows[0].color, Some(EXPIRING_RGB));
+        assert_eq!(rows[0].timer, "");
+        let v = ModelView {
+            outpost_attack_left: Some(Ns(725 * 1_000_000_000)),
+            ..v
+        };
+        assert_eq!(boss_lines(&v, &Config::default())[0].timer, "12m 05s");
+    }
+
+    #[test]
+    fn next_outpost_attack_shows_only_inside_the_warning() {
+        let at = |secs: i64| ModelView {
+            have_data: true,
+            outpost_attack_next: Some(Ns(secs * 1_000_000_000)),
+            ..ModelView::default()
+        };
+        let cfg = Config::default();
+        let rows = boss_lines(&at(600), &cfg);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, "Next outpost attack");
+        assert_eq!(rows[0].timer, "10m");
+        assert_eq!(rows[0].color, Some(SHAKY_RGB));
+        assert_eq!(boss_lines(&at(900), &cfg).len(), 1);
+        assert!(boss_lines(&at(901), &cfg).is_empty());
+        let mut off = Config::default();
+        off.widget.bosses.outpost_warning = crate::config::Duration::from_secs(0);
+        assert!(boss_lines(&at(60), &off).is_empty());
+    }
+
+    #[test]
+    fn next_outpost_attack_stays_out_of_onslaught() {
+        let v = ModelView {
+            have_data: true,
+            has_position: true,
+            position_x: ONSLAUGHT,
+            position_y: ONSLAUGHT,
+            outpost_attack_next: Some(Ns(60 * 1_000_000_000)),
+            ..ModelView::default()
+        };
+        let rows = boss_lines(&v, &Config::default());
+        assert!(rows.iter().all(|r| r.text != "Next outpost attack"));
+        let live = ModelView {
+            outpost_attack: true,
+            ..v
+        };
+        assert_eq!(
+            boss_lines(&live, &Config::default())[0].text,
+            "OUTPOST ATTACK"
+        );
+    }
+
+    #[test]
+    fn outpost_attack_rows_follow_their_switches() {
+        let mut no_feed = Config::default();
+        no_feed.bossmap.enabled = false;
+        let mut hidden = Config::default();
+        hidden.widget.bosses.show_outpost_attack = false;
+        assert!(Config::default().widget.bosses.show_outpost_attack);
+        for (cfg, v) in [&no_feed, &hidden].into_iter().flat_map(|cfg| {
+            [
+                ModelView {
+                    have_data: true,
+                    outpost_attack: true,
+                    ..ModelView::default()
+                },
+                ModelView {
+                    have_data: true,
+                    outpost_attack_next: Some(Ns(60 * 1_000_000_000)),
+                    ..ModelView::default()
+                },
+            ]
+            .map(|v| (cfg, v))
+        }) {
+            assert!(boss_lines(&v, cfg).is_empty());
+        }
     }
 
     fn boost(tier: BoostTier, stats: &[BoostStat], left: Option<u64>) -> BoostGroup {
