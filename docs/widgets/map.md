@@ -51,6 +51,27 @@ once, on the nearest of them. Dailies (`DH` `VL` `BH` `LB`) are random spawns
 and keep their own time. Nests last about two hours, not one, and keep theirs.
 Missions do too.
 
+### Marker colours
+
+`marker_color` colours the letters on the grid like their legend chips, so
+`N4` in the list is the same magenta on the map. It is off by default.
+
+Outposts keep their green letter in every style. In `chip`, `text`, and `wash`
+the usual rings (daily, mission, QRF) still draw. The config reloads on save,
+so you can switch styles with the map open.
+
+| Style | |
+| --- | --- |
+| `off`<br>White letters, rings as above. | <img src="../images/map-marker-color-off.png" alt="marker_color = off" width="420"> |
+| `chip`<br>A filled box in the legend colour, inset in the block, dark letters. The block shade still frames it. | <img src="../images/map-marker-color-chip.png" alt="marker_color = chip" width="420"> |
+| `text`<br>The letters in the legend colour. | <img src="../images/map-marker-color-text.png" alt="marker_color = text" width="420"> |
+| `ring`<br>Every event ringed in its colour, not just the ones above. | <img src="../images/map-marker-color-ring.png" alt="marker_color = ring" width="420"> |
+| `wash`<br>A see-through legend colour over the block shade. Clashes with some district shades. | <img src="../images/map-marker-color-wash.png" alt="marker_color = wash" width="420"> |
+
+The examples come from a made-up map with one event of each kind on the real
+district shades. `cargo test map_styles_png -- --ignored` redraws them into
+`target/map-styles/`.
+
 ## Size and crop
 
 `scale` sizes the grid and the list together. `1.0` is 1180 pixels across the
@@ -73,6 +94,7 @@ bigger cells. `0` is the whole city.
 | `opacity` | `0.9` | Extra fade on the grid. Markers stay solid. |
 | `show_list` | `true` | Legend beside the grid |
 | `max_listed` | `10` | Cap. Overflow is `+N more`. |
+| `marker_color` | `"off"` | `off`, `chip`, `text`, `ring`, or `wash` (see [Marker colours](#marker-colours)) |
 
 The shades match DFProfiler's map so the picture looks familiar. Nothing is
 worked out from them. See [knowledge/city-map.md](../../knowledge/city-map.md)

@@ -712,8 +712,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn renders_a_dummy_frame_headless() {
-        use crate::overlay::egl::Egl;
-
         let skip = |why: &str| {
             assert!(
                 std::env::var_os("DF_HUD_REQUIRE_RENDER_TEST").is_none(),
@@ -721,30 +719,12 @@ mod tests {
             );
             eprintln!("render smoke: skipped: {why}");
         };
-        let egl = match Egl::load() {
-            Ok(egl) => egl,
-            Err(err) => return skip(&err.to_string()),
-        };
-        let display = match egl.get_surfaceless_display() {
-            Ok(display) => display,
-            Err(err) => return skip(&err.to_string()),
-        };
-        if let Err(err) = egl.initialize(display) {
-            return skip(&err.to_string());
-        }
-
-        // From here on everything is expected to work: failures are bugs.
-        egl.bind_es().unwrap();
-        let config = egl.choose_es3_pbuffer_config(display).unwrap();
         let (w, h) = (320, 180);
-        let surface = egl.create_pbuffer_surface(display, config, w, h).unwrap();
-        let ctx = egl.create_es3_context(display, config).unwrap();
-        egl.make_current(display, surface, surface, ctx).unwrap();
-        // SAFETY: `ctx` is current on this thread, so `get_proc_address`
-        // resolves each GLES entry point for it (or null, which glow tolerates).
-        let gl = unsafe { Glow::from_loader_function(|name| egl.get_proc_address(name)) };
-
-        let mut gpu = Gpu::new(gl, w, h, "").unwrap();
+        let mut headless = match Headless::new(w, h) {
+            Ok(headless) => headless,
+            Err(why) => return skip(&why),
+        };
+        let gpu = &mut headless.gpu;
         let built = dummy_scene("12:00:00", w, h);
         assert!(!built.texts.is_empty(), "the dummy view must draw text");
         let frame = Frame::square(w, h);
@@ -762,29 +742,165 @@ mod tests {
                 .unwrap(),
             "a new clock reading must draw"
         );
-
-        let mut px = vec![0u8; (w * h * 4) as usize];
-        // SAFETY: `ctx` is still current and `px` holds the `w * h * 4` bytes
-        // that an RGBA/UNSIGNED_BYTE readback of the pbuffer writes.
-        unsafe {
-            gpu.gl.read_pixels(
-                0,
-                0,
-                w,
-                h,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(Some(&mut px)),
-            );
-        }
         assert!(
-            px.iter().any(|&b| b != 0),
+            headless.read_rgba().iter().any(|&b| b != 0),
             "the frame stayed transparent black"
         );
+    }
 
-        egl.unbind(display);
-        egl.destroy_surface(display, surface);
-        egl.destroy_context(display, ctx);
-        egl.terminate(display);
+    /// Not a check: one `target/map-styles/<style>.png` per `marker_color`,
+    /// drawn from `dummy::map_showcase` at the reference size.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "writes PNGs to look at; run with --ignored"]
+    fn map_styles_png() {
+        use crate::config::MarkerColor;
+
+        let mut cfg = Config::default();
+        let (w, h) = (cfg.hud.reference_width, cfg.hud.reference_height);
+        let mut headless = Headless::new(w, h).unwrap();
+        let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/map-styles");
+        std::fs::create_dir_all(&out).unwrap();
+        let view = dummy::map_showcase();
+        let viewport = Viewport {
+            width: w as f32,
+            height: h as f32,
+        };
+        for (name, style) in [
+            ("off", MarkerColor::Off),
+            ("chip", MarkerColor::Chip),
+            ("text", MarkerColor::Text),
+            ("ring", MarkerColor::Ring),
+            ("wash", MarkerColor::Wash),
+        ] {
+            cfg.widget.map.marker_color = style;
+            let built = scene::build(&view, &cfg, viewport);
+            assert!(headless.gpu.draw(Frame::square(w, h), built, true).unwrap());
+            let path = out.join(format!("{name}.png"));
+            write_flattened_png(&path, &headless.read_rgba(), w as usize, h as usize);
+            eprintln!("map styles: {}", path.display());
+        }
+    }
+
+    /// A surfaceless EGL pbuffer, current on this thread until drop.
+    #[cfg(target_os = "linux")]
+    struct Pbuffer {
+        egl: crate::overlay::egl::Egl,
+        display: crate::overlay::egl::Display,
+        surface: crate::overlay::egl::Surface,
+        ctx: crate::overlay::egl::Context,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for Pbuffer {
+        fn drop(&mut self) {
+            self.egl.unbind(self.display);
+            self.egl.destroy_surface(self.display, self.surface);
+            self.egl.destroy_context(self.display, self.ctx);
+            self.egl.terminate(self.display);
+        }
+    }
+
+    /// A `Gpu` on a `Pbuffer`. `gpu` is declared first so it drops while the
+    /// context is still current, which `Gpu::drop` relies on.
+    #[cfg(target_os = "linux")]
+    struct Headless {
+        gpu: Gpu,
+        _pbuffer: Pbuffer,
+        w: i32,
+        h: i32,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Headless {
+        /// `Err` only where Mesa's surfaceless platform is missing. Anything
+        /// after that is expected to work, so it panics.
+        fn new(w: i32, h: i32) -> Result<Self, String> {
+            use crate::overlay::egl::Egl;
+
+            let egl = Egl::load().map_err(|err| err.to_string())?;
+            let display = egl
+                .get_surfaceless_display()
+                .map_err(|err| err.to_string())?;
+            egl.initialize(display).map_err(|err| err.to_string())?;
+            egl.bind_es().unwrap();
+            let config = egl.choose_es3_pbuffer_config(display).unwrap();
+            let surface = egl.create_pbuffer_surface(display, config, w, h).unwrap();
+            let ctx = egl.create_es3_context(display, config).unwrap();
+            egl.make_current(display, surface, surface, ctx).unwrap();
+            // SAFETY: `ctx` is current on this thread, so `get_proc_address`
+            // resolves each GLES entry point for it (or null, which glow tolerates).
+            let gl = unsafe { Glow::from_loader_function(|name| egl.get_proc_address(name)) };
+            let pbuffer = Pbuffer {
+                egl,
+                display,
+                surface,
+                ctx,
+            };
+            Ok(Self {
+                gpu: Gpu::new(gl, w, h, "").unwrap(),
+                _pbuffer: pbuffer,
+                w,
+                h,
+            })
+        }
+
+        /// The pbuffer as RGBA bytes, bottom row first.
+        fn read_rgba(&self) -> Vec<u8> {
+            let mut px = vec![0u8; (self.w * self.h * 4) as usize];
+            // SAFETY: the pbuffer's context is current and `px` holds the
+            // `w * h * 4` bytes an RGBA/UNSIGNED_BYTE readback writes.
+            unsafe {
+                self.gpu.gl.read_pixels(
+                    0,
+                    0,
+                    self.w,
+                    self.h,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelPackData::Slice(Some(&mut px)),
+                );
+            }
+            px
+        }
+    }
+
+    /// `px` is a bottom-up, premultiplied GL readback. Crops to what was drawn
+    /// and flattens it over a dark backdrop, close to the game's.
+    #[cfg(target_os = "linux")]
+    fn write_flattened_png(path: &std::path::Path, px: &[u8], w: usize, h: usize) {
+        const BACKDROP: [u8; 3] = [0x26, 0x26, 0x26];
+        const PAD: usize = 16;
+        let at = |x: usize, y: usize| ((h - 1 - y) * w + x) * 4;
+        let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+        for y in 0..h {
+            for x in 0..w {
+                if px[at(x, y) + 3] != 0 {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x + 1);
+                    y1 = y1.max(y + 1);
+                }
+            }
+        }
+        assert!(x0 < x1 && y0 < y1, "nothing drawn");
+        let (x0, y0) = (x0.saturating_sub(PAD), y0.saturating_sub(PAD));
+        let (x1, y1) = ((x1 + PAD).min(w), (y1 + PAD).min(h));
+        let mut rgb = Vec::with_capacity((x1 - x0) * (y1 - y0) * 3);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let p = &px[at(x, y)..at(x, y) + 4];
+                let keep = 255 - u16::from(p[3]);
+                for c in 0..3 {
+                    let under = u16::from(BACKDROP[c]) * keep / 255;
+                    rgb.push((u16::from(p[c]) + under).min(255) as u8);
+                }
+            }
+        }
+        let file = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
+        let mut enc = png::Encoder::new(file, (x1 - x0) as u32, (y1 - y0) as u32);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header().unwrap().write_image_data(&rgb).unwrap();
     }
 }

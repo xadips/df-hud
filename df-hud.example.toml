@@ -334,6 +334,11 @@ max_listed = 10
 font_size = 0
 color = "#e8e8e8"
 
+# Colour the grid's event markers like their legend chips: "off", "chip"
+# (filled box, dark letters), "text" (coloured letters), "ring" (every event
+# ringed) or "wash" (tinted block). Outposts stay as they are.
+marker_color = "off"
+
 [widget.challenges]
 # The board grouped by category: event, yours, then clan.
 enabled = true

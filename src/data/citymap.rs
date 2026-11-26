@@ -15,6 +15,15 @@ pub struct Shade {
 }
 
 impl Shade {
+    pub fn rgba(&self) -> [f32; 4] {
+        [
+            f32::from(self.r) / 255.0,
+            f32::from(self.g) / 255.0,
+            f32::from(self.b) / 255.0,
+            self.alpha as f32,
+        ]
+    }
+
     #[cfg(test)]
     pub fn hex(&self) -> String {
         let f = |c: u8| (c as f64 * self.alpha + 0.5) as u8;
@@ -175,7 +184,7 @@ pub fn parse(s: &str) -> Result<Map, String> {
 }
 
 impl Map {
-    fn shade_of(&self, letter: u8) -> Option<Shade> {
+    pub fn shade_of(&self, letter: u8) -> Option<Shade> {
         self.shades
             .iter()
             .find(|(l, _)| *l == letter)

@@ -253,6 +253,23 @@ pub enum XpRow {
     WeeklyPks,
 }
 
+/// How the grid tints city events with their legend colour. Outposts never change.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkerColor {
+    /// White letters; only missions, dailies and wasteland QRFs are ringed.
+    #[default]
+    Off,
+    /// A filled box like the legend chip, inset in the cell, dark letters.
+    Chip,
+    /// The letters themselves in the category colour.
+    Text,
+    /// Every event ringed in its category colour.
+    Ring,
+    /// A translucent category fill over the block shade.
+    Wash,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BlockWidget {
     pub enabled: bool,
@@ -313,6 +330,7 @@ pub struct MapWidget {
     pub max_listed: i32,
     pub font_size: f32,
     pub color: String,
+    pub marker_color: MarkerColor,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -631,6 +649,7 @@ impl Default for Widget {
                 max_listed: 10,
                 font_size: 0.0,
                 color: "#e8e8e8".into(),
+                marker_color: MarkerColor::Off,
             },
             challenges: ChallengesWidget {
                 enabled: true,

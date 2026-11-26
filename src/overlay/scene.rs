@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::config::{Anchor, Config, parse_color};
+use crate::config::{Anchor, Config, MarkerColor, parse_color};
 use crate::overlay::layout::{Transform, Viewport};
 
 const PT_TO_PX: f32 = 4.0 / 3.0;
@@ -22,6 +22,14 @@ const LINE_HEIGHT: f32 = 1.25;
 const BOOST_TIMER_WIDEST: &str = "35m 05s";
 /// Vertical gutter between legend chips (I5 / N5). Text size stays the same.
 const MAP_CHIP_GAP: f32 = 4.0;
+/// Letters on a coloured chip, legend and grid alike.
+const CHIP_INK: [f32; 4] = [16.0 / 255.0, 16.0 / 255.0, 16.0 / 255.0, 1.0];
+/// Block shades draw at this share of their own alpha, under `opacity`.
+const MAP_SHADE_ALPHA: f32 = 0.7;
+/// Grid chip inset per side, as a share of the cell, so the block shade frames it.
+const MAP_CHIP_INSET: f32 = 0.12;
+/// Category tint over the block shade for `marker_color = "wash"`.
+const MAP_WASH_ALPHA: f32 = 0.45;
 
 #[derive(Clone, Debug, Default)]
 pub struct View {
@@ -109,11 +117,14 @@ pub struct MapMarker {
     pub x: i32,
     pub y: i32,
     pub text: String,
-    /// Letter on the grid. City marks stay white; only outposts tint the glyph.
+    /// Letter on the grid. City marks are white (`marker_color` may override
+    /// that in `scene`); outposts carry their own tint.
     pub ink: [f32; 4],
     /// Ring / category colour. Legend chips use the same table.
     pub color: [f32; 4],
     pub ring: bool,
+    /// A city event, which `marker_color` may tint. Outposts are not.
+    pub event: bool,
 }
 
 /// Built deterministically from `View` + `Config` + viewport, so `PartialEq`
@@ -631,7 +642,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
                 y,
                 w: cell,
                 h: cell,
-                color: [fill[0], fill[1], fill[2], fill[3] * 0.7 * map_a],
+                color: fade(*fill, MAP_SHADE_ALPHA * map_a),
             });
             let border = [0.0, 0.0, 0.0, 0.45 * map_a];
             let bw = xf.size(1.0).max(1.0);
@@ -679,6 +690,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
     }
     let mut stack_i: HashMap<(i32, i32), usize> = HashMap::new();
 
+    let style = cfg.widget.map.marker_color;
     let ring_w = xf.size(2.0).max(1.0);
     for marker in &view.map.markers {
         if !window.contains(marker.x, marker.y) {
@@ -687,14 +699,13 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
         let cx = ox + (marker.x - win_x) as f32 * cell;
         let cy = oy + (marker.y - win_y) as f32 * cell;
         let on_player = marker.x == view.map.player_x && marker.y == view.map.player_y;
-        if marker.ring && !on_player {
-            let ring = [
-                marker.color[0],
-                marker.color[1],
-                marker.color[2],
-                marker.color[3] * hud_a,
-            ];
-            stroke_rect(scene, cx, cy, cell, cell, ring_w, ring);
+        let tint = if marker.event {
+            style
+        } else {
+            MarkerColor::Off
+        };
+        if (marker.ring || tint == MarkerColor::Ring) && !on_player {
+            stroke_rect(scene, cx, cy, cell, cell, ring_w, fade(marker.color, hud_a));
         }
         let n = stack_n
             .get(&(marker.x, marker.y))
@@ -707,23 +718,47 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
             *i += 1;
             slot
         };
+        let chip = tint == MarkerColor::Chip;
+        let inset = if chip {
+            (cell * MAP_CHIP_INSET).max(1.0)
+        } else {
+            0.0
+        };
         let band = cell / n as f32;
-        let (marker_px, tw) = stacked_marker_font(&marker.text, cell, n);
+        let inset_y = inset / n as f32;
+        let w = cell - 2.0 * inset;
+        let h = band - 2.0 * inset_y;
+        let y = cy + slot as f32 * band + inset_y;
+        let backing = match tint {
+            MarkerColor::Chip => Some(hud_a),
+            MarkerColor::Wash => Some(MAP_WASH_ALPHA * map_a),
+            _ => None,
+        };
+        if let Some(alpha) = backing {
+            scene.fills.push(Fill {
+                x: cx + inset,
+                y,
+                w,
+                h,
+                color: fade(marker.color, alpha),
+            });
+        }
+        let ink = match tint {
+            MarkerColor::Chip => CHIP_INK,
+            MarkerColor::Text => marker.color,
+            _ => marker.ink,
+        };
+        let (marker_px, tw) = stacked_marker_font(&marker.text, w, n);
         scene.labels.push(Text {
             x: cx + (cell - tw) * 0.5,
-            y: cy + slot as f32 * band,
-            color: [
-                marker.ink[0],
-                marker.ink[1],
-                marker.ink[2],
-                marker.ink[3] * hud_a,
-            ],
+            y,
+            color: fade(ink, hud_a),
             text: marker.text.clone(),
             font_px: marker_px,
-            outline: true,
+            outline: !chip,
             outline_color: None,
-            lcd: true,
-            center_h: Some(band),
+            lcd: !chip,
+            center_h: Some(h),
         });
     }
 
@@ -744,7 +779,6 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
         let lx = ox + xf.size(map_w_auth + MAP_LIST_GAP);
         let mut ly = oy;
         let color = parse_color(&cfg.widget.map.color, hud_a);
-        const CHIP_INK: [f32; 4] = [16.0 / 255.0, 16.0 / 255.0, 16.0 / 255.0, 1.0];
         let pad_x = xf.size(3.0).max(2.0);
         let row_h = list_px * LINE_HEIGHT;
         let chip_gap = xf.size(MAP_CHIP_GAP).max(4.0);
@@ -773,7 +807,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
                     y: chip_y,
                     w: chip_w,
                     h: gh,
-                    color: [chip[0], chip[1], chip[2], chip[3] * hud_a],
+                    color: fade(chip, hud_a),
                 });
                 if row.chip_ring {
                     stroke_rect(
@@ -783,7 +817,7 @@ fn push_map(scene: &mut Scene, view: &View, cfg: &Config, xf: Transform, hud_a: 
                         chip_w,
                         gh,
                         xf.size(1.5).max(1.0),
-                        [chip[0], chip[1], chip[2], chip[3] * hud_a],
+                        fade(chip, hud_a),
                     );
                 }
                 // Δ is a heavier letter than I5 / ▼ at the same px; pull it in a hair.
@@ -884,6 +918,10 @@ fn stacked_marker_font(text: &str, cell: f32, n: usize) -> (f32, f32) {
         tw = mono_advance(text, px);
     }
     (px, tw)
+}
+
+fn fade(color: [f32; 4], alpha: f32) -> [f32; 4] {
+    [color[0], color[1], color[2], color[3] * alpha]
 }
 
 fn stroke_rect(scene: &mut Scene, x: f32, y: f32, w: f32, h: f32, width: f32, color: [f32; 4]) {
@@ -1175,6 +1213,7 @@ mod tests {
             ink: [1.0, 1.0, 1.0, 1.0],
             color: [1.0, 0.54, 0.0, 1.0],
             ring: true,
+            event: true,
         });
         let scene = build(&view, &Config::default(), vp_1440());
         assert!(
@@ -1233,6 +1272,7 @@ mod tests {
             ink: [1.0, 1.0, 1.0, 1.0],
             color: [1.0, 0.33, 0.33, 1.0],
             ring: false,
+            event: true,
         });
         view.map.markers.push(MapMarker {
             x: 1011,
@@ -1241,6 +1281,7 @@ mod tests {
             ink: [1.0, 1.0, 1.0, 1.0],
             color: [1.0, 0.82, 0.4, 1.0],
             ring: false,
+            event: true,
         });
         let scene = build(&view, &Config::default(), vp_1440());
         for id in ["I4", "B4"] {
@@ -1264,6 +1305,116 @@ mod tests {
         );
     }
 
+    const NEST: [f32; 4] = [0.94, 0.36, 1.0, 1.0];
+
+    fn nest_scene(style: MarkerColor) -> Scene {
+        let mut view = dummy_view();
+        view.map.markers.push(MapMarker {
+            x: 1010,
+            y: 1008,
+            text: "N4".into(),
+            ink: [1.0, 1.0, 1.0, 1.0],
+            color: NEST,
+            ring: false,
+            event: true,
+        });
+        let mut cfg = Config::default();
+        cfg.widget.map.marker_color = style;
+        build(&view, &cfg, vp_1440())
+    }
+
+    fn is_nest(c: [f32; 4]) -> bool {
+        (0..3).all(|i| (c[i] - NEST[i]).abs() < 0.01)
+    }
+
+    fn map_cell_w(scene: &Scene) -> f32 {
+        scene.fills.iter().map(|f| f.w).fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn marker_color_chip_is_an_inset_box_with_dark_letters() {
+        let scene = nest_scene(MarkerColor::Chip);
+        let cell = map_cell_w(&scene);
+        let chip = scene
+            .fills
+            .iter()
+            .find(|f| is_nest(f.color))
+            .expect("nest chip");
+        assert!(
+            chip.w < cell && chip.h < cell,
+            "chip {chip:?} vs cell {cell}"
+        );
+        let letter = scene.labels.iter().find(|t| t.text == "N4").expect("N4");
+        assert!(!letter.outline && letter.color[0] < 0.1, "{letter:?}");
+        assert!(letter.font_px <= chip.w * 0.9 + 0.05);
+    }
+
+    #[test]
+    fn marker_color_text_tints_the_letters() {
+        let scene = nest_scene(MarkerColor::Text);
+        let letter = scene.labels.iter().find(|t| t.text == "N4").expect("N4");
+        assert!(letter.outline && is_nest(letter.color), "{letter:?}");
+        assert!(!scene.fills.iter().any(|f| is_nest(f.color)));
+    }
+
+    #[test]
+    fn marker_color_ring_rings_every_event() {
+        let nest_ring = |scene: &Scene| {
+            scene
+                .strokes
+                .iter()
+                .any(|s| s.width >= 1.9 && is_nest(s.color))
+        };
+        assert!(!nest_ring(&nest_scene(MarkerColor::Off)));
+        assert!(nest_ring(&nest_scene(MarkerColor::Ring)));
+    }
+
+    #[test]
+    fn marker_color_wash_tints_the_block_under_the_borders() {
+        let scene = nest_scene(MarkerColor::Wash);
+        let cell = map_cell_w(&scene);
+        let shade = scene.fills.iter().find(|f| f.w == cell).expect("cell");
+        let (at, wash) = scene
+            .fills
+            .iter()
+            .enumerate()
+            .find(|(_, f)| is_nest(f.color))
+            .expect("wash");
+        assert_eq!(wash.w, cell);
+        assert!(
+            (wash.color[3] / shade.color[3] - MAP_WASH_ALPHA / MAP_SHADE_ALPHA).abs() < 1e-3,
+            "wash {:?} shade {:?}",
+            wash.color,
+            shade.color
+        );
+        assert_eq!(at, scene.fills.len() - 1, "over every block shade");
+        let letter = scene.labels.iter().find(|t| t.text == "N4").expect("N4");
+        assert!(letter.color[0] > 0.9 && letter.color[1] > 0.9 && letter.color[2] > 0.9);
+    }
+
+    #[test]
+    fn marker_color_leaves_outposts_alone() {
+        for style in [
+            MarkerColor::Off,
+            MarkerColor::Chip,
+            MarkerColor::Text,
+            MarkerColor::Ring,
+            MarkerColor::Wash,
+        ] {
+            let scene = nest_scene(style);
+            let outpost = scene
+                .labels
+                .iter()
+                .find(|t| t.text == "N" && t.outline)
+                .unwrap_or_else(|| panic!("{style:?}: outpost letter"));
+            assert!(
+                (outpost.color[0] - 0.75).abs() < 0.01 && outpost.color[1] > 0.99,
+                "{style:?}: {:?}",
+                outpost.color
+            );
+        }
+    }
+
     #[test]
     fn player_ring_overwrites_event_ring_on_the_standing_cell() {
         let mut view = dummy_view();
@@ -1274,6 +1425,7 @@ mod tests {
             ink: [1.0, 1.0, 1.0, 1.0],
             color: [0.36, 0.9, 0.36, 1.0],
             ring: true,
+            event: true,
         });
         let scene = build(&view, &Config::default(), vp_1440());
         let thick: Vec<_> = scene.strokes.iter().filter(|s| s.width >= 1.9).collect();
@@ -1299,6 +1451,7 @@ mod tests {
             ink: [1.0, 1.0, 1.0, 1.0],
             color: [0.36, 0.9, 0.36, 1.0],
             ring: false,
+            event: true,
         });
         let scene = build(&view, &Config::default(), vp_1440());
         let label = scene.labels.iter().find(|t| t.text == "Δ2").expect("Δ2");
@@ -1329,6 +1482,7 @@ mod tests {
             ink: [1.0, 1.0, 1.0, 1.0],
             color: [0.36, 0.9, 0.36, 1.0],
             ring: true,
+            event: true,
         });
         view.map.markers.push(MapMarker {
             x: 1010,
@@ -1337,6 +1491,7 @@ mod tests {
             ink: [1.0, 1.0, 1.0, 1.0],
             color: [0.33, 0.66, 1.0, 1.0],
             ring: false,
+            event: true,
         });
         let stacked = build(&view, &Config::default(), vp_1440());
         let mut solo_view = dummy_view();
@@ -1347,6 +1502,7 @@ mod tests {
             ink: [1.0, 1.0, 1.0, 1.0],
             color: [0.36, 0.9, 0.36, 1.0],
             ring: true,
+            event: true,
         });
         solo_view.map.markers.push(MapMarker {
             x: 1011,
@@ -1355,6 +1511,7 @@ mod tests {
             ink: [1.0, 1.0, 1.0, 1.0],
             color: [0.33, 0.66, 1.0, 1.0],
             ring: false,
+            event: true,
         });
         let solo = build(&solo_view, &Config::default(), vp_1440());
         let cell = stacked

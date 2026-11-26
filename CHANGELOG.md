@@ -4,6 +4,18 @@ Notable changes to df-hud. Release notes get cut from the Unreleased section.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); newest
 first within each section.
 
+## [Unreleased]
+
+### Added
+
+- Minimap marker colours, off by default. `[widget.map] marker_color` colours
+  the events on the grid like their legend chips, so `N4` in the list is the
+  same magenta on the map: `"chip"` (a coloured box with dark letters),
+  `"text"` (coloured letters), `"ring"` (every event ringed) or `"wash"` (a
+  tinted block). Outposts stay as they are. Screenshots of each are in
+  [docs/widgets/map.md](docs/widgets/map.md#marker-colours). Older builds
+  reject a config carrying the new key.
+
 ## [0.5.3] - 2026-11-24
 
 ### Added

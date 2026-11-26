@@ -34,12 +34,16 @@ const SHAKY_RGB: [f32; 4] = [
     1.0,
 ];
 const UNSTABLE_RGB: [f32; 4] = EXPIRING_RGB;
-const DAILY_RGB: [f32; 4] = [
-    0xff as f32 / 255.0,
-    0x8a as f32 / 255.0,
-    0x00 as f32 / 255.0,
-    1.0,
-];
+// Map marker colours: the grid ring or tint and the legend chip.
+pub const DAILY_RGB: [f32; 4] = rgb(0xff, 0x8a, 0x00);
+pub const NEST_RGB: [f32; 4] = rgb(0xf0, 0x5c, 0xff);
+// Blue used to be missions. Red is reserved for mission rings/chips.
+pub const BOSS_RGB: [f32; 4] = rgb(0x55, 0xa8, 0xff);
+pub const BANDITS_RGB: [f32; 4] = rgb(0xff, 0xd1, 0x66);
+pub const MISSION_RGB: [f32; 4] = rgb(0xff, 0x55, 0x55);
+pub const QRF_RGB: [f32; 4] = rgb(0x5c, 0xe6, 0x5c);
+const OTHER_RGB: [f32; 4] = rgb(0xc0, 0xc0, 0xc0);
+pub const OUTPOST_RGB: [f32; 4] = [0.75, 1.0, 0.75, 1.0];
 const HEADING_ALPHA: f32 = 0.50;
 const DONE_ALPHA: f32 = 0.60;
 const OBJECTIVE_ALPHA: f32 = 0.78;
@@ -1129,12 +1133,7 @@ fn map_view(v: &ModelView, cfg: &Config) -> MapView {
                 cells.push(MapCell {
                     x,
                     y,
-                    fill: [
-                        f32::from(s.r) / 255.0,
-                        f32::from(s.g) / 255.0,
-                        f32::from(s.b) / 255.0,
-                        s.alpha as f32,
-                    ],
+                    fill: s.rgba(),
                 });
             }
         }
@@ -1144,14 +1143,14 @@ fn map_view(v: &ModelView, cfg: &Config) -> MapView {
         if window.contains(o.x, o.y)
             && let Some(letter) = outpost_letter(o.name)
         {
-            let outpost = [0.75, 1.0, 0.75, 1.0];
             markers.push(MapMarker {
                 x: o.x,
                 y: o.y,
                 text: letter.into(),
-                ink: outpost,
-                color: outpost,
+                ink: OUTPOST_RGB,
+                color: OUTPOST_RGB,
                 ring: false,
+                event: false,
             });
         }
     }
@@ -1169,6 +1168,7 @@ fn map_view(v: &ModelView, cfg: &Config) -> MapView {
                 ink: [1.0, 1.0, 1.0, 1.0],
                 color: mark_color(m),
                 ring: city_mark_ringed(m),
+                event: true,
             });
         }
         if cfg.widget.map.show_list {
@@ -1225,13 +1225,8 @@ fn outpost_letter(name: &str) -> Option<&'static str> {
         .map(|o| o.letter)
 }
 
-fn rgb(r: u8, g: u8, b: u8) -> [f32; 4] {
-    [
-        f32::from(r) / 255.0,
-        f32::from(g) / 255.0,
-        f32::from(b) / 255.0,
-        1.0,
-    ]
+const fn rgb(r: u8, g: u8, b: u8) -> [f32; 4] {
+    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
 }
 
 fn mark_color(m: &CityMark) -> [f32; 4] {
@@ -1239,13 +1234,12 @@ fn mark_color(m: &CityMark) -> [f32; 4] {
         return DAILY_RGB;
     }
     match bossmap::mark_category(m.kind, &m.enemies) {
-        MarkCategory::Nest => rgb(0xf0, 0x5c, 0xff),
-        // Blue used to be missions. Red is reserved for mission rings/chips.
-        MarkCategory::Boss => rgb(0x55, 0xa8, 0xff),
-        MarkCategory::Bandits => rgb(0xff, 0xd1, 0x66),
-        MarkCategory::Mission => rgb(0xff, 0x55, 0x55),
-        MarkCategory::Qrf => rgb(0x5c, 0xe6, 0x5c),
-        MarkCategory::Other => rgb(0xc0, 0xc0, 0xc0),
+        MarkCategory::Nest => NEST_RGB,
+        MarkCategory::Boss => BOSS_RGB,
+        MarkCategory::Bandits => BANDITS_RGB,
+        MarkCategory::Mission => MISSION_RGB,
+        MarkCategory::Qrf => QRF_RGB,
+        MarkCategory::Other => OTHER_RGB,
     }
 }
 
